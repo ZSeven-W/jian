@@ -1,6 +1,7 @@
 //! `jian-ops-schema` — canonical types + JSON Schema for Jian `.op` files.
 
 pub mod error;
+pub mod style;
 
 pub use error::{OpsResult, OpsSchemaError};
 
