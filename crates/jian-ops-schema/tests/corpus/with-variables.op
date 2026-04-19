@@ -1,0 +1,30 @@
+{
+  "version": "0.8.0",
+  "name": "Theme Demo",
+  "themes": {"mode": ["light", "dark"]},
+  "variables": {
+    "bg": {
+      "type": "color",
+      "value": [
+        {"value":"#ffffff","theme":{"mode":"light"}},
+        {"value":"#000000","theme":{"mode":"dark"}}
+      ]
+    },
+    "fg": {
+      "type": "color",
+      "value": [
+        {"value":"#000000","theme":{"mode":"light"}},
+        {"value":"#ffffff","theme":{"mode":"dark"}}
+      ]
+    }
+  },
+  "children": [
+    {
+      "type": "rectangle",
+      "id": "bg",
+      "width": "fill_container",
+      "height": "fill_container",
+      "fill": [{"type":"solid","color":"$bg"}]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "version": "0.8.0",
+  "children": [
+    {
+      "type": "rectangle",
+      "id": "rect-1",
+      "x": 10,
+      "y": 20,
+      "width": 100,
+      "height": 50,
+      "cornerRadius": 8,
+      "fill": [{"type":"solid","color":"#ff0000"}]
+    }
+  ]
+}

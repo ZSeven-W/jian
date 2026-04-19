@@ -1,0 +1,39 @@
+{
+  "version": "0.8.0",
+  "children": [
+    {
+      "type": "frame",
+      "id": "root",
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 300,
+      "layout": "vertical",
+      "gap": 8,
+      "padding": 16,
+      "fill": [{"type":"solid","color":"#ffffff"}],
+      "children": [
+        {
+          "type": "text",
+          "id": "title",
+          "content": "Hello World",
+          "fontFamily": "Inter",
+          "fontSize": 24,
+          "fontWeight": 700,
+          "fill": [{"type":"solid","color":"#000000"}]
+        },
+        {
+          "type": "frame",
+          "id": "button",
+          "width": 120,
+          "height": 40,
+          "cornerRadius": 6,
+          "fill": [{"type":"solid","color":"#0066ff"}],
+          "children": [
+            {"type":"text","id":"label","content":"Click me","fill":[{"type":"solid","color":"#ffffff"}]}
+          ]
+        }
+      ]
+    }
+  ]
+}

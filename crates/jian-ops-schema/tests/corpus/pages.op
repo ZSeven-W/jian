@@ -1,0 +1,8 @@
+{
+  "version": "0.8.0",
+  "pages": [
+    {"id":"home","name":"Home","children":[{"type":"text","id":"t","content":"Home"}]},
+    {"id":"about","name":"About","children":[{"type":"text","id":"t","content":"About"}]}
+  ],
+  "children": []
+}
