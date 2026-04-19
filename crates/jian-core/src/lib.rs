@@ -12,6 +12,7 @@
 //! - [`logic::LogicProvider`] — how to execute Tier 3 logic modules (reserved for L4).
 
 pub mod error;
+pub mod geometry;
 
 pub use error::{CoreError, CoreResult};
 
