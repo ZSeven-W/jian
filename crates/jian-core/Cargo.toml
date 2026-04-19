@@ -1,0 +1,29 @@
+[package]
+name         = "jian-core"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+description  = "Jian UI framework core — document, signals, scene graph, render trait."
+readme       = "README.md"
+
+[dependencies]
+jian-ops-schema = { path = "../jian-ops-schema" }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+thiserror       = { workspace = true }
+smallvec        = "1.13"
+slotmap         = "1.0"
+euclid          = "0.22"
+taffy           = "0.5"
+rstar           = "0.12"
+bitflags        = "2.6"
+
+[dev-dependencies]
+insta     = { workspace = true }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "signal_update"
+harness = false
