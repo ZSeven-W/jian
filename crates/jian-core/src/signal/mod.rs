@@ -77,6 +77,7 @@ impl<T: Clone + 'static> Signal<T> {
     }
 
     /// Remove a subscriber (called when Effect is disposed).
+    #[allow(dead_code)]
     pub(crate) fn unsubscribe(&self, id: SubscriberId) {
         let mut subs = self.inner.subscribers.borrow_mut();
         subs.retain(|s| *s != id);
