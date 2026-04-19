@@ -1,0 +1,37 @@
+{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "counter-app",
+  "app": {
+    "name": "Counter",
+    "version": "1.0.0",
+    "id": "com.example.counter"
+  },
+  "state": {
+    "count": {"type":"int","default":0}
+  },
+  "children": [
+    {
+      "type": "frame",
+      "id": "root",
+      "width": 400,
+      "height": 200,
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "text",
+          "id": "title",
+          "content": "Counter: 0",
+          "fontSize": 24
+        },
+        {
+          "type": "rectangle",
+          "id": "button",
+          "width": 120,
+          "height": 40,
+          "fill": [{"type":"solid","color":"#0066ff"}]
+        }
+      ]
+    }
+  ]
+}
