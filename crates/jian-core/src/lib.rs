@@ -15,6 +15,7 @@ pub mod effect;
 pub mod error;
 pub mod geometry;
 pub mod signal;
+pub mod value;
 
 pub use error::{CoreError, CoreResult};
 
