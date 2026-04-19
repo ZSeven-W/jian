@@ -15,6 +15,7 @@ pub mod document;
 pub mod effect;
 pub mod error;
 pub mod geometry;
+pub mod scene;
 pub mod signal;
 pub mod state;
 pub mod value;
