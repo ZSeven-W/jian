@@ -26,3 +26,4 @@ fn assert_roundtrip(name: &str) {
 #[test] fn nested_frame()    { assert_roundtrip("nested-frame.op"); }
 #[test] fn with_variables()  { assert_roundtrip("with-variables.op"); }
 #[test] fn pages()           { assert_roundtrip("pages.op"); }
+#[test] fn pencil_demo()     { assert_roundtrip("pencil-demo.op"); }

@@ -35,7 +35,8 @@ pub struct PathNode {
     pub base: PenNodeBase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon_id: Option<String>,
-    pub d: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anchors: Option<Vec<PenPathAnchor>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -137,11 +137,25 @@ pub struct ImageFillBody {
 
 // --- Stroke ---
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SidedThickness {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bottom: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<f32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum StrokeThickness {
     Uniform(f32),
     PerSide([f32; 4]),
+    Sided(SidedThickness),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
