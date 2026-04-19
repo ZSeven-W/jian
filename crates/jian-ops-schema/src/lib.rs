@@ -2,6 +2,7 @@
 
 pub mod error;
 pub mod style;
+pub mod variable;
 
 pub use error::{OpsResult, OpsSchemaError};
 
