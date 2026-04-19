@@ -1,6 +1,7 @@
 //! `jian-ops-schema` — canonical types + JSON Schema for Jian `.op` files.
 
 pub mod app;
+pub mod compat;
 pub mod document;
 pub mod error;
 pub mod events;
@@ -17,8 +18,11 @@ pub mod sizing;
 pub mod state;
 pub mod style;
 pub mod variable;
+pub mod version;
 
-pub use error::{OpsResult, OpsSchemaError};
+pub use compat::load_str;
+pub use document::PenDocument;
+pub use error::{LoadResult, LoadWarning, OpsResult, OpsSchemaError};
 
 #[cfg(test)]
 mod tests {

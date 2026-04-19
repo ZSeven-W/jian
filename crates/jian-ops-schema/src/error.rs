@@ -16,3 +16,29 @@ pub enum OpsSchemaError {
 }
 
 pub type OpsResult<T> = std::result::Result<T, OpsSchemaError>;
+
+/// Non-fatal warnings produced while loading a document. Collected in `LoadResult`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoadWarning {
+    UnknownField {
+        path: String,
+        field: String,
+    },
+    FutureFormatVersion {
+        found: String,
+        supported_max: &'static str,
+    },
+    LogicModulesSkipped {
+        reason: &'static str,
+    },
+    InvalidExpression {
+        path: String,
+        expr: String,
+        reason: String,
+    },
+}
+
+pub struct LoadResult<T> {
+    pub value: T,
+    pub warnings: Vec<LoadWarning>,
+}
