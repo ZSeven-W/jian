@@ -1,0 +1,60 @@
+{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "counter-demo",
+  "app": {
+    "name": "Counter Demo",
+    "version": "1.0.0",
+    "id": "com.example.counter",
+    "entry": "/",
+    "capabilities": ["storage"]
+  },
+  "state": {
+    "count":  {"type":"int","default":0,"persist":true},
+    "target": {"type":"int","default":10}
+  },
+  "lifecycle": {
+    "onLaunch": [{"toast":"App started"}]
+  },
+  "routes": {
+    "entry": "/",
+    "routes": {
+      "/":      {"pageId":"home"},
+      "/stats": {"pageId":"stats"}
+    }
+  },
+  "pages": [
+    {
+      "id": "home",
+      "name": "Home",
+      "lifecycle": { "onEnter": [{"set":{"$state.count":0}}] },
+      "children": [
+        {
+          "type": "text",
+          "id": "title",
+          "content": "Count: 0",
+          "bindings": { "content": "\"Count: \" + $app.count" }
+        },
+        {
+          "type": "frame",
+          "id": "plus-btn",
+          "width": 80,
+          "height": 40,
+          "events": {
+            "onTap": [
+              {"set":{"$app.count":"$app.count + 1"}},
+              {"if":{"expr":"$app.count >= $app.target","then":[{"toast":"Done!"},{"push":"/stats"}]}}
+            ]
+          },
+          "semantics": {"role":"button","label":"Increment"}
+        }
+      ]
+    },
+    {
+      "id": "stats",
+      "name": "Stats",
+      "children": []
+    }
+  ],
+  "children": []
+}

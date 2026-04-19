@@ -27,3 +27,4 @@ fn assert_roundtrip(name: &str) {
 #[test] fn with_variables()  { assert_roundtrip("with-variables.op"); }
 #[test] fn pages()           { assert_roundtrip("pages.op"); }
 #[test] fn pencil_demo()     { assert_roundtrip("pencil-demo.op"); }
+#[test] fn full_jian_extensions() { assert_roundtrip("full-jian-extensions.op"); }

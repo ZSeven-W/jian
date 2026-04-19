@@ -19,4 +19,18 @@ pub struct IconFontNode {
     pub fill: Option<Vec<PenFill>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stroke: Option<PenStroke>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::state::StateSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<crate::events::Bindings>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub events: Option<crate::events::EventHandlers>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<crate::lifecycle::NodeLifecycleHooks>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantics: Option<crate::semantics::SemanticsMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gestures: Option<crate::gestures::GestureOverrides>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::navigation::NavigationRoute>,
 }
