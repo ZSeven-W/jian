@@ -13,6 +13,7 @@
 
 pub mod error;
 pub mod geometry;
+pub mod signal;
 
 pub use error::{CoreError, CoreResult};
 
