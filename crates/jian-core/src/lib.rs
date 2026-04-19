@@ -18,6 +18,7 @@ pub mod geometry;
 pub mod layout;
 pub mod scene;
 pub mod signal;
+pub mod spatial;
 pub mod state;
 pub mod value;
 
