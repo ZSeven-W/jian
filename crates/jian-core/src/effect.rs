@@ -37,10 +37,7 @@ impl EffectRegistry {
         let id = slotkey_to_subscriber(key);
         {
             let mut e = self.effects.borrow_mut();
-            *e.get_mut(key).unwrap() = Effect {
-                f: Box::new(f),
-                id,
-            };
+            *e.get_mut(key).unwrap() = Effect { f: Box::new(f), id };
         }
         self.run(id);
         EffectHandle {

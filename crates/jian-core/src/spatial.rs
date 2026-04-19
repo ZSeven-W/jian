@@ -32,9 +32,7 @@ pub struct SpatialIndex {
 
 impl SpatialIndex {
     pub fn new() -> Self {
-        Self {
-            tree: RTree::new(),
-        }
+        Self { tree: RTree::new() }
     }
 
     pub fn rebuild<I: IntoIterator<Item = NodeBBox>>(&mut self, items: I) {

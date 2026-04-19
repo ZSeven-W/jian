@@ -44,7 +44,7 @@ impl<T: Clone + 'static> Signal<T> {
     pub fn get(&self) -> T {
         if let Some(sub) = tracker::current() {
             let mut subs = self.inner.subscribers.borrow_mut();
-            if !subs.iter().any(|id| *id == sub) {
+            if !subs.contains(&sub) {
                 subs.push(sub);
             }
         }
@@ -54,14 +54,18 @@ impl<T: Clone + 'static> Signal<T> {
     /// Write a new value and schedule subscribers for re-run on next flush.
     pub fn set(&self, value: T) {
         *self.inner.value.borrow_mut() = value;
-        self.inner.version.set(self.inner.version.get().wrapping_add(1));
+        self.inner
+            .version
+            .set(self.inner.version.get().wrapping_add(1));
         self.notify();
     }
 
     /// Update the value via a closure, then schedule subscribers.
     pub fn update(&self, f: impl FnOnce(&mut T)) {
         f(&mut self.inner.value.borrow_mut());
-        self.inner.version.set(self.inner.version.get().wrapping_add(1));
+        self.inner
+            .version
+            .set(self.inner.version.get().wrapping_add(1));
         self.notify();
     }
 

@@ -92,7 +92,8 @@ impl RenderBackend for CaptureBackend {
         self.commands.push(RenderCommand::ApplyBlur { sigma });
     }
     fn apply_shadow(&mut self, shadow: &ShadowSpec) {
-        self.commands.push(RenderCommand::ApplyShadow(shadow.clone()));
+        self.commands
+            .push(RenderCommand::ApplyShadow(shadow.clone()));
     }
     fn draw(&mut self, op: &DrawOp) {
         self.commands.push(RenderCommand::Draw(op.clone()));

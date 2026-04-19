@@ -41,9 +41,7 @@ impl StatePath {
         }
 
         // Find end of scope prefix: first '.' or '[' or end.
-        let prefix_end = src
-            .find(|c: char| c == '.' || c == '[')
-            .unwrap_or(src.len());
+        let prefix_end = src.find(['.', '[']).unwrap_or(src.len());
         let prefix = &src[..prefix_end];
         let scope = Scope::parse_prefix(prefix)
             .ok_or_else(|| PathError::UnknownScope(prefix.to_owned()))?;
@@ -74,7 +72,7 @@ impl StatePath {
                 continue;
             }
             // Case: dotted segment up to next '.' or '['
-            let next = rest.find(|c| c == '.' || c == '[').unwrap_or(rest.len());
+            let next = rest.find(['.', '[']).unwrap_or(rest.len());
             if next == 0 {
                 return Err(PathError::EmptySegment);
             }
@@ -128,10 +126,7 @@ mod tests {
         let p = StatePath::parse(r#"$app.map["weird-key"]"#).unwrap();
         assert_eq!(
             p.segments,
-            vec![
-                Segment::Key("map".into()),
-                Segment::Key("weird-key".into()),
-            ]
+            vec![Segment::Key("map".into()), Segment::Key("weird-key".into()),]
         );
     }
 

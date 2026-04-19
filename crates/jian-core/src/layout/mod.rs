@@ -53,8 +53,7 @@ impl LayoutEngine {
         for (key, data) in doc_tree.nodes.iter() {
             if !data.children.is_empty() {
                 let parent = self.map[key];
-                let child_ids: Vec<NodeId> =
-                    data.children.iter().map(|k| self.map[*k]).collect();
+                let child_ids: Vec<NodeId> = data.children.iter().map(|k| self.map[*k]).collect();
                 self.tree
                     .set_children(parent, &child_ids)
                     .map_err(|e| CoreError::Layout(e.to_string()))?;
@@ -77,7 +76,12 @@ impl LayoutEngine {
     pub fn node_rect(&self, key: NodeKey) -> Option<Rect> {
         let id = self.map.get(key)?;
         let l = self.tree.layout(*id).ok()?;
-        Some(rect(l.location.x, l.location.y, l.size.width, l.size.height))
+        Some(rect(
+            l.location.x,
+            l.location.y,
+            l.size.width,
+            l.size.height,
+        ))
     }
 }
 

@@ -7,10 +7,12 @@ use super::tracker::SubscriberId;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+type FlushFn = Box<dyn Fn(SubscriberId)>;
+
 pub struct Scheduler {
     pending: RefCell<HashSet<SubscriberId>>,
     is_flushing: RefCell<bool>,
-    flush_fn: RefCell<Option<Box<dyn Fn(SubscriberId)>>>,
+    flush_fn: RefCell<Option<FlushFn>>,
 }
 
 impl Scheduler {

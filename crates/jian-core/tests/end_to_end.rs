@@ -4,11 +4,7 @@ use jian_core::scene::Color;
 use jian_core::Runtime;
 
 fn counter_src() -> String {
-    std::fs::read_to_string(format!(
-        "{}/tests/counter.op",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .unwrap()
+    std::fs::read_to_string(format!("{}/tests/counter.op", env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
 #[test]

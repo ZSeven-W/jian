@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn path_commands_build() {
-        let cmds = vec![
+        let cmds = [
             PathCommand::MoveTo(point(0.0, 0.0)),
             PathCommand::LineTo(point(10.0, 0.0)),
             PathCommand::LineTo(point(10.0, 10.0)),
