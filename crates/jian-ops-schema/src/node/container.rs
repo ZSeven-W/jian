@@ -3,6 +3,8 @@ use crate::style::{PenEffect, PenFill, PenStroke};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutMode {
     None,
@@ -11,6 +13,8 @@ pub enum LayoutMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "snake_case")]
 pub enum JustifyContent {
     Start,
@@ -21,6 +25,8 @@ pub enum JustifyContent {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "snake_case")]
 pub enum AlignItems {
     Start,
@@ -29,6 +35,8 @@ pub enum AlignItems {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(untagged)]
 pub enum Padding {
     Uniform(f64),
@@ -38,6 +46,8 @@ pub enum Padding {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(untagged)]
 pub enum CornerRadius {
     Uniform(f64),
@@ -49,6 +59,8 @@ pub enum CornerRadius {
 /// defined in node/mod.rs to avoid circular module dependency. Each concrete
 /// node type that has children declares it explicitly via `children: Option<Vec<PenNode>>`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerProps {
     #[serde(default, skip_serializing_if = "Option::is_none")]

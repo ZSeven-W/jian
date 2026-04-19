@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 /// (Plan 2). The schema crate only guarantees the string is present; content-level
 /// correctness is deferred.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(transparent)]
 pub struct Expression(pub String);
 

@@ -2,6 +2,8 @@ use crate::events::ActionList;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct AppLifecycleHooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -15,6 +17,8 @@ pub struct AppLifecycleHooks {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct PageLifecycleHooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -28,6 +32,8 @@ pub struct PageLifecycleHooks {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct NodeLifecycleHooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]

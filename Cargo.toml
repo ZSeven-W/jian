@@ -14,7 +14,7 @@ authors = ["Jian contributors"]
 serde        = { version = "1.0", features = ["derive"] }
 serde_json   = { version = "1.0", features = ["preserve_order"] }
 schemars     = { version = "0.8", features = ["preserve_order"] }
-ts-rs        = { version = "10.0" }
+ts-rs        = { version = "10.0", features = ["serde-json-impl"] }
 thiserror    = "1.0"
 insta        = { version = "1.40", features = ["json", "yaml"] }
 

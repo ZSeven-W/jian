@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 /// Forward declaration of PenNode union — defined in `node/mod.rs`.
 /// We accept `Vec<super::PenNode>` as children.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct FrameNode {
     #[serde(flatten)]
@@ -34,6 +36,8 @@ pub struct FrameNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct GroupNode {
     #[serde(flatten)]
@@ -59,6 +63,8 @@ pub struct GroupNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct RectangleNode {
     #[serde(flatten)]
