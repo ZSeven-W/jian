@@ -21,6 +21,7 @@ pub mod signal;
 pub mod spatial;
 pub mod state;
 pub mod value;
+pub mod viewport;
 
 pub use error::{CoreError, CoreResult};
 
