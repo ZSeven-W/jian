@@ -16,6 +16,7 @@ pub mod effect;
 pub mod error;
 pub mod geometry;
 pub mod layout;
+pub mod logic;
 pub mod render;
 pub mod scene;
 pub mod signal;
