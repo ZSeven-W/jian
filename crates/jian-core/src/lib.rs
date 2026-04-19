@@ -18,6 +18,7 @@ pub mod geometry;
 pub mod layout;
 pub mod logic;
 pub mod render;
+pub mod runtime;
 pub mod scene;
 pub mod signal;
 pub mod spatial;
@@ -26,6 +27,7 @@ pub mod value;
 pub mod viewport;
 
 pub use error::{CoreError, CoreResult};
+pub use runtime::Runtime;
 
 #[cfg(test)]
 mod sanity {
