@@ -101,11 +101,9 @@ mod tests {
     fn load_unknown_field_produces_warning() {
         let s = r#"{"version":"0.8.0","children":[],"myExperimental":42}"#;
         let r = load_str(s).unwrap();
-        assert!(
-            r.warnings
-                .iter()
-                .any(|w| matches!(w, LoadWarning::UnknownField { field, .. } if field == "myExperimental"))
-        );
+        assert!(r.warnings.iter().any(
+            |w| matches!(w, LoadWarning::UnknownField { field, .. } if field == "myExperimental")
+        ));
     }
 
     #[test]

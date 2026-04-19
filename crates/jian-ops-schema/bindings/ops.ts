@@ -39,6 +39,14 @@ export type BoolOrExpression = boolean | string;
 
 export type Capability = "storage" | "network" | "camera" | "microphone" | "location" | "notifications" | "clipboard" | "biometric" | "file_system" | "haptic";
 
+/**
+ * Container props — shared by Frame/Group/Rectangle.
+ * `children` is NOT included here because PenNode children are recursively
+ * defined in node/mod.rs to avoid circular module dependency. Each concrete
+ * node type that has children declares it explicitly via `children: Option<Vec<PenNode>>`.
+ */
+export type ContainerProps = { width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null, cornerRadius: CornerRadius | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, };
+
 export type CornerRadius = number | [number, number, number, number];
 
 export type EllipseNode = { width: SizingBehavior | null, height: SizingBehavior | null, cornerRadius: number | null, innerRadius: number | null, startAngle: number | null, sweepAngle: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
@@ -167,6 +175,12 @@ export type PenFill = { "type": "solid" } & SolidFillBody | { "type": "linear_gr
  * Tag is the JSON `"type"` field.
  */
 export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "ref" } & RefNode;
+
+/**
+ * Shared fields across all node types.
+ * Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.
+ */
+export type PenNodeBase = { id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type PenPage = { id: string, name: string, children: Array<PenNode>, state: { [key in string]?: StateEntry } | null, lifecycle: PageLifecycleHooks | null, };
 

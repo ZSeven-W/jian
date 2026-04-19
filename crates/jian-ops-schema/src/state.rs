@@ -61,7 +61,10 @@ mod tests {
         let json = r#"{"count":{"type":"int","default":0}}"#;
         let s: StateSchema = serde_json::from_str(json).unwrap();
         let entry = s.get("count").unwrap();
-        assert!(matches!(entry.kind, StateType::Primitive(PrimitiveType::Int)));
+        assert!(matches!(
+            entry.kind,
+            StateType::Primitive(PrimitiveType::Int)
+        ));
         assert_eq!(entry.default, Some(serde_json::json!(0)));
     }
 
@@ -88,7 +91,10 @@ mod tests {
         let s: StateSchema = serde_json::from_str(json).unwrap();
         match &s.get("items").unwrap().kind {
             StateType::Array { array } => {
-                assert!(matches!(**array, StateType::Primitive(PrimitiveType::String)))
+                assert!(matches!(
+                    **array,
+                    StateType::Primitive(PrimitiveType::String)
+                ))
             }
             _ => panic!(),
         }

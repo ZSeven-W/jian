@@ -6,7 +6,7 @@ rust-version = { workspace = true }
 license      = { workspace = true }
 repository   = { workspace = true }
 description  = "Canonical schema and types for Jian .op files."
-readme       = "../../README.md"
+readme       = "README.md"
 
 [dependencies]
 serde      = { workspace = true }

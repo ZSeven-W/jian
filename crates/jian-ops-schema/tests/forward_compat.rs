@@ -33,11 +33,10 @@ fn future_minor_accepted_with_warning_absent() {
     // since future *minors* are expected to be backward-compatible.
     let src = r#"{"formatVersion":"1.5","version":"1.5.0","children":[]}"#;
     let r = load_str(src).unwrap();
-    assert!(
-        !r.warnings
-            .iter()
-            .any(|w| matches!(w, LoadWarning::FutureFormatVersion { .. }))
-    );
+    assert!(!r
+        .warnings
+        .iter()
+        .any(|w| matches!(w, LoadWarning::FutureFormatVersion { .. })));
 }
 
 #[test]
@@ -49,9 +48,8 @@ fn logic_modules_produce_skip_warning() {
       "logicModules":[{"id":"x","source":"bundle://x.wasm","abi":"jian.wasm.v1"}]
     }"#;
     let r = load_str(src).unwrap();
-    assert!(
-        r.warnings
-            .iter()
-            .any(|w| matches!(w, LoadWarning::LogicModulesSkipped { .. }))
-    );
+    assert!(r
+        .warnings
+        .iter()
+        .any(|w| matches!(w, LoadWarning::LogicModulesSkipped { .. })));
 }

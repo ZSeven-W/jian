@@ -353,8 +353,7 @@ mod tests {
 
     #[test]
     fn stroke_thickness_per_side() {
-        let s: PenStroke =
-            serde_json::from_str(r#"{"thickness":[1.0,2.0,3.0,4.0]}"#).unwrap();
+        let s: PenStroke = serde_json::from_str(r#"{"thickness":[1.0,2.0,3.0,4.0]}"#).unwrap();
         assert!(matches!(
             s.thickness,
             StrokeThickness::PerSide([1.0, 2.0, 3.0, 4.0])

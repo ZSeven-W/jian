@@ -33,7 +33,10 @@ mod tests {
     #[test]
     fn sizing_keyword() {
         let s: SizingBehavior = serde_json::from_str(r#""fit_content""#).unwrap();
-        assert!(matches!(s, SizingBehavior::Keyword(SizingKeyword::FitContent)));
+        assert!(matches!(
+            s,
+            SizingBehavior::Keyword(SizingKeyword::FitContent)
+        ));
     }
 
     #[test]

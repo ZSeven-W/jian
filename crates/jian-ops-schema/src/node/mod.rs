@@ -64,7 +64,8 @@ mod tests {
 
     #[test]
     fn nested_frame_with_children() {
-        let json = r#"{"type":"frame","id":"root","children":[{"type":"text","id":"t","content":"hi"}]}"#;
+        let json =
+            r#"{"type":"frame","id":"root","children":[{"type":"text","id":"t","content":"hi"}]}"#;
         let n: PenNode = serde_json::from_str(json).unwrap();
         if let PenNode::Frame(f) = n {
             let children = f.children.unwrap();

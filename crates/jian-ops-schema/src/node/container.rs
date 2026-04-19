@@ -123,7 +123,10 @@ mod tests {
         let j = r#"{"layout":"horizontal","gap":12,"padding":[0,0],"justifyContent":"space_between","alignItems":"center"}"#;
         let c: ContainerProps = serde_json::from_str(j).unwrap();
         assert!(matches!(c.layout, Some(LayoutMode::Horizontal)));
-        assert!(matches!(c.justify_content, Some(JustifyContent::SpaceBetween)));
+        assert!(matches!(
+            c.justify_content,
+            Some(JustifyContent::SpaceBetween)
+        ));
         assert!(matches!(c.align_items, Some(AlignItems::Center)));
     }
 }
