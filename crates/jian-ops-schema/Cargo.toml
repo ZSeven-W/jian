@@ -1,0 +1,28 @@
+[package]
+name         = "jian-ops-schema"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+description  = "Canonical schema and types for Jian .op files."
+readme       = "../../README.md"
+
+[dependencies]
+serde      = { workspace = true }
+serde_json = { workspace = true }
+schemars   = { workspace = true }
+ts-rs      = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+
+# Binaries are created in later tasks (17/18).
+# [[bin]]
+# name = "export_schema"
+# path = "bin/export_schema.rs"
+#
+# [[bin]]
+# name = "export_ts"
+# path = "bin/export_ts.rs"

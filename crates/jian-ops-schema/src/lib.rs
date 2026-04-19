@@ -1,0 +1,13 @@
+//! `jian-ops-schema` — canonical types + JSON Schema for Jian `.op` files.
+
+pub mod error;
+
+pub use error::{OpsResult, OpsSchemaError};
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn crate_compiles() {
+        assert_eq!(2 + 2, 4);
+    }
+}
