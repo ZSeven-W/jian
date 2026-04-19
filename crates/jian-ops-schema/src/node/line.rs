@@ -2,7 +2,7 @@ use super::base::PenNodeBase;
 use crate::style::{PenEffect, PenStroke};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LineNode {
     #[serde(flatten)]

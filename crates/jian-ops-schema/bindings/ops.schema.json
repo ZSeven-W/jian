@@ -1,0 +1,4890 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PenDocument",
+  "type": "object",
+  "required": [
+    "children",
+    "version"
+  ],
+  "properties": {
+    "version": {
+      "description": "Document format version stored in files since v0.x. Always present.",
+      "type": "string"
+    },
+    "name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "themes": {
+      "description": "Wire shape: axis-name → ordered theme names. Frozen from v0.x.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "variables": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/definitions/VariableDefinition"
+      }
+    },
+    "pages": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/definitions/PenPage"
+      }
+    },
+    "children": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/PenNode"
+      }
+    },
+    "formatVersion": {
+      "description": "\"1.0\" when any v1 extension is present; undefined ⇒ legacy v0.x.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "App id (reverse-DNS). Required when `app` is set; otherwise optional.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "app": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AppConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "routes": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RoutesConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "state": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "$ref": "#/definitions/StateEntry"
+      }
+    },
+    "lifecycle": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AppLifecycleHooks"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "logicModules": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/definitions/LogicModuleRef"
+      }
+    }
+  },
+  "definitions": {
+    "VariableDefinition": {
+      "type": "object",
+      "required": [
+        "type",
+        "value"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/definitions/VariableKind"
+        },
+        "value": {
+          "$ref": "#/definitions/VariableValue"
+        }
+      }
+    },
+    "VariableKind": {
+      "type": "string",
+      "enum": [
+        "color",
+        "number",
+        "boolean",
+        "string"
+      ]
+    },
+    "VariableValue": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/VariableScalar"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ThemedValue"
+          }
+        }
+      ]
+    },
+    "VariableScalar": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "ThemedValue": {
+      "type": "object",
+      "required": [
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "$ref": "#/definitions/VariableScalar"
+        },
+        "theme": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "PenPage": {
+      "type": "object",
+      "required": [
+        "children",
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PenNode"
+          }
+        },
+        "state": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/definitions/StateEntry"
+          }
+        },
+        "lifecycle": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PageLifecycleHooks"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "PenNode": {
+      "description": "Union of all concrete node types. Tag is the JSON `\"type\"` field.",
+      "oneOf": [
+        {
+          "description": "Forward declaration of PenNode union — defined in `node/mod.rs`. We accept `Vec<super::PenNode>` as children.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "frame"
+              ]
+            },
+            "children": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenNode"
+              }
+            },
+            "reusable": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "slot": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "layout": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/LayoutMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gap": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "padding": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Padding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "justifyContent": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/JustifyContent"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "alignItems": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AlignItems"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "clipContent": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "group"
+              ]
+            },
+            "children": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenNode"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "layout": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/LayoutMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gap": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "padding": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Padding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "justifyContent": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/JustifyContent"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "alignItems": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AlignItems"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "clipContent": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "rectangle"
+              ]
+            },
+            "children": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenNode"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "layout": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/LayoutMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gap": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "padding": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Padding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "justifyContent": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/JustifyContent"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "alignItems": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/AlignItems"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "clipContent": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ellipse"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cornerRadius": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "innerRadius": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "startAngle": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "sweepAngle": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "line"
+              ]
+            },
+            "x2": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y2": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "polygonCount",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "polygon"
+              ]
+            },
+            "polygonCount": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cornerRadius": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "path"
+              ]
+            },
+            "iconId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "d": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "anchors": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenPathAnchor"
+              }
+            },
+            "closed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "content",
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "text"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "content": {
+              "$ref": "#/definitions/TextContent"
+            },
+            "fontFamily": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fontSize": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "fontWeight": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/FontWeight"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fontStyle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/FontStyleKind2"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "letterSpacing": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "lineHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "textAlign": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TextAlign"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "textAlignVertical": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TextAlignVertical"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "textGrowth": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TextGrowth"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "underline": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "strikethrough": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "src",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            },
+            "src": {
+              "type": "string"
+            },
+            "objectFit": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageFitMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "exposure": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "contrast": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "saturation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "temperature": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "tint": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "highlights": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "shadows": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "imagePrompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "imageSearchQuery": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "iconFontName",
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "icon_font"
+              ]
+            },
+            "iconFontName": {
+              "type": "string"
+            },
+            "iconFontFamily": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
+          "type": "object",
+          "required": [
+            "id",
+            "ref",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "ref"
+              ]
+            },
+            "ref": {
+              "type": "string"
+            },
+            "descendants": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": true
+            },
+            "children": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenNode"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "StateEntry": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/definitions/StateType"
+        },
+        "default": true,
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "persist": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "StateType": {
+      "description": "Recursive state type description.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PrimitiveType"
+        },
+        {
+          "type": "object",
+          "required": [
+            "oneOf"
+          ],
+          "properties": {
+            "oneOf": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/StateType"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "array"
+          ],
+          "properties": {
+            "array": {
+              "$ref": "#/definitions/StateType"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "object"
+          ],
+          "properties": {
+            "object": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/StateType"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "PrimitiveType": {
+      "type": "string",
+      "enum": [
+        "int",
+        "float",
+        "number",
+        "string",
+        "bool",
+        "array",
+        "object",
+        "date"
+      ]
+    },
+    "EventHandlers": {
+      "description": "All supported event hook keys. Note: input events (`onChange`, `onSubmit`, `onFocus`, `onBlur`) apply only to input-kind nodes. `on_key` is keyboard, `on_reach_end` is list-scroll-end, etc.",
+      "type": "object",
+      "properties": {
+        "onTap": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onDoubleTap": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onLongPress": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onPanStart": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onPanUpdate": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onPanEnd": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onScaleStart": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onScaleUpdate": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onScaleEnd": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onHoverEnter": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onHoverLeave": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onChange": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onSubmit": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onFocus": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onBlur": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onKey": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onScroll": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onReachEnd": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "NodeLifecycleHooks": {
+      "type": "object",
+      "properties": {
+        "onMount": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onUnmount": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "SemanticsMeta": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SemanticRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "liveRegion": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/LiveRegion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "actions": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/SemanticAction"
+          }
+        }
+      }
+    },
+    "SemanticRole": {
+      "type": "string",
+      "enum": [
+        "button",
+        "link",
+        "image",
+        "text",
+        "heading",
+        "input",
+        "list",
+        "list_item",
+        "header",
+        "nav",
+        "main",
+        "dialog",
+        "alert"
+      ]
+    },
+    "LiveRegion": {
+      "type": "string",
+      "enum": [
+        "off",
+        "polite",
+        "assertive"
+      ]
+    },
+    "SemanticAction": {
+      "type": "object",
+      "required": [
+        "handler",
+        "label",
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "handler": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "GestureOverrides": {
+      "type": "object",
+      "properties": {
+        "rawPointer": {
+          "description": "When true, this node and its subtree bypass the Arena and receive raw pointer events.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "disabled": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scrollBehavior": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ScrollBehavior"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dragThreshold": {
+          "description": "Override drag threshold in logical pixels (default 8).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "longPressDuration": {
+          "description": "Override long-press duration in ms (default 500).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "ScrollBehavior": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "contain",
+        "none"
+      ]
+    },
+    "NavigationRoute": {
+      "description": "Declarative per-node navigation: clicking the node pushes/replaces/pops a route. Equivalent to `events.on_tap = [{\"push\": \"...\"}]` but more editor-discoverable.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "push"
+          ],
+          "properties": {
+            "push": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "replace"
+          ],
+          "properties": {
+            "replace": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "pop"
+          ],
+          "properties": {
+            "pop": {
+              "type": "null"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NumberOrExpression": {
+      "description": "Opacity can be a number or a `$variable` reference string.",
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "BoolOrExpression": {
+      "description": "Boolean that may also be an expression.",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "SizingBehavior": {
+      "description": "Sizing value: a number, a fixed keyword, or an arbitrary string (typically `$variable` ref).",
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "$ref": "#/definitions/SizingKeyword"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "SizingKeyword": {
+      "type": "string",
+      "enum": [
+        "fit_content",
+        "fill_container"
+      ]
+    },
+    "LayoutMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "vertical",
+        "horizontal"
+      ]
+    },
+    "Padding": {
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 2,
+          "minItems": 2
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "JustifyContent": {
+      "type": "string",
+      "enum": [
+        "start",
+        "center",
+        "end",
+        "space_between",
+        "space_around"
+      ]
+    },
+    "AlignItems": {
+      "type": "string",
+      "enum": [
+        "start",
+        "center",
+        "end"
+      ]
+    },
+    "CornerRadius": {
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "double"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          },
+          "maxItems": 4,
+          "minItems": 4
+        }
+      ]
+    },
+    "PenFill": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "color",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "solid"
+              ]
+            },
+            "color": {
+              "type": "string"
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "opacity": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "blendMode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "stops",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "linear_gradient"
+              ]
+            },
+            "angle": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "stops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/GradientStop"
+              }
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "opacity": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "blendMode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "stops",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "radial_gradient"
+              ]
+            },
+            "cx": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "cy": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "radius": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "stops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/GradientStop"
+              }
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "opacity": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "blendMode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "url"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "image"
+              ]
+            },
+            "url": {
+              "type": "string"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageFillMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "originalSize": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageOriginalSize"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "transform": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageTransform"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "opacity": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "exposure": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "contrast": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "saturation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "temperature": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "tint": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "highlights": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "shadows": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            }
+          }
+        }
+      ]
+    },
+    "BlendMode": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "darken",
+        "multiply",
+        "screen",
+        "overlay",
+        "lighten",
+        "difference",
+        "hue",
+        "saturation",
+        "color",
+        "luminosity"
+      ]
+    },
+    "GradientStop": {
+      "type": "object",
+      "required": [
+        "color",
+        "offset"
+      ],
+      "properties": {
+        "offset": {
+          "type": "number",
+          "format": "float"
+        },
+        "color": {
+          "type": "string"
+        }
+      }
+    },
+    "ImageFillMode": {
+      "type": "string",
+      "enum": [
+        "fill",
+        "fit",
+        "crop",
+        "tile",
+        "stretch"
+      ]
+    },
+    "ImageOriginalSize": {
+      "type": "object",
+      "required": [
+        "height",
+        "width"
+      ],
+      "properties": {
+        "width": {
+          "type": "number",
+          "format": "float"
+        },
+        "height": {
+          "type": "number",
+          "format": "float"
+        }
+      }
+    },
+    "ImageTransform": {
+      "type": "object",
+      "required": [
+        "m00",
+        "m01",
+        "m02",
+        "m10",
+        "m11",
+        "m12"
+      ],
+      "properties": {
+        "m00": {
+          "type": "number",
+          "format": "float"
+        },
+        "m01": {
+          "type": "number",
+          "format": "float"
+        },
+        "m02": {
+          "type": "number",
+          "format": "float"
+        },
+        "m10": {
+          "type": "number",
+          "format": "float"
+        },
+        "m11": {
+          "type": "number",
+          "format": "float"
+        },
+        "m12": {
+          "type": "number",
+          "format": "float"
+        }
+      }
+    },
+    "PenStroke": {
+      "type": "object",
+      "required": [
+        "thickness"
+      ],
+      "properties": {
+        "thickness": {
+          "$ref": "#/definitions/StrokeThickness"
+        },
+        "align": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StrokeAlign"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "join": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StrokeJoin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cap": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StrokeCap"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dashPattern": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "number",
+            "format": "float"
+          }
+        },
+        "dashOffset": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "fill": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PenFill"
+          }
+        }
+      }
+    },
+    "StrokeThickness": {
+      "anyOf": [
+        {
+          "type": "number",
+          "format": "float"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "float"
+          },
+          "maxItems": 4,
+          "minItems": 4
+        },
+        {
+          "$ref": "#/definitions/SidedThickness"
+        }
+      ]
+    },
+    "SidedThickness": {
+      "type": "object",
+      "properties": {
+        "top": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "right": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "bottom": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "left": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        }
+      }
+    },
+    "StrokeAlign": {
+      "type": "string",
+      "enum": [
+        "inside",
+        "center",
+        "outside"
+      ]
+    },
+    "StrokeJoin": {
+      "type": "string",
+      "enum": [
+        "miter",
+        "bevel",
+        "round"
+      ]
+    },
+    "StrokeCap": {
+      "type": "string",
+      "enum": [
+        "none",
+        "round",
+        "square"
+      ]
+    },
+    "PenEffect": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "radius",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "blur"
+              ]
+            },
+            "radius": {
+              "type": "number",
+              "format": "float"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "radius",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "background_blur"
+              ]
+            },
+            "radius": {
+              "type": "number",
+              "format": "float"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "blur",
+            "color",
+            "offsetX",
+            "offsetY",
+            "spread",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "shadow"
+              ]
+            },
+            "inner": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "offsetX": {
+              "type": "number",
+              "format": "float"
+            },
+            "offsetY": {
+              "type": "number",
+              "format": "float"
+            },
+            "blur": {
+              "type": "number",
+              "format": "float"
+            },
+            "spread": {
+              "type": "number",
+              "format": "float"
+            },
+            "color": {
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "PenPathAnchor": {
+      "type": "object",
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        },
+        "handleIn": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PenPathHandle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handleOut": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PenPathHandle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pointType": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PenPathPointType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "PenPathHandle": {
+      "type": "object",
+      "required": [
+        "x",
+        "y"
+      ],
+      "properties": {
+        "x": {
+          "type": "number",
+          "format": "double"
+        },
+        "y": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
+    "PenPathPointType": {
+      "type": "string",
+      "enum": [
+        "corner",
+        "mirrored",
+        "independent"
+      ]
+    },
+    "TextContent": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/StyledTextSegment"
+          }
+        }
+      ]
+    },
+    "StyledTextSegment": {
+      "type": "object",
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "fontFamily": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fontSize": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "fontWeight": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "fontStyle": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FontStyleKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fill": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "underline": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "strikethrough": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "href": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "FontStyleKind": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "italic"
+      ]
+    },
+    "FontWeight": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "FontStyleKind2": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "italic"
+      ]
+    },
+    "TextAlign": {
+      "type": "string",
+      "enum": [
+        "left",
+        "center",
+        "right",
+        "justify"
+      ]
+    },
+    "TextAlignVertical": {
+      "type": "string",
+      "enum": [
+        "top",
+        "middle",
+        "bottom"
+      ]
+    },
+    "TextGrowth": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "fixed-width",
+        "fixed-width-height"
+      ]
+    },
+    "ImageFitMode": {
+      "type": "string",
+      "enum": [
+        "fill",
+        "fit",
+        "crop",
+        "tile"
+      ]
+    },
+    "PageLifecycleHooks": {
+      "type": "object",
+      "properties": {
+        "onEnter": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onLeave": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onForeground": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onBackground": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "AppConfig": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "entry": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "capabilities": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Capability"
+          }
+        },
+        "theme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "orientation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Orientation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "backgroundColor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "splash": {
+          "description": "C19 splash-frame config.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SplashConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "aspAllowedOrigins": {
+          "description": "C18 ASP web handshake postMessage origin allowlist. Only consulted by the web host; strict match; no wildcards.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "Capability": {
+      "type": "string",
+      "enum": [
+        "storage",
+        "network",
+        "camera",
+        "microphone",
+        "location",
+        "notifications",
+        "clipboard",
+        "biometric",
+        "file_system",
+        "haptic"
+      ]
+    },
+    "Orientation": {
+      "type": "string",
+      "enum": [
+        "portrait",
+        "landscape",
+        "auto"
+      ]
+    },
+    "SplashConfig": {
+      "type": "object",
+      "properties": {
+        "background": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "minDurationMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        }
+      }
+    },
+    "RoutesConfig": {
+      "type": "object",
+      "required": [
+        "entry",
+        "routes"
+      ],
+      "properties": {
+        "entry": {
+          "type": "string"
+        },
+        "routes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/RouteSpec"
+          }
+        },
+        "transitions": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/definitions/Transition"
+          }
+        }
+      }
+    },
+    "RouteSpec": {
+      "type": "object",
+      "required": [
+        "pageId"
+      ],
+      "properties": {
+        "pageId": {
+          "type": "string"
+        },
+        "preload": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "guards": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "Transition": {
+      "type": "string",
+      "enum": [
+        "push",
+        "fade",
+        "modal",
+        "none"
+      ]
+    },
+    "AppLifecycleHooks": {
+      "type": "object",
+      "properties": {
+        "onLaunch": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onResume": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onBackground": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onTerminate": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "LogicModuleRef": {
+      "type": "object",
+      "required": [
+        "abi",
+        "id",
+        "source"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "integrity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "abi": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/Capability"
+          }
+        }
+      }
+    }
+  }
+}

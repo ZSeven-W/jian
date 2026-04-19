@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Opacity can be a number or a `$variable` reference string.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum NumberOrExpression {
     Number(f64),
@@ -10,7 +10,7 @@ pub enum NumberOrExpression {
 }
 
 /// Boolean that may also be an expression.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum BoolOrExpression {
     Bool(bool),
@@ -19,7 +19,7 @@ pub enum BoolOrExpression {
 
 /// Shared fields across all node types.
 /// Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PenNodeBase {
     pub id: String,

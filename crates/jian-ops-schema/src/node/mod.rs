@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 /// Union of all concrete node types.
 /// Tag is the JSON `"type"` field.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PenNode {
     Frame(FrameNode),

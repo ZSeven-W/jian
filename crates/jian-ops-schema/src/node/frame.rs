@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Forward declaration of PenNode union — defined in `node/mod.rs`.
 /// We accept `Vec<super::PenNode>` as children.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FrameNode {
     #[serde(flatten)]
@@ -33,7 +33,7 @@ pub struct FrameNode {
     pub route: Option<crate::navigation::NavigationRoute>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupNode {
     #[serde(flatten)]
@@ -58,7 +58,7 @@ pub struct GroupNode {
     pub route: Option<crate::navigation::NavigationRoute>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RectangleNode {
     #[serde(flatten)]

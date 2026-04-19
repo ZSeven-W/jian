@@ -1,7 +1,7 @@
 use crate::expression::Expression;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ScrollBehavior {
     Auto,
@@ -9,7 +9,7 @@ pub enum ScrollBehavior {
     None,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct GestureOverrides {
     /// When true, this node and its subtree bypass the Arena and receive raw pointer events.

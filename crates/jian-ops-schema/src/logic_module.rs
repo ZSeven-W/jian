@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 
 /// An ABI version string for the Tier 3 WASM module. The only recognised
 /// value today is `jian.wasm.v1`; Jian rejects unknown ABI at load time.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct LogicAbi(pub String);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LogicModuleRef {
     pub id: String,

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Parsing and validation are the responsibility of `jian-core::expression::parser`
 /// (Plan 2). The schema crate only guarantees the string is present; content-level
 /// correctness is deferred.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct Expression(pub String);
 

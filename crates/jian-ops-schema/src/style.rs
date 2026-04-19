@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 // --- Blend mode ---
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BlendMode {
     Normal,
@@ -20,19 +20,19 @@ pub enum BlendMode {
 
 // --- Fills ---
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct GradientStop {
     pub offset: f32,
     pub color: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ImageOriginalSize {
     pub width: f32,
     pub height: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ImageTransform {
     pub m00: f32,
     pub m01: f32,
@@ -42,7 +42,7 @@ pub struct ImageTransform {
     pub m12: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageFillMode {
     Fill,
@@ -52,7 +52,7 @@ pub enum ImageFillMode {
     Stretch,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PenFill {
     Solid(SolidFillBody),
@@ -61,7 +61,7 @@ pub enum PenFill {
     Image(ImageFillBody),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SolidFillBody {
     pub color: String,
@@ -73,7 +73,7 @@ pub struct SolidFillBody {
     pub blend_mode: Option<BlendMode>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LinearGradientBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,7 +87,7 @@ pub struct LinearGradientBody {
     pub blend_mode: Option<BlendMode>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RadialGradientBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,7 +105,7 @@ pub struct RadialGradientBody {
     pub blend_mode: Option<BlendMode>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageFillBody {
     pub url: String,
@@ -137,7 +137,7 @@ pub struct ImageFillBody {
 
 // --- Stroke ---
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SidedThickness {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,7 +150,7 @@ pub struct SidedThickness {
     pub left: Option<f32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum StrokeThickness {
     Uniform(f32),
@@ -158,7 +158,7 @@ pub enum StrokeThickness {
     Sided(SidedThickness),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StrokeAlign {
     Inside,
@@ -166,7 +166,7 @@ pub enum StrokeAlign {
     Outside,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StrokeJoin {
     Miter,
@@ -174,7 +174,7 @@ pub enum StrokeJoin {
     Round,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StrokeCap {
     None,
@@ -182,7 +182,7 @@ pub enum StrokeCap {
     Square,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PenStroke {
     pub thickness: StrokeThickness,
@@ -202,7 +202,7 @@ pub struct PenStroke {
 
 // --- Effect ---
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PenEffect {
     Blur(BlurBody),
@@ -210,12 +210,12 @@ pub enum PenEffect {
     Shadow(ShadowBody),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct BlurBody {
     pub radius: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ShadowBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -229,14 +229,14 @@ pub struct ShadowBody {
 
 // --- Styled text segment ---
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FontStyleKind {
     Normal,
     Italic,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StyledTextSegment {
     pub text: String,

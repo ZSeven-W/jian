@@ -2,7 +2,7 @@ use crate::sizing::SizingBehavior;
 use crate::style::{PenEffect, PenFill, PenStroke};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutMode {
     None,
@@ -10,7 +10,7 @@ pub enum LayoutMode {
     Horizontal,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JustifyContent {
     Start,
@@ -20,7 +20,7 @@ pub enum JustifyContent {
     SpaceAround,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AlignItems {
     Start,
@@ -28,7 +28,7 @@ pub enum AlignItems {
     End,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Padding {
     Uniform(f64),
@@ -37,7 +37,7 @@ pub enum Padding {
     Expression(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum CornerRadius {
     Uniform(f64),
@@ -48,7 +48,7 @@ pub enum CornerRadius {
 /// `children` is NOT included here because PenNode children are recursively
 /// defined in node/mod.rs to avoid circular module dependency. Each concrete
 /// node type that has children declares it explicitly via `children: Option<Vec<PenNode>>`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerProps {
     #[serde(default, skip_serializing_if = "Option::is_none")]

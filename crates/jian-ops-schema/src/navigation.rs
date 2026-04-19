@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Declarative per-node navigation: clicking the node pushes/replaces/pops a route.
 /// Equivalent to `events.on_tap = [{"push": "..."}]` but more editor-discoverable.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum NavigationRoute {
     #[serde(rename = "push")]
     Push(String),

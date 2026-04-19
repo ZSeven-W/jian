@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 /// - `{ "push": "/detail/42" }`
 ///
 /// The body shape per action is NOT validated here — see `jian-core::action`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(transparent)]
 pub struct Action(pub BTreeMap<String, serde_json::Value>);
 
@@ -31,7 +31,7 @@ pub type ActionList = Vec<Action>;
 /// All supported event hook keys. Note: input events (`onChange`, `onSubmit`, `onFocus`,
 /// `onBlur`) apply only to input-kind nodes. `on_key` is keyboard, `on_reach_end`
 /// is list-scroll-end, etc.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventHandlers {
     // Gesture-originated

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SizingKeyword {
     FitContent,
@@ -8,7 +8,7 @@ pub enum SizingKeyword {
 }
 
 /// Sizing value: a number, a fixed keyword, or an arbitrary string (typically `$variable` ref).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum SizingBehavior {
     Number(f64),

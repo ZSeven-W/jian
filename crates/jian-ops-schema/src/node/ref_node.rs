@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 /// schema and is not the job of the schema crate.
 pub type DescendantOverrides = BTreeMap<String, Value>;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RefNode {
     #[serde(flatten)]

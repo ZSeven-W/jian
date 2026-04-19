@@ -4,7 +4,7 @@ use crate::sizing::SizingBehavior;
 use crate::style::PenEffect;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageFitMode {
     Fill,
@@ -13,7 +13,7 @@ pub enum ImageFitMode {
     Tile,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageNode {
     #[serde(flatten)]

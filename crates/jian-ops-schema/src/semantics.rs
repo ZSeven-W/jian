@@ -2,7 +2,7 @@ use crate::events::ActionList;
 use crate::expression::Expression;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SemanticRole {
     Button,
@@ -20,7 +20,7 @@ pub enum SemanticRole {
     Alert,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LiveRegion {
     Off,
@@ -28,7 +28,7 @@ pub enum LiveRegion {
     Assertive,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticAction {
     pub name: String,
@@ -36,7 +36,7 @@ pub struct SemanticAction {
     pub handler: ActionList,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticsMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]

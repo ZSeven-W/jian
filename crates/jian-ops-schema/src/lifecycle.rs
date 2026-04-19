@@ -1,7 +1,7 @@
 use crate::events::ActionList;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppLifecycleHooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -14,7 +14,7 @@ pub struct AppLifecycleHooks {
     pub on_terminate: Option<ActionList>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PageLifecycleHooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27,7 +27,7 @@ pub struct PageLifecycleHooks {
     pub on_background: Option<ActionList>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeLifecycleHooks {
     #[serde(default, skip_serializing_if = "Option::is_none")]

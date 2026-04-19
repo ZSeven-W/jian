@@ -3,7 +3,7 @@ use crate::sizing::SizingBehavior;
 use crate::style::{PenEffect, PenFill, PenStroke};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EllipseNode {
     #[serde(flatten)]
