@@ -33,4 +33,4 @@ Both files are tracked in git and consumed by `openpencil` via submodule.
 
 ## License
 
-Apache-2.0
+MIT

@@ -10,4 +10,4 @@ See `docs/` for the design spec (pending publication).
 
 ## License
 
-Apache-2.0
+MIT
