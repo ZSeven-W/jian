@@ -39,3 +39,54 @@ fn capture_backend_records_smoke() {
     assert!(matches!(cmds[1], RenderCommand::Draw(DrawOp::Rect { .. })));
     assert!(matches!(cmds[2], RenderCommand::EndFrame));
 }
+
+// --- Corpus pipeline tests (Plan 1 fixtures) -----------------------------
+
+fn corpus_path(name: &str) -> String {
+    format!(
+        "{}/../jian-ops-schema/tests/corpus/{}",
+        env!("CARGO_MANIFEST_DIR"),
+        name
+    )
+}
+
+fn load_corpus(name: &str) -> String {
+    std::fs::read_to_string(corpus_path(name))
+        .unwrap_or_else(|e| panic!("cannot read corpus {}: {}", name, e))
+}
+
+#[test]
+fn corpus_minimal_pipeline() {
+    let mut rt = Runtime::new();
+    rt.load_str(&load_corpus("minimal.op")).unwrap();
+    rt.build_layout((800.0, 600.0)).unwrap();
+    rt.rebuild_spatial();
+}
+
+#[test]
+fn corpus_nested_frame_pipeline() {
+    let mut rt = Runtime::new();
+    rt.load_str(&load_corpus("nested-frame.op")).unwrap();
+    rt.build_layout((800.0, 600.0)).unwrap();
+    rt.rebuild_spatial();
+    assert!(!rt.spatial.is_empty());
+}
+
+#[test]
+fn corpus_with_variables_seeds_vars_scope() {
+    let mut rt = Runtime::new();
+    rt.load_str(&load_corpus("with-variables.op")).unwrap();
+    assert!(rt.state.vars_get("bg").is_some());
+    assert!(rt.state.vars_get("fg").is_some());
+}
+
+#[test]
+fn corpus_full_jian_extensions_pipeline() {
+    let mut rt = Runtime::new();
+    rt.load_str(&load_corpus("full-jian-extensions.op"))
+        .unwrap();
+    rt.build_layout((800.0, 600.0)).unwrap();
+    rt.rebuild_spatial();
+    assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(0));
+    assert_eq!(rt.state.app_get("target").unwrap().as_i64(), Some(10));
+}
