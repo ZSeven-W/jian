@@ -36,7 +36,7 @@ impl ActionImpl for Set {
     }
 }
 
-fn write_path(ctx: &ActionContext, path: &StatePath, value: Value) -> ActionResult {
+pub(crate) fn write_path(ctx: &ActionContext, path: &StatePath, value: Value) -> ActionResult {
     if path.segments.len() != 1 {
         return Err(ActionError::Custom(format!(
             "set: multi-segment paths not yet supported: `{:?}`",
