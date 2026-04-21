@@ -7,6 +7,7 @@
 //! proper fine-grained reactivity.
 
 pub mod diag;
+pub mod lexer;
 pub mod token;
 
 pub use diag::{DiagKind, Diagnostic, Span};
