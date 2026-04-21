@@ -1,10 +1,10 @@
 //! PanRecognizer — claim after pointer moves > dragThreshold.
 
 use crate::document::NodeKey;
+use crate::geometry::{point, Point};
 use crate::gesture::pointer::{PointerEvent, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
 use crate::gesture::semantic::SemanticEvent;
-use crate::geometry::{point, Point};
 use std::time::Instant;
 
 pub struct PanRecognizer {
@@ -79,10 +79,7 @@ impl Recognizer for PanRecognizer {
                         self.claimed = true;
                     }
                 } else if let Some((last_pos, last_t)) = self.last {
-                    let delta = point(
-                        event.position.x - last_pos.x,
-                        event.position.y - last_pos.y,
-                    );
+                    let delta = point(event.position.x - last_pos.x, event.position.y - last_pos.y);
                     let dt = event.timestamp.duration_since(last_t).as_secs_f32();
                     let velocity = if dt > 0.0 {
                         point(delta.x / dt, delta.y / dt)

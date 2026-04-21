@@ -188,8 +188,8 @@ impl Recognizer for DoubleTapRecognizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gesture::recognizer::Recognizer;
     use crate::geometry::point;
+    use crate::gesture::recognizer::Recognizer;
     use slotmap::SlotMap;
 
     fn make_key() -> NodeKey {
@@ -228,5 +228,4 @@ mod tests {
         let _ = r.handle_pointer(&event(0, PointerPhase::Move, 20.0, 0.0), &mut h);
         assert_eq!(r.state(), RecognizerState::Rejected);
     }
-
 }
