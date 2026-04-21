@@ -75,6 +75,30 @@ impl StateGraph {
         self.vars.borrow().get(name).map(|s| s.get())
     }
 
+    pub fn page_set(&self, page_id: &str, name: &str, value: Value) {
+        let rv = RuntimeValue(value);
+        let mut map = self.page.borrow_mut();
+        let entry = map.entry(page_id.to_owned()).or_default();
+        if let Some(sig) = entry.get(name) {
+            sig.set(rv);
+        } else {
+            let sig = Signal::new(rv, self.scheduler.clone());
+            entry.insert(name.to_owned(), sig);
+        }
+    }
+
+    pub fn self_set(&self, node_id: &str, name: &str, value: Value) {
+        let rv = RuntimeValue(value);
+        let mut map = self.self_.borrow_mut();
+        let entry = map.entry(node_id.to_owned()).or_default();
+        if let Some(sig) = entry.get(name) {
+            sig.set(rv);
+        } else {
+            let sig = Signal::new(rv, self.scheduler.clone());
+            entry.insert(name.to_owned(), sig);
+        }
+    }
+
     /// Resolve a StatePath to the underlying RuntimeValue, walking segments.
     pub fn resolve(
         &self,

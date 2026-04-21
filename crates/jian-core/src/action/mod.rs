@@ -6,6 +6,7 @@
 //! supports async IO and nested control flow.
 
 pub mod action_trait;
+pub mod actions;
 pub mod cancel;
 pub mod capability;
 pub mod context;
@@ -26,9 +27,11 @@ use std::rc::Rc;
 
 pub type SharedRegistry = Rc<RefCell<ActionRegistry>>;
 
-/// Build the default registry — actions registered in later tasks.
+/// Build the default registry with every MVP action registered.
 pub fn default_registry() -> SharedRegistry {
-    Rc::new(RefCell::new(ActionRegistry::new()))
+    let reg = Rc::new(RefCell::new(ActionRegistry::new()));
+    actions::register_all(&reg);
+    reg
 }
 
 pub use cancel::CancellationToken;
