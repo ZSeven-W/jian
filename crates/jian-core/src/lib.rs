@@ -15,6 +15,7 @@ pub mod action;
 pub mod binding;
 pub mod document;
 pub mod effect;
+pub mod gesture;
 pub mod error;
 pub mod expression;
 pub mod geometry;
