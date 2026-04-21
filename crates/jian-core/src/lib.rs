@@ -11,6 +11,7 @@
 //! - [`render::RenderBackend`] — how to turn the scene graph into pixels.
 //! - [`logic::LogicProvider`] — how to execute Tier 3 logic modules (reserved for L4).
 
+pub mod binding;
 pub mod document;
 pub mod effect;
 pub mod error;
@@ -27,6 +28,7 @@ pub mod state;
 pub mod value;
 pub mod viewport;
 
+pub use binding::BindingEffect;
 pub use error::{CoreError, CoreResult};
 pub use runtime::Runtime;
 
