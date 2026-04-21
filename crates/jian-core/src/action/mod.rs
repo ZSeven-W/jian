@@ -7,8 +7,11 @@
 
 pub mod cancel;
 pub mod capability;
+pub mod context;
 pub mod error;
 pub mod services;
+
+pub use context::ActionContext;
 
 pub use cancel::CancellationToken;
 pub use error::{ActionError, ActionResult};
