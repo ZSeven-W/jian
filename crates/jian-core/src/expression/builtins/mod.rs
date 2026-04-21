@@ -5,8 +5,11 @@
 //! registry from `default_builtins()`.
 
 pub mod array;
+pub mod date;
 pub mod math;
+pub mod object;
 pub mod string;
+pub mod typeops;
 
 use super::diag::{DiagKind, Diagnostic, Span};
 pub use super::scope::BuiltinFn;
@@ -17,6 +20,9 @@ pub fn default_builtins() -> BTreeMap<String, BuiltinFn> {
     math::register(&mut m);
     string::register(&mut m);
     array::register(&mut m);
+    object::register(&mut m);
+    date::register(&mut m);
+    typeops::register(&mut m);
     m
 }
 
