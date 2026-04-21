@@ -13,5 +13,6 @@ pub mod diag;
 pub mod lexer;
 pub mod parser;
 pub mod token;
+pub mod vm;
 
 pub use diag::{DiagKind, Diagnostic, Span};
