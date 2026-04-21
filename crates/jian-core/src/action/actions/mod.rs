@@ -8,9 +8,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 pub mod control;
+pub mod feedback;
+pub mod logic;
 pub mod navigation;
 pub mod network;
+pub mod platform;
 pub mod state;
+pub mod storage_ops;
 
 /// Register all MVP actions into a shared registry.
 pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
@@ -21,9 +25,7 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     r.register("set", Box::new(state::factory_set));
     r.register("delete", Box::new(state::factory_delete));
 
-    // `reset` is dual-purpose per spec §3.2:
-    //   - string body starting with `$` → state scope reset
-    //   - anything else that is an expression string → navigation reset
+    // `reset` is dual-purpose (spec §3.2).
     r.register(
         "reset",
         Box::new(|body: &Value| -> Result<BoxedAction, ActionError> {
@@ -45,6 +47,24 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     r.register("replace", Box::new(navigation::factory_replace));
     r.register("pop", Box::new(navigation::factory_pop));
     r.register("open_url", Box::new(navigation::factory_open_url));
+
+    // Storage
+    r.register("storage_set", Box::new(storage_ops::factory_storage_set));
+    r.register(
+        "storage_clear",
+        Box::new(storage_ops::factory_storage_clear),
+    );
+    r.register("storage_wipe", Box::new(storage_ops::factory_storage_wipe));
+
+    // UI feedback (non-nested)
+    r.register("toast", Box::new(feedback::factory_toast));
+    r.register("alert", Box::new(feedback::factory_alert));
+
+    // L4 platform stubs
+    r.register("vibrate", Box::new(platform::factory_vibrate));
+    r.register("haptic", Box::new(platform::factory_haptic));
+    r.register("share", Box::new(platform::factory_share));
+    r.register("notify", Box::new(platform::factory_notify));
 
     // Control (nested — via weak registry upgrade)
     let w = weak.clone();
@@ -93,7 +113,7 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     );
 
     // Network (nested — fetch.on_error)
-    let w = weak;
+    let w = weak.clone();
     r.register(
         "fetch",
         Box::new(move |body| {
@@ -102,6 +122,32 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
             ))?;
             let r = s.borrow();
             network::make_fetch_body(&r, body)
+        }),
+    );
+
+    // UI feedback (nested — confirm.on_confirm/on_cancel)
+    let w = weak.clone();
+    r.register(
+        "confirm",
+        Box::new(move |body| {
+            let s = w.upgrade().ok_or(ActionError::Custom(
+                "registry dropped while parsing `confirm`".into(),
+            ))?;
+            let r = s.borrow();
+            feedback::make_confirm_body(&r, body)
+        }),
+    );
+
+    // Tier 3 `call` (nested — on_error)
+    let w = weak;
+    r.register(
+        "call",
+        Box::new(move |body| {
+            let s = w.upgrade().ok_or(ActionError::Custom(
+                "registry dropped while parsing `call`".into(),
+            ))?;
+            let r = s.borrow();
+            logic::make_call_body(&r, body)
         }),
     );
 }
