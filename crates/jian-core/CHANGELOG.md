@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.5.0] — Plan 6 — Capability Gate (full enforcement)
+
+### Added
+
+- Top-level `crate::capability` module (moved from `action::capability`;
+  old path still re-exports for backwards compat):
+  - `CapabilityGate` trait: `check(needed: Capability, action: &'static str) -> bool`.
+    Every IO action now passes its registered name so audit entries can
+    identify which call tripped the gate.
+  - `DeclaredCapabilityGate::new(caps, Some(audit))` writes an
+    `AuditEntry` for every check (Allowed or Denied); passing `None` is
+    silent and suitable for unit tests.
+  - `AuditLog` with a ring buffer (`max_size`) + `snapshot` /
+    `allowed_count` / `denied_count` accessors.
+  - `map::required_capabilities(action_name) -> &'static [Capability]`
+    — single source of truth for the Action→Capability table (spec
+    §A.8.2).
+  - `AutomationLevel { Observe, Act, Full }` with a `covers` lattice
+    (Full ⊇ Act ⊇ Observe) for future Tier-3 automation capabilities.
+  - `PermissionBroker` trait + `NullPermissionBroker` stub. Real OS-level
+    brokers ship with host crates in Plan 14+.
+- `Runtime::new_from_document(schema) -> Runtime` factory: reads
+  `schema.app.capabilities`, builds a `DeclaredCapabilityGate` with a
+  1000-entry `AuditLog`, and stores both on the runtime.
+- `Runtime::make_action_ctx()` is now public so tests and embedders can
+  build an `ActionContext` that shares the runtime's services.
+- Plan 4 IO action call sites (`fetch`, `storage_set`, `storage_clear`,
+  `storage_wipe`, platform stubs) updated to pass the action name.
+- Integration suite `tests/capability_enforcement.rs` (10 tests):
+  fetch denied without declare; fetch allowed with declare; audit
+  accumulates across calls; storage allowed when declared; pure actions
+  bypass audit; ring-buffer drops oldest; default `Runtime::new()` keeps
+  Dummy gate with no audit.
+
 ## [0.4.0] — Plan 5 — Gesture Arena
 
 ### Added

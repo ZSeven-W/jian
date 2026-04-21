@@ -2,8 +2,8 @@
 
 Core of the Jian UI framework: Document runtime, fine-grained Signals, Scene
 Graph, Layout (via taffy), Spatial Index (via rstar), Viewport, Tier 1
-expression language, Tier 2 Action DSL, **Gesture Arena**, and the
-`RenderBackend` / `LogicProvider` extension traits.
+expression language, Tier 2 Action DSL, Gesture Arena, **Capability Gate**,
+and the `RenderBackend` / `LogicProvider` extension traits.
 
 ## Usage
 
@@ -102,6 +102,38 @@ A node (or any ancestor on the hit path) can opt out with
 
 Scale / Rotate multi-pointer recognizers are deferred to Plan 9.
 
+## Security & Capabilities (C14)
+
+Jian enforces a two-layer security model:
+
+1. **CapabilityGate** (Runtime layer) — every IO action
+   (`fetch` / `storage_*` / `open_url` / `share` / platform stubs)
+   calls `ctx.capabilities.check(needed, action_name)` *before* running
+   its side effect. Checks are written to an `AuditLog` with a bounded
+   ring buffer.
+2. **PermissionBroker** (OS UX layer) — handles the user-facing
+   "allow / deny" dialog for OS permissions (camera / mic / location /
+   notifications / biometric). Trait-only in `jian-core`; real brokers
+   ship with host crates (Plan 14+).
+
+Build a runtime whose gate is populated from the `.op`'s declared
+`app.capabilities`:
+
+```rust
+let schema = jian_ops_schema::load_str(src)?.value;
+let rt = jian_core::Runtime::new_from_document(schema)?;
+
+// Now every IO action is checked. Inspect the audit log at any time:
+for entry in rt.audit.as_deref().unwrap().snapshot() {
+    println!("{:?} {:?} -> {:?}", entry.action, entry.needed, entry.verdict);
+}
+```
+
+A `.op` without `app.capabilities` has an empty declaration set: every
+IO action returns `CapabilityDenied` and the denial is audited.
+`Runtime::new()` keeps a permissive `DummyCapabilityGate` so existing
+tests can skip the declaration dance.
+
 ### Binding
 
 `BindingEffect` attaches an Expression to a mutation callback:
@@ -120,7 +152,8 @@ let _b = BindingEffect::new(
 - `v0.1.0-core` — runtime kernel skeleton
 - `v0.2.0-core` — Tier 1 expressions + bindings
 - `v0.3.0-core` — Tier 2 Action DSL
-- **`v0.4.0-core`** — Gesture Arena (this release)
+- `v0.4.0-core` — Gesture Arena
+- **`v0.5.0-core`** — Capability Gate (this release)
 - Next: Skia render backend (Plan 7), host-desktop multi-pointer (Plan 9)
 
 ## License
