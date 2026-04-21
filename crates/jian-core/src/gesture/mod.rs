@@ -5,6 +5,7 @@ pub mod hit;
 pub mod pointer;
 pub mod priority;
 pub mod recognizer;
+pub mod recognizers;
 pub mod semantic;
 
 pub use arena::Arena;
