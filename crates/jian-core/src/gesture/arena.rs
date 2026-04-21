@@ -144,4 +144,52 @@ impl Arena {
     pub fn members_mut(&mut self) -> impl Iterator<Item = &mut Box<dyn Recognizer>> {
         self.members.iter_mut()
     }
+
+    /// Drive `tick()` on every still-Possible member. If one of them claims
+    /// as a side effect (LongPress is the canonical case), resolve the
+    /// arena — accept the winner, reject everyone else — so that the
+    /// next pointer event doesn't let a competing recognizer also claim.
+    pub fn tick(&mut self, now: std::time::Instant) {
+        if self.resolved.is_some() {
+            // Still route ticks to the winner in case it wants to emit
+            // follow-up events (e.g. pan velocity). No resolution needed.
+            if let Some(winner_id) = self.resolved {
+                for r in &mut self.members {
+                    if r.id() == winner_id {
+                        let mut pending = None;
+                        let mut handle = ArenaHandle {
+                            pending_semantic: &mut pending,
+                        };
+                        r.tick(now, &mut handle);
+                        if let Some(ev) = pending {
+                            self.emitted.push(ev);
+                        }
+                        break;
+                    }
+                }
+            }
+            return;
+        }
+
+        let mut winner_idx: Option<usize> = None;
+        for (idx, r) in self.members.iter_mut().enumerate() {
+            if matches!(r.state(), RecognizerState::Rejected) {
+                continue;
+            }
+            let mut pending = None;
+            let mut handle = ArenaHandle {
+                pending_semantic: &mut pending,
+            };
+            r.tick(now, &mut handle);
+            if let Some(ev) = pending {
+                self.emitted.push(ev);
+            }
+            if matches!(r.state(), RecognizerState::Claimed) && winner_idx.is_none() {
+                winner_idx = Some(idx);
+            }
+        }
+        if let Some(idx) = winner_idx {
+            self.resolve(idx);
+        }
+    }
 }

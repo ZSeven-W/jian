@@ -100,6 +100,84 @@ fn drag_past_slop_rejects_tap() {
 }
 
 #[test]
+fn double_tap_on_same_spot_fires_double_tap_event() {
+    let mut rt = make_runtime();
+    let btn = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+    let rect = rt.layout.node_rect(btn).unwrap();
+    let cx = rect.min_x() + rect.size.width / 2.0;
+    let cy = rect.min_y() + rect.size.height / 2.0;
+
+    // First tap.
+    let _ = rt.dispatch_pointer(PointerEvent::simple(
+        3,
+        PointerPhase::Down,
+        jian_core::geometry::point(cx, cy),
+    ));
+    let first_up = rt.dispatch_pointer(PointerEvent::simple(
+        3,
+        PointerPhase::Up,
+        jian_core::geometry::point(cx, cy),
+    ));
+    assert_eq!(first_up.len(), 1);
+    assert!(matches!(
+        first_up[0],
+        jian_core::gesture::SemanticEvent::Tap { .. }
+    ));
+
+    // Second tap immediately — router tracks Tap history across arenas.
+    let _ = rt.dispatch_pointer(PointerEvent::simple(
+        4,
+        PointerPhase::Down,
+        jian_core::geometry::point(cx + 1.0, cy + 1.0),
+    ));
+    let second_up = rt.dispatch_pointer(PointerEvent::simple(
+        4,
+        PointerPhase::Up,
+        jian_core::geometry::point(cx + 1.0, cy + 1.0),
+    ));
+    assert!(second_up
+        .iter()
+        .any(|e| matches!(e, jian_core::gesture::SemanticEvent::Tap { .. })));
+    assert!(second_up
+        .iter()
+        .any(|e| matches!(e, jian_core::gesture::SemanticEvent::DoubleTap { .. })));
+}
+
+#[test]
+fn long_press_claim_via_tick_suppresses_subsequent_tap() {
+    // Regression: before the arena.tick fix, a LongPress claim via tick
+    // didn't resolve the arena, so a subsequent Up still let Tap claim.
+    let mut rt = make_runtime();
+    let btn = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+    let rect = rt.layout.node_rect(btn).unwrap();
+    let cx = rect.min_x() + rect.size.width / 2.0;
+    let cy = rect.min_y() + rect.size.height / 2.0;
+
+    let _ = rt.dispatch_pointer(PointerEvent::simple(
+        5,
+        PointerPhase::Down,
+        jian_core::geometry::point(cx, cy),
+    ));
+    // Advance time past LongPress duration (500ms default).
+    let future = std::time::Instant::now() + std::time::Duration::from_millis(800);
+    let tick_emitted = rt.tick(future);
+    assert!(tick_emitted
+        .iter()
+        .any(|e| matches!(e, jian_core::gesture::SemanticEvent::LongPress { .. })));
+
+    // Now Up — Tap must NOT fire; the arena already resolved LongPress.
+    let up_emitted = rt.dispatch_pointer(PointerEvent::simple(
+        5,
+        PointerPhase::Up,
+        jian_core::geometry::point(cx, cy),
+    ));
+    assert!(!up_emitted
+        .iter()
+        .any(|e| matches!(e, jian_core::gesture::SemanticEvent::Tap { .. })));
+    assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(0));
+}
+
+#[test]
 fn miss_outside_button_does_not_fire_tap() {
     let mut rt = make_runtime();
     let down = PointerEvent::simple(

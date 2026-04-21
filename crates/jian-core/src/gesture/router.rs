@@ -16,9 +16,15 @@ use super::recognizer::{Recognizer, RecognizerId};
 use super::recognizers::{HoverRecognizer, LongPressRecognizer, PanRecognizer, TapRecognizer};
 use super::semantic::SemanticEvent;
 use crate::document::{NodeKey, RuntimeDocument};
+use crate::geometry::Point;
 use crate::spatial::SpatialIndex;
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Max gap between the two Taps of a DoubleTap.
+const DOUBLE_TAP_GAP: Duration = Duration::from_millis(300);
+/// Max pixel distance between the two Taps of a DoubleTap.
+const DOUBLE_TAP_SLOP_PX: f32 = 16.0;
 
 pub struct PointerRouter {
     arenas: HashMap<u32, Arena>,
@@ -28,6 +34,11 @@ pub struct PointerRouter {
     raw_roots: HashMap<u32, NodeKey>,
     next_id: RecognizerId,
     last_hover_target: Option<NodeKey>,
+    /// Most recent Tap per node — used by the router-level DoubleTap
+    /// synthesizer. Tap state crosses pointer-sequences, which is why the
+    /// in-arena DoubleTapRecognizer alone can't detect it: each Down opens
+    /// a fresh arena.
+    last_tap: Option<(NodeKey, Instant, Point)>,
 }
 
 impl PointerRouter {
@@ -37,6 +48,7 @@ impl PointerRouter {
             raw_roots: HashMap::new(),
             next_id: 1,
             last_hover_target: None,
+            last_tap: None,
         }
     }
 
@@ -81,12 +93,54 @@ impl PointerRouter {
             out.extend(arena.drain_emitted());
         }
 
+        // Synthesize DoubleTap at the router level: in-arena recognizers can't
+        // track it because a Down always starts a fresh arena.
+        let now = event.timestamp;
+        self.synthesize_double_tap(&mut out, now);
+
         if matches!(event.phase, PointerPhase::Up | PointerPhase::Cancel) {
             self.arenas.remove(&pid);
             self.raw_roots.remove(&pid);
         }
 
         out
+    }
+
+    /// Walk the emitted semantic events; for each `Tap`, check whether it
+    /// matches the cached previous Tap (same node, within `DOUBLE_TAP_GAP`
+    /// and `DOUBLE_TAP_SLOP_PX`). If so, append a `DoubleTap`.
+    fn synthesize_double_tap(&mut self, out: &mut Vec<SemanticEvent>, now: Instant) {
+        // Collect the indices where a DoubleTap should be inserted right
+        // after a matching Tap, to avoid iterator-invalidation.
+        let mut insertions: Vec<(usize, SemanticEvent)> = Vec::new();
+        for (i, ev) in out.iter().enumerate() {
+            let SemanticEvent::Tap { node, position } = ev else {
+                continue;
+            };
+            if let Some((prev_node, prev_t, prev_pos)) = self.last_tap {
+                let dt = now.saturating_duration_since(prev_t);
+                let dx = position.x - prev_pos.x;
+                let dy = position.y - prev_pos.y;
+                if prev_node == *node
+                    && dt <= DOUBLE_TAP_GAP
+                    && (dx * dx + dy * dy).sqrt() <= DOUBLE_TAP_SLOP_PX
+                {
+                    insertions.push((
+                        i + 1,
+                        SemanticEvent::DoubleTap {
+                            node: *node,
+                            position: *position,
+                        },
+                    ));
+                    self.last_tap = None; // Consume; a triple tap is 1 + double.
+                    continue;
+                }
+            }
+            self.last_tap = Some((*node, now, *position));
+        }
+        for (offset, (idx, ev)) in insertions.into_iter().enumerate() {
+            out.insert(idx + offset, ev);
+        }
     }
 
     fn build_arena(&mut self, path: &HitPath) -> Arena {
@@ -133,19 +187,15 @@ impl PointerRouter {
 
     /// Drive LongPress and other timer-based recognizers. Host should call
     /// every frame (or at ≥ 100 Hz for responsive long-press).
+    ///
+    /// Delegates to `Arena::tick`, which resolves the arena if a timer-driven
+    /// claim fires — important for LongPress so a subsequent Up doesn't also
+    /// let Tap claim on the same pointer sequence.
     pub fn tick(&mut self, now: Instant) -> Vec<SemanticEvent> {
         let mut out = Vec::new();
         for arena in self.arenas.values_mut() {
-            for r in arena.members_mut() {
-                let mut pending = None;
-                let mut h = super::recognizer::ArenaHandle {
-                    pending_semantic: &mut pending,
-                };
-                r.tick(now, &mut h);
-                if let Some(ev) = pending {
-                    out.push(ev);
-                }
-            }
+            arena.tick(now);
+            out.extend(arena.drain_emitted());
         }
         out
     }
