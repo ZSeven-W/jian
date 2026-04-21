@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.4.0] — Plan 5 — Gesture Arena
+
+### Added
+
+- Flutter-style gesture pipeline under `gesture/`:
+  - `PointerEvent` with unified `PointerKind` / `PointerPhase` /
+    `MouseButtons` / `Modifiers`.
+  - `hit_test` over `SpatialIndex` returning a z-ordered `HitPath` that walks
+    parent ancestors for bubbling.
+  - `Recognizer` trait (`handle_pointer` / `accept` / `reject` / `tick`) and
+    `RecognizerState` state machine (Possible / Eager / Defer / Claimed /
+    Rejected).
+  - Per-pointer `Arena` with priority-based arbitration on Up.
+  - MVP recognizers: `TapRecognizer`, `DoubleTapRecognizer`,
+    `LongPressRecognizer`, `PanRecognizer`, `HoverRecognizer`.
+    (Scale/Rotate deferred to Plan 9 when host-desktop multi-pointer lands.)
+  - `SemanticEvent` enum with `handler_key()` mapping to schema
+    `events.*` names (camelCase: `onTap`, `onPanUpdate`, …).
+  - `PointerRouter` top-level dispatcher: creates arenas on Down, routes
+    Move/Up into the winning recognizer, separates Hover state-tracking, and
+    exposes `tick(now)` for timer-driven recognizers (LongPress).
+  - `rawPointer` escape hatch: any ancestor declaring
+    `gestures.rawPointer: true` bypasses arena arbitration and receives
+    `SemanticEvent::RawPointer` directly.
+  - `FocusManager` MVP (request/clear) — full Tab-tree traversal lands with
+    host-desktop in Plan 9.
+  - `EventDispatcher` (`dispatch_event`) resolves the node's `events.<key>`
+    ActionList and runs it through Plan 4's `execute_list_shared`.
+- `Runtime` wiring:
+  - New fields: `gestures: PointerRouter`, `actions: SharedRegistry`,
+    `expr_cache`, and injected services (network/storage/nav/feedback/
+    async_feedback/clipboard/capabilities) with Null defaults.
+  - `dispatch_pointer(event)` and `tick(now)` drive the gesture pipeline and
+    fire action handlers end-to-end.
+- Integration tests (`tests/gesture_tap_counter.rs`): Tap increments
+  `$app.count`; drag past slop rejects Tap; miss outside node fires nothing.
+
 ## [0.3.0] — Unreleased (Plan 4)
 
 ### Added

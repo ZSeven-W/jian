@@ -2,8 +2,8 @@
 
 Core of the Jian UI framework: Document runtime, fine-grained Signals, Scene
 Graph, Layout (via taffy), Spatial Index (via rstar), Viewport, Tier 1
-expression language, **Tier 2 Action DSL**, and the `RenderBackend` /
-`LogicProvider` extension traits.
+expression language, Tier 2 Action DSL, **Gesture Arena**, and the
+`RenderBackend` / `LogicProvider` extension traits.
 
 ## Usage
 
@@ -69,6 +69,39 @@ Platform service traits (`NetworkClient` / `StorageBackend` / `Router` /
 implementations in `services::null_impls`; host adapters supply real
 backends.
 
+## Gesture Arena
+
+`Runtime` owns a `PointerRouter` that turns low-level `PointerEvent`s into
+high-level `SemanticEvent`s (`Tap`, `Pan*`, `LongPress`, `Hover*`, …) and
+fires the node's matching `events.*` ActionList through the Tier 2
+interpreter.
+
+```rust
+use jian_core::{Runtime, gesture::{PointerEvent, PointerPhase}};
+
+let mut rt = Runtime::new();
+rt.load_str(&src)?;
+rt.build_layout((800.0, 600.0))?;
+rt.rebuild_spatial();
+
+rt.dispatch_pointer(PointerEvent::simple(
+    1, PointerPhase::Down, jian_core::geometry::point(100.0, 50.0)));
+rt.dispatch_pointer(PointerEvent::simple(
+    1, PointerPhase::Up,   jian_core::geometry::point(100.0, 50.0)));
+// onTap fired; $app.count bumped.
+
+rt.tick(std::time::Instant::now()); // drive LongPress timers each frame
+```
+
+Arena arbitration follows Flutter's convention: recognizers start `Possible`;
+`Pan` claims on drag past its slop; `LongPress` claims on a held timer;
+`Tap` only claims on the Up event if no other recognizer has moved first.
+A node (or any ancestor on the hit path) can opt out with
+`"gestures": { "rawPointer": true }` — its subtree then receives
+`SemanticEvent::RawPointer` directly with no arena arbitration.
+
+Scale / Rotate multi-pointer recognizers are deferred to Plan 9.
+
 ### Binding
 
 `BindingEffect` attaches an Expression to a mutation callback:
@@ -86,8 +119,9 @@ let _b = BindingEffect::new(
 
 - `v0.1.0-core` — runtime kernel skeleton
 - `v0.2.0-core` — Tier 1 expressions + bindings
-- **`v0.3.0-core`** — Tier 2 Action DSL (this release)
-- Next: Gesture Arena (Plan 5), Skia render backend (Plan 7)
+- `v0.3.0-core` — Tier 2 Action DSL
+- **`v0.4.0-core`** — Gesture Arena (this release)
+- Next: Skia render backend (Plan 7), host-desktop multi-pointer (Plan 9)
 
 ## License
 
