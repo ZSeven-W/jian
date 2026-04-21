@@ -125,11 +125,42 @@ fn run_sub_with_locals(
     }
     impl<'a> EvalContext for Overlay<'a> {
         fn lookup_scope(&self, path: &str) -> Option<RuntimeValue> {
-            let name = path.trim_start_matches('$');
-            self.locals
-                .get(name)
-                .cloned()
-                .or_else(|| self.inner.lookup_scope(path))
+            // Handle dotted paths whose root is one of our locals (e.g.
+            // `$item.title`) — walk into the local JSON value. Fall through to
+            // `inner` for everything else (app state, $vars, etc.).
+            if let Some(dot) = path.find('.') {
+                let root = &path[..dot];
+                let name = root.trim_start_matches('$');
+                if let Some(local) = self
+                    .locals
+                    .get(name)
+                    .cloned()
+                    .or_else(|| self.locals.get(root).cloned())
+                {
+                    let rest = &path[dot + 1..];
+                    let mut val = local.0;
+                    for seg in rest.split('.') {
+                        val = match val {
+                            serde_json::Value::Object(ref m) => {
+                                m.get(seg).cloned().unwrap_or(serde_json::Value::Null)
+                            }
+                            _ => serde_json::Value::Null,
+                        };
+                    }
+                    return Some(RuntimeValue(val));
+                }
+            } else {
+                let name = path.trim_start_matches('$');
+                if let Some(v) = self
+                    .locals
+                    .get(name)
+                    .cloned()
+                    .or_else(|| self.locals.get(path).cloned())
+                {
+                    return Some(v);
+                }
+            }
+            self.inner.lookup_scope(path)
         }
         fn call_builtin(
             &self,

@@ -51,6 +51,79 @@ impl<'a> StateGraphContext<'a> {
 
 impl<'a> EvalContext for StateGraphContext<'a> {
     fn lookup_scope(&self, path: &str) -> Option<RuntimeValue> {
+        // Dotted path: fine-grained per-Signal subscription.
+        if let Some(dot) = path.find('.') {
+            let root = &path[..dot];
+            let rest = &path[dot + 1..];
+            let mut rest_parts = rest.split('.');
+            let key = rest_parts.next()?;
+            let tail: Vec<&str> = rest_parts.collect();
+
+            let signal = match root {
+                "$app" => self.state.app.borrow().get(key).cloned(),
+                "$page" => self.page_id.and_then(|pid| {
+                    self.state
+                        .page
+                        .borrow()
+                        .get(pid)
+                        .and_then(|m| m.get(key).cloned())
+                }),
+                "$self" => self.node_id.and_then(|nid| {
+                    self.state
+                        .self_
+                        .borrow()
+                        .get(nid)
+                        .and_then(|m| m.get(key).cloned())
+                }),
+                "$route" => self.state.route.borrow().get(key).cloned(),
+                "$storage" => self.state.storage.borrow().get(key).cloned(),
+                "$vars" => self.state.vars.borrow().get(key).cloned(),
+                "$state" => self
+                    .node_id
+                    .and_then(|nid| {
+                        self.state
+                            .self_
+                            .borrow()
+                            .get(nid)
+                            .and_then(|m| m.get(key).cloned())
+                    })
+                    .or_else(|| {
+                        self.page_id.and_then(|pid| {
+                            self.state
+                                .page
+                                .borrow()
+                                .get(pid)
+                                .and_then(|m| m.get(key).cloned())
+                        })
+                    })
+                    .or_else(|| self.state.app.borrow().get(key).cloned()),
+                other => {
+                    // Locals (e.g. `$item.title`): use `key`+`tail` against the
+                    // local value directly.
+                    let name = other.trim_start_matches('$');
+                    let local = self
+                        .locals
+                        .get(name)
+                        .cloned()
+                        .or_else(|| self.locals.get(other).cloned())?;
+                    let mut val = local.0;
+                    val = walk_member(&val, key);
+                    for seg in tail {
+                        val = walk_member(&val, seg);
+                    }
+                    return Some(RuntimeValue(val));
+                }
+            };
+
+            let signal = signal?;
+            let mut val = signal.get().0;
+            for seg in tail {
+                val = walk_member(&val, seg);
+            }
+            return Some(RuntimeValue(val));
+        }
+
+        // Bare scope root — return a snapshot object.
         match path {
             "$app" => Some(RuntimeValue(scope_to_object(self.state, Scope::App, None))),
             "$page" => self
@@ -110,7 +183,15 @@ impl<'a> EvalContext for StateGraphContext<'a> {
     }
 }
 
-/// Materialise an entire scope as a JSON object so the VM can then MemberGet.
+fn walk_member(v: &serde_json::Value, name: &str) -> serde_json::Value {
+    match v {
+        serde_json::Value::Object(m) => m.get(name).cloned().unwrap_or(serde_json::Value::Null),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Materialise an entire scope as a JSON object (used only when code pushes a
+/// bare `$scope` without a dotted path, e.g. passing it to a builtin).
 fn scope_to_object(state: &StateGraph, scope: Scope, id: Option<&str>) -> serde_json::Value {
     use serde_json::{Map, Value};
     let mut m = Map::new();

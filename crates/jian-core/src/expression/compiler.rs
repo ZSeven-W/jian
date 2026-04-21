@@ -11,6 +11,27 @@ pub fn compile(e: &Expr) -> Result<Chunk, Diagnostic> {
     Ok(c)
 }
 
+/// If `root` is a ScopeRef (possibly with a static dotted Member chain),
+/// return the full dotted path string; otherwise `None`.
+fn try_collect_static_path(root: &Expr, tail: &str) -> Option<String> {
+    let mut segments: Vec<String> = vec![tail.to_owned()];
+    let mut cur = root;
+    loop {
+        match &cur.kind {
+            ExprKind::Member(inner, seg) => {
+                segments.push(seg.clone());
+                cur = inner;
+            }
+            ExprKind::ScopeRef(root_name, _) => {
+                segments.push(root_name.clone());
+                segments.reverse();
+                return Some(segments.join("."));
+            }
+            _ => return None,
+        }
+    }
+}
+
 fn emit(c: &mut Chunk, e: &Expr) -> Result<(), Diagnostic> {
     match &e.kind {
         ExprKind::Number(n) => {
@@ -40,9 +61,17 @@ fn emit(c: &mut Chunk, e: &Expr) -> Result<(), Diagnostic> {
         }
 
         ExprKind::Member(inner, name) => {
-            emit(c, inner)?;
-            let i = c.intern_string(name);
-            c.push(OpCode::MemberGet(i));
+            // Fold: ScopeRef ('.' Ident)+ collapses into a single PushScopeRef
+            // with dotted path so lookup_scope can subscribe to exactly one
+            // Signal (see scope::lookup_scope).
+            if let Some(path) = try_collect_static_path(inner, name) {
+                let i = c.intern_scope_path(&path);
+                c.push(OpCode::PushScopeRef(i));
+            } else {
+                emit(c, inner)?;
+                let i = c.intern_string(name);
+                c.push(OpCode::MemberGet(i));
+            }
         }
         ExprKind::Index(inner, idx) => {
             emit(c, inner)?;
@@ -186,15 +215,17 @@ mod tests {
 
     #[test]
     fn compile_scope_ref() {
+        // After the static-path fold, `$state.count` collapses to a single
+        // PushScopeRef with dotted path — see `try_collect_static_path`.
         let c = compile_src("$state.count");
         let ops: Vec<_> = c
             .ops
             .iter()
             .filter(|o| !matches!(o, OpCode::Return))
             .collect();
-        assert_eq!(ops.len(), 2);
+        assert_eq!(ops.len(), 1);
         assert!(matches!(ops[0], OpCode::PushScopeRef(_)));
-        assert!(matches!(ops[1], OpCode::MemberGet(_)));
+        assert_eq!(c.scope_paths[0], "$state.count");
     }
 
     #[test]
