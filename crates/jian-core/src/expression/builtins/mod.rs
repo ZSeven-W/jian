@@ -5,6 +5,7 @@
 //! registry from `default_builtins()`.
 
 pub mod math;
+pub mod string;
 
 use super::diag::{DiagKind, Diagnostic, Span};
 pub use super::scope::BuiltinFn;
@@ -13,6 +14,7 @@ use std::collections::BTreeMap;
 pub fn default_builtins() -> BTreeMap<String, BuiltinFn> {
     let mut m: BTreeMap<String, BuiltinFn> = BTreeMap::new();
     math::register(&mut m);
+    string::register(&mut m);
     m
 }
 
