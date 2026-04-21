@@ -14,6 +14,7 @@
 pub mod document;
 pub mod effect;
 pub mod error;
+pub mod expression;
 pub mod geometry;
 pub mod layout;
 pub mod logic;
