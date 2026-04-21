@@ -18,6 +18,11 @@ pub trait EvalContext {
 
     /// Push a warning diagnostic.
     fn warn(&self, _diag: Diagnostic) {}
+
+    /// Optional cache for HOF sub-expressions. Default: no cache.
+    fn cache(&self) -> Option<&super::cache::ExpressionCache> {
+        None
+    }
 }
 
 pub fn run(chunk: &Chunk, ctx: &dyn EvalContext) -> Result<RuntimeValue, Diagnostic> {

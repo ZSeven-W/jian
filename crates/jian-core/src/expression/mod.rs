@@ -9,6 +9,7 @@
 pub mod ast;
 pub mod builtins;
 pub mod bytecode;
+pub mod cache;
 pub mod compiler;
 pub mod diag;
 pub mod lexer;
@@ -18,6 +19,7 @@ pub mod token;
 pub mod vm;
 
 pub use bytecode::Chunk;
+pub use cache::ExpressionCache;
 pub use diag::{DiagKind, Diagnostic, Span};
 pub use scope::StateGraphContext;
 pub use vm::EvalContext;

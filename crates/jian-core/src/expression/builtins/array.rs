@@ -112,8 +112,12 @@ fn run_sub_with_locals(
     source: &str,
     locals: &[(&str, RuntimeValue)],
 ) -> Result<RuntimeValue, Diagnostic> {
-    let ast = parse(source)?;
-    let chunk = compile(&ast)?;
+    let chunk = if let Some(cache) = ctx.cache() {
+        cache.get_or_compile(source)?
+    } else {
+        let ast = parse(source)?;
+        compile(&ast)?
+    };
 
     struct Overlay<'a> {
         inner: &'a dyn EvalContext,
@@ -136,6 +140,9 @@ fn run_sub_with_locals(
         }
         fn warn(&self, d: Diagnostic) {
             self.inner.warn(d);
+        }
+        fn cache(&self) -> Option<&crate::expression::cache::ExpressionCache> {
+            self.inner.cache()
         }
     }
 

@@ -1,5 +1,6 @@
 //! EvalContext bridging the expression VM to [`crate::state::StateGraph`].
 
+use super::cache::ExpressionCache;
 use super::diag::Diagnostic;
 use super::vm::EvalContext;
 use crate::state::{Scope, StateGraph};
@@ -15,6 +16,7 @@ pub struct StateGraphContext<'a> {
     pub node_id: Option<&'a str>,
     pub locals: &'a BTreeMap<String, RuntimeValue>,
     pub builtins: &'a BTreeMap<String, BuiltinFn>,
+    pub cache: Option<&'a ExpressionCache>,
     pub warnings: RefCell<Vec<Diagnostic>>,
 }
 
@@ -32,8 +34,14 @@ impl<'a> StateGraphContext<'a> {
             node_id,
             locals,
             builtins,
+            cache: None,
             warnings: RefCell::new(Vec::new()),
         }
+    }
+
+    pub fn with_cache(mut self, cache: &'a ExpressionCache) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
     pub fn take_warnings(&self) -> Vec<Diagnostic> {
@@ -95,6 +103,10 @@ impl<'a> EvalContext for StateGraphContext<'a> {
 
     fn warn(&self, d: Diagnostic) {
         self.warnings.borrow_mut().push(d);
+    }
+
+    fn cache(&self) -> Option<&ExpressionCache> {
+        self.cache
     }
 }
 
