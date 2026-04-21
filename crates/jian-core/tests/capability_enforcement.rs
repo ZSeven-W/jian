@@ -214,6 +214,39 @@ fn automation_not_present_in_schema_capabilities() {
 }
 
 #[test]
+fn open_url_without_network_is_denied_and_audited() {
+    // Regression (Codex review): open_url used to bypass the gate.
+    let rt = load(OP_NO_CAPS);
+    let ctx = rt.make_action_ctx();
+    let list = json!([{ "open_url": { "url": "\"https://example.com\"" } }]);
+    let out = execute_list_shared(&rt.actions, &list, &ctx);
+
+    assert!(matches!(
+        out.result,
+        Err(ActionError::CapabilityDenied {
+            action: "open_url",
+            needed: Capability::Network,
+        })
+    ));
+    let snap = rt.audit.as_deref().unwrap().snapshot();
+    assert_eq!(snap.len(), 1);
+    assert_eq!(snap[0].action, "open_url");
+    assert_eq!(snap[0].verdict, Verdict::Denied);
+}
+
+#[test]
+fn open_url_with_network_declared_is_allowed() {
+    let rt = load(OP_WITH_NETWORK);
+    let ctx = rt.make_action_ctx();
+    let list = json!([{ "open_url": { "url": "\"https://example.com\"" } }]);
+    let _ = execute_list_shared(&rt.actions, &list, &ctx);
+    let snap = rt.audit.as_deref().unwrap().snapshot();
+    assert_eq!(snap.len(), 1);
+    assert_eq!(snap[0].action, "open_url");
+    assert_eq!(snap[0].verdict, Verdict::Allowed);
+}
+
+#[test]
 fn audit_log_shared_rc_reflects_runtime_activity() {
     let rt = load(OP_WITH_NETWORK);
     let log: Rc<AuditLog> = rt.audit.clone().unwrap();

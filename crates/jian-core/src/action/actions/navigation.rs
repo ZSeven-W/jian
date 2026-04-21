@@ -3,6 +3,7 @@
 use crate::action::action_trait::{ActionImpl, BoxedAction};
 use crate::action::context::ActionContext;
 use crate::action::error::{ActionError, ActionResult};
+use crate::capability::Capability;
 use crate::expression::Expression;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -100,6 +101,12 @@ impl ActionImpl for OpenUrl {
         "open_url"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
+        if !ctx.capabilities.check(Capability::Network, "open_url") {
+            return Err(ActionError::CapabilityDenied {
+                action: "open_url",
+                needed: Capability::Network,
+            });
+        }
         let locals = ctx.locals_snapshot();
         let (v, ws) = self.url_expr.eval_with_locals(
             &ctx.state,
