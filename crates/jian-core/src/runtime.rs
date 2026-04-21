@@ -26,7 +26,7 @@ use std::rc::Rc;
 pub struct Runtime {
     pub scheduler: Rc<Scheduler>,
     pub effects: Rc<EffectRegistry>,
-    pub state: StateGraph,
+    pub state: Rc<StateGraph>,
     pub document: Option<RuntimeDocument>,
     pub layout: LayoutEngine,
     pub spatial: SpatialIndex,
@@ -40,7 +40,7 @@ impl Runtime {
         let effects = EffectRegistry::new();
         effects.install_on(&scheduler);
         Self {
-            state: StateGraph::new(scheduler.clone()),
+            state: Rc::new(StateGraph::new(scheduler.clone())),
             scheduler,
             effects,
             document: None,
