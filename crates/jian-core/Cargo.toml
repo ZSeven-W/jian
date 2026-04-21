@@ -19,6 +19,8 @@ euclid          = "0.22"
 taffy           = "0.5"
 rstar           = "0.12"
 bitflags        = "2.6"
+async-trait     = "0.1"
+futures         = "0.3"
 
 [dev-dependencies]
 insta     = { workspace = true }

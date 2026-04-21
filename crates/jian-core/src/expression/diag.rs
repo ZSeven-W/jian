@@ -42,6 +42,18 @@ pub struct Diagnostic {
     pub span: Span,
 }
 
+impl std::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?} at {}..{}: {}",
+            self.kind, self.span.start, self.span.end, self.message
+        )
+    }
+}
+
+impl std::error::Error for Diagnostic {}
+
 impl Diagnostic {
     pub fn lex(msg: impl Into<String>, span: Span) -> Self {
         Self {
