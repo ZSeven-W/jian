@@ -30,7 +30,7 @@ impl ActionImpl for Fetch {
     }
 
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Network) {
+        if !ctx.capabilities.check(Capability::Network, "fetch") {
             return Err(ActionError::CapabilityDenied {
                 action: "fetch",
                 needed: Capability::Network,

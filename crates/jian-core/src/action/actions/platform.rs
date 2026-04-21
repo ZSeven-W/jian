@@ -35,7 +35,7 @@ impl ActionImpl for Stub {
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
         if let Some(cap) = self.capability {
-            if !ctx.capabilities.check(cap) {
+            if !ctx.capabilities.check(cap, self.name_) {
                 return Err(ActionError::CapabilityDenied {
                     action: self.name_,
                     needed: cap,

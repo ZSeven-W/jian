@@ -11,10 +11,7 @@ use crate::document::{NodeKey, RuntimeDocument};
 /// Walk a hit path from topmost to root; return the first node whose schema
 /// opts in to rawPointer mode, or `None` if no ancestor opts in.
 pub fn find_raw_root(path: &HitPath, doc: &RuntimeDocument) -> Option<NodeKey> {
-    path.0
-        .iter()
-        .find(|&&key| node_opts_in(doc, key))
-        .copied()
+    path.0.iter().find(|&&key| node_opts_in(doc, key)).copied()
 }
 
 fn node_opts_in(doc: &RuntimeDocument, key: NodeKey) -> bool {

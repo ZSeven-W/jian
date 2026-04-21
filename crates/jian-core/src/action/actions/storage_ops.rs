@@ -18,7 +18,7 @@ impl ActionImpl for StorageSet {
         "storage_set"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Storage) {
+        if !ctx.capabilities.check(Capability::Storage, "storage_set") {
             return Err(ActionError::CapabilityDenied {
                 action: "storage_set",
                 needed: Capability::Storage,
@@ -69,7 +69,7 @@ impl ActionImpl for StorageClear {
         "storage_clear"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Storage) {
+        if !ctx.capabilities.check(Capability::Storage, "storage_clear") {
             return Err(ActionError::CapabilityDenied {
                 action: "storage_clear",
                 needed: Capability::Storage,
@@ -100,7 +100,7 @@ impl ActionImpl for StorageWipe {
         "storage_wipe"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Storage) {
+        if !ctx.capabilities.check(Capability::Storage, "storage_wipe") {
             return Err(ActionError::CapabilityDenied {
                 action: "storage_wipe",
                 needed: Capability::Storage,
