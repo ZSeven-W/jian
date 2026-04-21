@@ -4,6 +4,7 @@
 //! Sub-modules register their functions here; the runtime composes a single
 //! registry from `default_builtins()`.
 
+pub mod array;
 pub mod math;
 pub mod string;
 
@@ -15,6 +16,7 @@ pub fn default_builtins() -> BTreeMap<String, BuiltinFn> {
     let mut m: BTreeMap<String, BuiltinFn> = BTreeMap::new();
     math::register(&mut m);
     string::register(&mut m);
+    array::register(&mut m);
     m
 }
 

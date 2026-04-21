@@ -17,7 +17,14 @@ impl RuntimeValue {
         Self(Value::from(v))
     }
     pub fn from_f64(v: f64) -> Self {
-        Self(Value::from(v))
+        // Canonicalise whole-valued floats to i64-backed JSON Numbers so that
+        // `RuntimeValue` equality matches JS-style numeric equality: `2 == 2.0`.
+        // Non-finite and fractional values keep their f64 representation.
+        if v.is_finite() && v.fract() == 0.0 && (v.abs() as u64) < (i64::MAX as u64) {
+            Self(Value::from(v as i64))
+        } else {
+            Self(Value::from(v))
+        }
     }
     pub fn from_bool(v: bool) -> Self {
         Self(Value::Bool(v))
