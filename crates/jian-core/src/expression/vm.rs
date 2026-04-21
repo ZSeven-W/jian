@@ -213,10 +213,7 @@ fn truthy(v: &RuntimeValue) -> bool {
     match &v.0 {
         Value::Null => false,
         Value::Bool(b) => *b,
-        Value::Number(n) => n
-            .as_f64()
-            .map(|f| f != 0.0 && !f.is_nan())
-            .unwrap_or(false),
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false),
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
@@ -405,7 +402,10 @@ mod tests {
     }
     #[test]
     fn string_concat() {
-        assert_eq!(eval("\"Hello, \" + \"world\"").as_str(), Some("Hello, world"));
+        assert_eq!(
+            eval("\"Hello, \" + \"world\"").as_str(),
+            Some("Hello, world")
+        );
     }
     #[test]
     fn comparison() {

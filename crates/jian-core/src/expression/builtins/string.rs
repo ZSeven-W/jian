@@ -71,10 +71,7 @@ pub fn register(map: &mut BTreeMap<String, BuiltinFn>) {
             }
             let s = to_s(&args[0]);
             let sep = to_s(&args[1]);
-            let parts: Vec<Value> = s
-                .split(&sep)
-                .map(|p| Value::String(p.to_owned()))
-                .collect();
+            let parts: Vec<Value> = s.split(&sep).map(|p| Value::String(p.to_owned())).collect();
             Ok(RuntimeValue(Value::Array(parts)))
         }),
     );
@@ -208,10 +205,7 @@ mod tests {
     }
     #[test]
     fn starts_fn() {
-        assert_eq!(
-            eval("startsWith(\"hello\", \"hel\")").as_bool(),
-            Some(true)
-        );
+        assert_eq!(eval("startsWith(\"hello\", \"hel\")").as_bool(), Some(true));
     }
     #[test]
     fn format_pos() {

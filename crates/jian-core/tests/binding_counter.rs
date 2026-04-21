@@ -21,14 +21,9 @@ fn counter_binding_propagates() {
     let latest = Rc::new(RefCell::new(String::new()));
     let latest2 = latest.clone();
     let expr = Expression::compile("`Count: ${$app.count}`").unwrap();
-    let _b = BindingEffect::new(
-        &rt.effects,
-        expr,
-        state.clone(),
-        None,
-        None,
-        move |v, _| *latest2.borrow_mut() = v.as_str().unwrap_or("").to_owned(),
-    );
+    let _b = BindingEffect::new(&rt.effects, expr, state.clone(), None, None, move |v, _| {
+        *latest2.borrow_mut() = v.as_str().unwrap_or("").to_owned()
+    });
 
     assert_eq!(*latest.borrow(), "Count: 0");
 
@@ -52,14 +47,9 @@ fn fresh_binding_does_not_leak_after_drop() {
     {
         let hits2 = hits.clone();
         let expr = Expression::compile("$app.x").unwrap();
-        let _b = BindingEffect::new(
-            &rt.effects,
-            expr,
-            state.clone(),
-            None,
-            None,
-            move |_, _| hits2.set(hits2.get() + 1),
-        );
+        let _b = BindingEffect::new(&rt.effects, expr, state.clone(), None, None, move |_, _| {
+            hits2.set(hits2.get() + 1)
+        });
         // _b is dropped at end of block
     }
 

@@ -363,10 +363,7 @@ impl Parser {
                             TokenKind::Ident(s) => s.clone(),
                             TokenKind::String(s) => s.clone(),
                             _ => {
-                                return Err(Diagnostic::parse(
-                                    "expected object key",
-                                    key_tok.span,
-                                ))
+                                return Err(Diagnostic::parse("expected object key", key_tok.span))
                             }
                         };
                         self.expect(TokenKind::Colon, "expected `:` in object literal")?;
@@ -483,9 +480,7 @@ mod tests {
                 match &inner.kind {
                     ExprKind::Member(inner2, name2) => {
                         assert_eq!(name2, "user");
-                        assert!(
-                            matches!(inner2.kind, ExprKind::ScopeRef(ref s, _) if s == "$app")
-                        );
+                        assert!(matches!(inner2.kind, ExprKind::ScopeRef(ref s, _) if s == "$app"));
                     }
                     _ => panic!(),
                 }

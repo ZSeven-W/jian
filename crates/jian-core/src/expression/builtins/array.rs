@@ -179,15 +179,15 @@ fn run_sub_with_locals(
 
     let overlay = Overlay {
         inner: ctx,
-        locals: locals.iter().map(|(k, v)| (k.to_string(), v.clone())).collect(),
+        locals: locals
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect(),
     };
     crate::expression::vm::run(&chunk, &overlay)
 }
 
-fn hof_filter(
-    ctx: &dyn EvalContext,
-    args: &[RuntimeValue],
-) -> Result<RuntimeValue, Diagnostic> {
+fn hof_filter(ctx: &dyn EvalContext, args: &[RuntimeValue]) -> Result<RuntimeValue, Diagnostic> {
     if args.len() != 2 {
         return Err(arity_mismatch("filter", "2", args.len()));
     }
@@ -242,13 +242,11 @@ fn hof_map(ctx: &dyn EvalContext, args: &[RuntimeValue]) -> Result<RuntimeValue,
 fn hof_sort(ctx: &dyn EvalContext, args: &[RuntimeValue]) -> Result<RuntimeValue, Diagnostic> {
     let (arr, key_source) = match args.len() {
         1 => (
-            as_array(&args[0])
-                .ok_or_else(|| type_error("sort", "first arg must be array"))?,
+            as_array(&args[0]).ok_or_else(|| type_error("sort", "first arg must be array"))?,
             None,
         ),
         2 => (
-            as_array(&args[0])
-                .ok_or_else(|| type_error("sort", "first arg must be array"))?,
+            as_array(&args[0]).ok_or_else(|| type_error("sort", "first arg must be array"))?,
             Some(extract_sub_expr(&args[1])?),
         ),
         n => return Err(arity_mismatch("sort", "1 or 2", n)),
@@ -277,10 +275,7 @@ fn hof_sort(ctx: &dyn EvalContext, args: &[RuntimeValue]) -> Result<RuntimeValue
     )))
 }
 
-fn hof_reduce(
-    ctx: &dyn EvalContext,
-    args: &[RuntimeValue],
-) -> Result<RuntimeValue, Diagnostic> {
+fn hof_reduce(ctx: &dyn EvalContext, args: &[RuntimeValue]) -> Result<RuntimeValue, Diagnostic> {
     if args.len() != 3 {
         return Err(arity_mismatch("reduce", "3", args.len()));
     }

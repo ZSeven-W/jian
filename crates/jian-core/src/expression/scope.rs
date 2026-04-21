@@ -8,7 +8,8 @@ use crate::value::RuntimeValue;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-pub type BuiltinFn = Box<dyn Fn(&dyn EvalContext, &[RuntimeValue]) -> Result<RuntimeValue, Diagnostic>>;
+pub type BuiltinFn =
+    Box<dyn Fn(&dyn EvalContext, &[RuntimeValue]) -> Result<RuntimeValue, Diagnostic>>;
 
 pub struct StateGraphContext<'a> {
     pub state: &'a StateGraph,
@@ -132,7 +133,11 @@ impl<'a> EvalContext for StateGraphContext<'a> {
             "$self" => self
                 .node_id
                 .map(|nid| RuntimeValue(scope_to_object(self.state, Scope::SelfNode, Some(nid)))),
-            "$route" => Some(RuntimeValue(scope_to_object(self.state, Scope::Route, None))),
+            "$route" => Some(RuntimeValue(scope_to_object(
+                self.state,
+                Scope::Route,
+                None,
+            ))),
             "$storage" => Some(RuntimeValue(scope_to_object(
                 self.state,
                 Scope::Storage,

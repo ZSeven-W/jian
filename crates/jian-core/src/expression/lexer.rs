@@ -120,9 +120,9 @@ impl<'a> Lexer<'a> {
         // Already consumed opening quote at `start`.
         let mut buf = String::new();
         loop {
-            let c = self
-                .bump()
-                .ok_or_else(|| Diagnostic::lex("unterminated string", Span::new(start, self.pos)))?;
+            let c = self.bump().ok_or_else(|| {
+                Diagnostic::lex("unterminated string", Span::new(start, self.pos))
+            })?;
             if c == quote {
                 break;
             }
@@ -260,9 +260,9 @@ impl<'a> Lexer<'a> {
     fn lex_one(&mut self) -> Result<Token, Diagnostic> {
         self.skip_whitespace();
         let start = self.pos;
-        let c = self.peek(0).ok_or_else(|| {
-            Diagnostic::lex("unexpected end of input", Span::new(start, start))
-        })?;
+        let c = self
+            .peek(0)
+            .ok_or_else(|| Diagnostic::lex("unexpected end of input", Span::new(start, start)))?;
 
         if c.is_ascii_digit() {
             return self.lex_number(start);
@@ -427,7 +427,10 @@ mod tests {
 
     #[test]
     fn float_literal() {
-        assert_eq!(kinds("3.14"), vec![TokenKind::Number(3.14), TokenKind::Eof]);
+        assert_eq!(
+            kinds("3.125"),
+            vec![TokenKind::Number(3.125), TokenKind::Eof]
+        );
     }
 
     #[test]
