@@ -6,8 +6,10 @@
 //! that `get()` reads, so effects built on top of `eval_with_tracker` get
 //! proper fine-grained reactivity.
 
+pub mod ast;
 pub mod diag;
 pub mod lexer;
+pub mod parser;
 pub mod token;
 
 pub use diag::{DiagKind, Diagnostic, Span};
