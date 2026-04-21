@@ -11,13 +11,16 @@
 //! Pointer input is driven by the host, which calls
 //! `rt.dispatch_pointer(event)` and, each frame, `rt.tick(now)`.
 
-use crate::action::capability::DummyCapabilityGate;
 use crate::action::services::{
     AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, NullClipboard, NullFeedback,
     NullNetworkClient, NullRouter, NullStorageBackend, Router as RouterSvc, StorageBackend,
 };
 use crate::action::{
-    default_registry, ActionContext, CancellationToken, CapabilityGate, ExecOutcome, SharedRegistry,
+    default_registry, ActionContext, CancellationToken, ExecOutcome, SharedRegistry,
+};
+use crate::capability::{
+    from_schema_capability, AuditLog, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate,
+    NullPermissionBroker, PermissionBroker,
 };
 use crate::document::{loader, RuntimeDocument};
 use crate::effect::EffectRegistry;
@@ -31,11 +34,15 @@ use crate::signal::scheduler::Scheduler;
 use crate::spatial::{NodeBBox, SpatialIndex};
 use crate::state::StateGraph;
 use crate::viewport::Viewport;
-use jian_ops_schema::load_str;
+use jian_ops_schema::{document::PenDocument, load_str};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Instant;
+
+/// Default audit-log size. 1000 entries is generous for in-session
+/// inspection without letting long-lived hosts grow unboundedly.
+const AUDIT_LOG_CAPACITY: usize = 1000;
 
 pub struct Runtime {
     pub scheduler: Rc<Scheduler>,
@@ -58,6 +65,11 @@ pub struct Runtime {
     pub async_feedback: Rc<dyn AsyncFeedback>,
     pub clipboard: Rc<dyn ClipboardService>,
     pub capabilities: Rc<dyn CapabilityGate>,
+    /// Audit log attached to the capability gate. `None` for the default
+    /// `Runtime::new()` (DummyCapabilityGate has nothing to audit); set
+    /// when the runtime is built via `new_from_document`.
+    pub audit: Option<Rc<AuditLog>>,
+    pub permissions: Rc<dyn PermissionBroker>,
 }
 
 impl Runtime {
@@ -85,7 +97,63 @@ impl Runtime {
             async_feedback: Rc::new(NullFeedback),
             clipboard: Rc::new(NullClipboard),
             capabilities: Rc::new(DummyCapabilityGate),
+            audit: None,
+            permissions: Rc::new(NullPermissionBroker),
         }
+    }
+
+    /// Build a runtime whose `CapabilityGate` is derived from the
+    /// document's `app.capabilities` declaration. Checks are recorded in
+    /// an `AuditLog` attached to `self.audit`.
+    ///
+    /// An undeclared `app.capabilities` field means "no capabilities" —
+    /// every IO action will be denied. Ship the `.op` with an explicit
+    /// declaration to unlock network/storage/etc.
+    pub fn new_from_document(schema: PenDocument) -> CoreResult<Self> {
+        let scheduler = Rc::new(Scheduler::new());
+        let effects = EffectRegistry::new();
+        effects.install_on(&scheduler);
+
+        let audit = Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY));
+        let declared = schema
+            .app
+            .as_ref()
+            .and_then(|a| a.capabilities.as_ref())
+            .map(|list| {
+                list.iter()
+                    .copied()
+                    .map(from_schema_capability)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let gate = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit.clone())));
+
+        let state = Rc::new(StateGraph::new(scheduler.clone()));
+        let doc = loader::build(schema, &state)?;
+
+        Ok(Self {
+            state,
+            scheduler,
+            effects,
+            document: Some(doc),
+            layout: LayoutEngine::new(),
+            spatial: SpatialIndex::new(),
+            viewport: Viewport::new(size(800.0, 600.0)),
+            scene: SceneGraph::new(),
+
+            gestures: PointerRouter::new(),
+            actions: default_registry(),
+            expr_cache: Rc::new(ExpressionCache::new()),
+            network: Rc::new(NullNetworkClient),
+            storage: Rc::new(NullStorageBackend),
+            nav: Rc::new(NullRouter),
+            feedback: Rc::new(NullFeedback),
+            async_feedback: Rc::new(NullFeedback),
+            clipboard: Rc::new(NullClipboard),
+            capabilities: gate,
+            audit: Some(audit),
+            permissions: Rc::new(NullPermissionBroker),
+        })
     }
 
     pub fn load_str(&mut self, src: &str) -> CoreResult<()> {
@@ -149,7 +217,10 @@ impl Runtime {
         dispatch_event(doc, event, &self.actions, &ctx)
     }
 
-    fn make_action_ctx(&self) -> ActionContext {
+    /// Build an `ActionContext` tied to this runtime's services. Exposed
+    /// for integration tests and host embedders that want to run a
+    /// standalone ActionList outside the gesture pipeline.
+    pub fn make_action_ctx(&self) -> ActionContext {
         ActionContext {
             state: self.state.clone(),
             scheduler: self.scheduler.clone(),
