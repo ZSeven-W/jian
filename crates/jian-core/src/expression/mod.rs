@@ -58,7 +58,7 @@ impl Expression {
         self.eval_with_locals(state, page, node, &locals)
     }
 
-    /// Like [`eval`] but accepts a scope of local overrides (`$item`, `$index`,
+    /// Like [`Self::eval`] but accepts a scope of local overrides (`$item`, `$index`,
     /// `$acc`, ...). Used by control-flow actions (`for_each`) and HOF lambdas.
     pub fn eval_with_locals(
         &self,

@@ -1,4 +1,4 @@
-//! Hand-written lexer. Produces a Vec<Token> ending in `Eof`.
+//! Hand-written lexer. Produces a `Vec<Token>` ending in `Eof`.
 //!
 //! Template literals (`Count: ${$state.count}`) use a small state machine:
 //! inside backticks, text is consumed literally until `${`, at which point
