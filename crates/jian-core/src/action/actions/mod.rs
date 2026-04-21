@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 pub mod control;
 pub mod navigation;
+pub mod network;
 pub mod state;
 
 /// Register all MVP actions into a shared registry.
@@ -79,7 +80,7 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
             control::make_parallel_body(&r, body)
         }),
     );
-    let w = weak;
+    let w = weak.clone();
     r.register(
         "race",
         Box::new(move |body| {
@@ -88,6 +89,19 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
             ))?;
             let r = s.borrow();
             control::make_race_body(&r, body)
+        }),
+    );
+
+    // Network (nested — fetch.on_error)
+    let w = weak;
+    r.register(
+        "fetch",
+        Box::new(move |body| {
+            let s = w.upgrade().ok_or(ActionError::Custom(
+                "registry dropped while parsing `fetch`".into(),
+            ))?;
+            let r = s.borrow();
+            network::make_fetch_body(&r, body)
         }),
     );
 }
