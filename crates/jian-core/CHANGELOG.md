@@ -2,6 +2,22 @@
 
 ## [0.5.0] — Plan 6 — Capability Gate (full enforcement)
 
+### Fixed (post-Codex-review)
+
+- `LongPressRecognizer` claiming via `tick()` now resolves the arena so a
+  subsequent Up event cannot also let `TapRecognizer` claim on the same
+  pointer sequence (Plan 5 bug). `Arena::tick(now)` is the new
+  timer-aware variant that mirrors the event-driven `dispatch` path.
+- `open_url` now consults the capability gate and records to the audit
+  log. Undeclared `network` → `CapabilityDenied`. (Plan 6 bug — the
+  action previously only emitted a warning.)
+- `DoubleTap` is now detected at the `PointerRouter` level by pairing
+  consecutive `Tap` emissions per node (≤ 300 ms, ≤ 16 px). The in-arena
+  `DoubleTapRecognizer` couldn't see across arenas; this wiring makes
+  `onDoubleTap` handlers fire end-to-end.
+
+### Added
+
 ### Added
 
 - Top-level `crate::capability` module (moved from `action::capability`;
