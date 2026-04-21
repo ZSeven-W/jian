@@ -13,6 +13,7 @@
 
 pub mod action;
 pub mod binding;
+pub mod capability;
 pub mod document;
 pub mod effect;
 pub mod error;
