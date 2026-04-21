@@ -34,7 +34,18 @@ impl RuntimeValue {
         self.0.as_bool()
     }
     pub fn as_i64(&self) -> Option<i64> {
-        self.0.as_i64()
+        // Try the serde-json internal i64 path first; fall back to f64 conversion
+        // when the value is a whole finite float (e.g. after arithmetic that
+        // produces an f64-backed Number).
+        self.0.as_i64().or_else(|| {
+            self.0.as_f64().and_then(|f| {
+                if f.is_finite() && f.fract() == 0.0 {
+                    Some(f as i64)
+                } else {
+                    None
+                }
+            })
+        })
     }
     pub fn as_f64(&self) -> Option<f64> {
         self.0.as_f64()

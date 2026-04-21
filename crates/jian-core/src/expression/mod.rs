@@ -12,6 +12,7 @@ pub mod compiler;
 pub mod diag;
 pub mod lexer;
 pub mod parser;
+pub mod scope;
 pub mod token;
 pub mod vm;
 
