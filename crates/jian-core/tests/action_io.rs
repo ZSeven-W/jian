@@ -1,8 +1,8 @@
 //! Storage + feedback + platform-stub + tier-3 call integration tests.
 
 use async_trait::async_trait;
-use jian_core::action::capability::{Capability, DeclaredCapabilityGate, DummyCapabilityGate};
 use jian_core::action::cancel::CancellationToken;
+use jian_core::action::capability::{Capability, DeclaredCapabilityGate, DummyCapabilityGate};
 use jian_core::action::services::{
     AsyncFeedback, ClipboardService, FeedbackLevel, FeedbackSink, NetworkClient, NullClipboard,
     NullNetworkClient, NullRouter, StorageBackend,
@@ -121,10 +121,7 @@ fn storage_set_and_clear() {
     let list = json!([{"storage_set": {"theme": "\"dark\""}}]);
     let out = execute_list_shared(&reg, &list, &ctx);
     assert!(out.result.is_ok(), "{:?}", out.result);
-    assert_eq!(
-        store.map.borrow().get("theme"),
-        Some(&json!("dark"))
-    );
+    assert_eq!(store.map.borrow().get("theme"), Some(&json!("dark")));
 
     let list = json!([{"storage_clear": {"key": "theme"}}]);
     execute_list_shared(&reg, &list, &ctx);

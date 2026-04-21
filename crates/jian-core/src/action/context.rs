@@ -1,7 +1,7 @@
 //! ActionContext — the bundle of references an Action needs during execution.
 
-use super::capability::CapabilityGate;
 use super::cancel::CancellationToken;
+use super::capability::CapabilityGate;
 use super::services::{
     AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, Router, StorageBackend,
 };
@@ -43,11 +43,7 @@ pub struct ActionContext {
 impl ActionContext {
     /// Push a local override (e.g. `$item`) for the duration of a scope.
     /// Returns the previous value if one existed.
-    pub fn push_local(
-        &self,
-        name: impl Into<String>,
-        value: RuntimeValue,
-    ) -> Option<RuntimeValue> {
+    pub fn push_local(&self, name: impl Into<String>, value: RuntimeValue) -> Option<RuntimeValue> {
         self.locals.borrow_mut().insert(name.into(), value)
     }
 

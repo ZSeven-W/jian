@@ -95,10 +95,7 @@ fn is_truthy(v: &Value) -> bool {
     match v {
         Value::Null => false,
         Value::Bool(b) => *b,
-        Value::Number(n) => n
-            .as_f64()
-            .map(|f| f != 0.0 && !f.is_nan())
-            .unwrap_or(false),
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false),
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
@@ -189,10 +186,7 @@ impl ActionImpl for ForEach {
     }
 }
 
-pub fn make_for_each_body(
-    reg: &ActionRegistry,
-    body: &Value,
-) -> Result<BoxedAction, ActionError> {
+pub fn make_for_each_body(reg: &ActionRegistry, body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {
         name: "for_each",
         field: "body",
@@ -244,10 +238,7 @@ impl ActionImpl for Parallel {
     }
 }
 
-pub fn make_parallel_body(
-    reg: &ActionRegistry,
-    body: &Value,
-) -> Result<BoxedAction, ActionError> {
+pub fn make_parallel_body(reg: &ActionRegistry, body: &Value) -> Result<BoxedAction, ActionError> {
     let arr = body.as_array().ok_or(ActionError::FieldType {
         name: "parallel",
         field: "body",

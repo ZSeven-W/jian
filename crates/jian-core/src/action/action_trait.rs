@@ -27,10 +27,7 @@ impl ActionChain {
         Self(Vec::new())
     }
 
-    pub fn run_serial<'a>(
-        &'a self,
-        ctx: &'a ActionContext,
-    ) -> LocalBoxFuture<'a, ActionResult> {
+    pub fn run_serial<'a>(&'a self, ctx: &'a ActionContext) -> LocalBoxFuture<'a, ActionResult> {
         use futures::future::FutureExt;
         async move {
             for act in &self.0 {

@@ -19,10 +19,7 @@ fn expr_from_value(body: &Value) -> Result<Option<Expression>, ActionError> {
     }
 }
 
-async fn eval_path(
-    ctx: &ActionContext,
-    path_expr: &Option<Expression>,
-) -> Option<String> {
+async fn eval_path(ctx: &ActionContext, path_expr: &Option<Expression>) -> Option<String> {
     let expr = path_expr.as_ref()?;
     let locals = ctx.locals_snapshot();
     let (v, ws) = expr.eval_with_locals(

@@ -1,5 +1,5 @@
-use jian_core::action::capability::DummyCapabilityGate;
 use jian_core::action::cancel::CancellationToken;
+use jian_core::action::capability::DummyCapabilityGate;
 use jian_core::action::services::{
     NullClipboard, NullFeedback, NullNetworkClient, NullRouter, NullStorageBackend,
 };
@@ -159,5 +159,10 @@ fn race_returns_first() {
     // Both sync branches complete sequentially; `race` just picks the first
     // resolved. With sync actions the last-writer effectively wins but we
     // only assert the field is non-empty.
-    assert!(!state.app_get("winner").unwrap().as_str().unwrap().is_empty());
+    assert!(!state
+        .app_get("winner")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .is_empty());
 }

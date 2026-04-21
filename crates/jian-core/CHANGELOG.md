@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0] — Unreleased (Plan 4)
+
+### Added
+
+- Tier 2 Action DSL interpreter with async execution:
+  - `ActionImpl` (`async_trait(?Send)`) + `ActionChain::run_serial` driver.
+  - `ActionRegistry` + `SharedRegistry` (Rc<RefCell<...>>) for nested
+    re-parse of control-flow action bodies.
+  - `execute_list` facade powered by `futures::executor::block_on`.
+- Action catalogue:
+  - **State**: `set` (shorthand + target/value), `delete`, `reset`.
+  - **Control flow**: `if` (then/else), `abort`, `delay` (MVP passthrough),
+    `for_each` (`$item`/`$index` locals), `parallel`, `race`.
+  - **Navigation**: `push`, `replace`, `pop`, `reset` (string→nav, scope→state),
+    `open_url`.
+  - **Network**: `fetch` with `loading` / `into` / `on_error` chain + explicit
+    `Capability::Network` gate.
+  - **Storage**: `storage_set`, `storage_clear`, `storage_wipe` with
+    `Capability::Storage` gate.
+  - **UI feedback**: `toast`, `alert`, `confirm` (async confirm branches on
+    `on_confirm` / `on_cancel`).
+  - **L4 platform stubs**: `vibrate`, `haptic`, `share`, `notify` (emit
+    warnings until real adapters land).
+  - **Tier 3**: `call` dispatches through `LogicProvider`; Null provider
+    errors flow to `on_error`.
+- Platform service traits + Null implementations in `services/`:
+  `NetworkClient`, `StorageBackend`, `Router`, `FeedbackSink`,
+  `AsyncFeedback`, `ClipboardService`, `WebSocketSession`.
+- `CapabilityGate` trait with `DummyCapabilityGate` (allow-all) +
+  `DeclaredCapabilityGate` (whitelist) implementations.
+- `CancellationToken` honoured by every async action between awaits.
+- `Expression::eval_with_locals` enables `for_each` / HOF-style lambdas
+  to pass `$item` / `$index` / `$acc` overrides into sub-expressions.
+
 ## [0.2.0] — Unreleased (Plan 3)
 
 ### Added

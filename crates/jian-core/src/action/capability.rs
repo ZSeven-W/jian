@@ -33,6 +33,7 @@ pub struct DeclaredCapabilityGate {
 }
 
 impl DeclaredCapabilityGate {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_iter(caps: impl IntoIterator<Item = Capability>) -> Self {
         Self {
             declared: caps.into_iter().collect(),

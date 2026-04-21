@@ -69,10 +69,7 @@ impl ActionImpl for Call {
     }
 }
 
-pub fn make_call_body(
-    reg: &ActionRegistry,
-    body: &Value,
-) -> Result<BoxedAction, ActionError> {
+pub fn make_call_body(reg: &ActionRegistry, body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {
         name: "call",
         field: "body",

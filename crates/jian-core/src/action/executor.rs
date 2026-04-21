@@ -14,11 +14,7 @@ pub struct ExecOutcome {
 
 /// Parse + execute a JSON ActionList blob in the given ActionContext.
 /// Blocks until all actions resolve (including fetches & delays).
-pub fn execute_list(
-    registry: &ActionRegistry,
-    list: &Value,
-    ctx: &ActionContext,
-) -> ExecOutcome {
+pub fn execute_list(registry: &ActionRegistry, list: &Value, ctx: &ActionContext) -> ExecOutcome {
     let chain = match registry.parse_list(list) {
         Ok(c) => c,
         Err(e) => {
@@ -29,9 +25,7 @@ pub fn execute_list(
         }
     };
 
-    let result: ActionResult = futures::executor::block_on(async {
-        chain.run_serial(ctx).await
-    });
+    let result: ActionResult = futures::executor::block_on(async { chain.run_serial(ctx).await });
 
     ExecOutcome {
         result,

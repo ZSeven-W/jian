@@ -120,10 +120,7 @@ impl ActionImpl for Fetch {
     }
 }
 
-pub fn make_fetch_body(
-    reg: &ActionRegistry,
-    body: &Value,
-) -> Result<BoxedAction, ActionError> {
+pub fn make_fetch_body(reg: &ActionRegistry, body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {
         name: "fetch",
         field: "body",

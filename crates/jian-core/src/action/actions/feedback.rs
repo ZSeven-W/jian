@@ -185,10 +185,7 @@ impl ActionImpl for Confirm {
     }
 }
 
-pub fn make_confirm_body(
-    reg: &ActionRegistry,
-    body: &Value,
-) -> Result<BoxedAction, ActionError> {
+pub fn make_confirm_body(reg: &ActionRegistry, body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {
         name: "confirm",
         field: "body",

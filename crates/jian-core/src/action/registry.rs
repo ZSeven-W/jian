@@ -126,9 +126,7 @@ mod tests {
             "b",
             Box::new(|_| Ok(Box::new(Noop { name: "b" }) as BoxedAction)),
         );
-        let chain = reg
-            .parse_list(&json!([{"a": {}}, {"b": {}}]))
-            .unwrap();
+        let chain = reg.parse_list(&json!([{"a": {}}, {"b": {}}])).unwrap();
         assert_eq!(chain.0.len(), 2);
         assert_eq!(chain.0[0].name(), "a");
         assert_eq!(chain.0[1].name(), "b");

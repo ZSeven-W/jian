@@ -101,8 +101,7 @@ pub fn factory_set(body: &Value) -> Result<BoxedAction, ActionError> {
             message: "must be string (expression)".into(),
         })?;
         vec![(
-            StatePath::parse(tgt)
-                .map_err(|e| ActionError::Custom(format!("set.target: {}", e)))?,
+            StatePath::parse(tgt).map_err(|e| ActionError::Custom(format!("set.target: {}", e)))?,
             Expression::compile(val)?,
         )]
     } else {
@@ -194,7 +193,6 @@ pub fn factory_delete(body: &Value) -> Result<BoxedAction, ActionError> {
         field: "body",
         message: "must be state path string".into(),
     })?;
-    let path =
-        StatePath::parse(p).map_err(|e| ActionError::Custom(format!("delete: {}", e)))?;
+    let path = StatePath::parse(p).map_err(|e| ActionError::Custom(format!("delete: {}", e)))?;
     Ok(Box::new(Delete { path }))
 }
