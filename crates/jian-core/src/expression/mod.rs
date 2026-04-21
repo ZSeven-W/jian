@@ -7,6 +7,8 @@
 //! proper fine-grained reactivity.
 
 pub mod ast;
+pub mod bytecode;
+pub mod compiler;
 pub mod diag;
 pub mod lexer;
 pub mod parser;
