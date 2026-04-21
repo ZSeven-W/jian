@@ -8,12 +8,23 @@
 //! rt.rebuild_spatial();
 //! ```
 //!
-//! Render is driven by the host, which calls `rt.render(&mut backend, &mut surface)`.
+//! Pointer input is driven by the host, which calls
+//! `rt.dispatch_pointer(event)` and, each frame, `rt.tick(now)`.
 
+use crate::action::capability::DummyCapabilityGate;
+use crate::action::services::{
+    AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, NullClipboard, NullFeedback,
+    NullNetworkClient, NullRouter, NullStorageBackend, Router as RouterSvc, StorageBackend,
+};
+use crate::action::{
+    default_registry, ActionContext, CancellationToken, CapabilityGate, ExecOutcome, SharedRegistry,
+};
 use crate::document::{loader, RuntimeDocument};
 use crate::effect::EffectRegistry;
 use crate::error::CoreResult;
+use crate::expression::ExpressionCache;
 use crate::geometry::size;
+use crate::gesture::{dispatch_event, PointerEvent, PointerRouter, SemanticEvent};
 use crate::layout::LayoutEngine;
 use crate::scene::SceneGraph;
 use crate::signal::scheduler::Scheduler;
@@ -21,7 +32,10 @@ use crate::spatial::{NodeBBox, SpatialIndex};
 use crate::state::StateGraph;
 use crate::viewport::Viewport;
 use jian_ops_schema::load_str;
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::time::Instant;
 
 pub struct Runtime {
     pub scheduler: Rc<Scheduler>,
@@ -32,6 +46,18 @@ pub struct Runtime {
     pub spatial: SpatialIndex,
     pub viewport: Viewport,
     pub scene: SceneGraph,
+
+    // --- Gesture + Action wiring (Plan 5 T15) ---
+    pub gestures: PointerRouter,
+    pub actions: SharedRegistry,
+    pub expr_cache: Rc<ExpressionCache>,
+    pub network: Rc<dyn NetworkClient>,
+    pub storage: Rc<dyn StorageBackend>,
+    pub nav: Rc<dyn RouterSvc>,
+    pub feedback: Rc<dyn FeedbackSink>,
+    pub async_feedback: Rc<dyn AsyncFeedback>,
+    pub clipboard: Rc<dyn ClipboardService>,
+    pub capabilities: Rc<dyn CapabilityGate>,
 }
 
 impl Runtime {
@@ -48,6 +74,17 @@ impl Runtime {
             spatial: SpatialIndex::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
             scene: SceneGraph::new(),
+
+            gestures: PointerRouter::new(),
+            actions: default_registry(),
+            expr_cache: Rc::new(ExpressionCache::new()),
+            network: Rc::new(NullNetworkClient),
+            storage: Rc::new(NullStorageBackend),
+            nav: Rc::new(NullRouter),
+            feedback: Rc::new(NullFeedback),
+            async_feedback: Rc::new(NullFeedback),
+            clipboard: Rc::new(NullClipboard),
+            capabilities: Rc::new(DummyCapabilityGate),
         }
     }
 
@@ -80,6 +117,57 @@ impl Runtime {
             })
             .collect();
         self.spatial.rebuild(items);
+    }
+
+    /// Feed a pointer event through the gesture pipeline; any emitted
+    /// semantic events are routed to the matching `events.*` handlers.
+    /// Returns the semantic events for host inspection/tests.
+    pub fn dispatch_pointer(&mut self, event: PointerEvent) -> Vec<SemanticEvent> {
+        let doc = match self.document.as_ref() {
+            Some(d) => d,
+            None => return Vec::new(),
+        };
+        let emitted = self.gestures.dispatch(event, doc, &self.spatial);
+        for ev in &emitted {
+            self.dispatch_semantic(ev);
+        }
+        emitted
+    }
+
+    /// Drive timer-based recognizers (LongPress). Host must call each frame.
+    pub fn tick(&mut self, now: Instant) -> Vec<SemanticEvent> {
+        let emitted = self.gestures.tick(now);
+        for ev in &emitted {
+            self.dispatch_semantic(ev);
+        }
+        emitted
+    }
+
+    fn dispatch_semantic(&self, event: &SemanticEvent) -> ExecOutcome {
+        let doc = self.document.as_ref().expect("no document loaded");
+        let ctx = self.make_action_ctx();
+        dispatch_event(doc, event, &self.actions, &ctx)
+    }
+
+    fn make_action_ctx(&self) -> ActionContext {
+        ActionContext {
+            state: self.state.clone(),
+            scheduler: self.scheduler.clone(),
+            event: None,
+            locals: RefCell::new(BTreeMap::new()),
+            page_id: None,
+            node_id: None,
+            network: self.network.clone(),
+            storage: self.storage.clone(),
+            router: self.nav.clone(),
+            feedback: self.feedback.clone(),
+            async_fb: self.async_feedback.clone(),
+            clipboard: self.clipboard.clone(),
+            capabilities: self.capabilities.clone(),
+            expr_cache: self.expr_cache.clone(),
+            cancel: CancellationToken::new(),
+            warnings: RefCell::new(Vec::new()),
+        }
     }
 }
 
