@@ -55,8 +55,20 @@ impl Expression {
         node: Option<&str>,
     ) -> (RuntimeValue, Vec<Diagnostic>) {
         let locals: BTreeMap<String, RuntimeValue> = BTreeMap::new();
+        self.eval_with_locals(state, page, node, &locals)
+    }
+
+    /// Like [`eval`] but accepts a scope of local overrides (`$item`, `$index`,
+    /// `$acc`, ...). Used by control-flow actions (`for_each`) and HOF lambdas.
+    pub fn eval_with_locals(
+        &self,
+        state: &StateGraph,
+        page: Option<&str>,
+        node: Option<&str>,
+        locals: &BTreeMap<String, RuntimeValue>,
+    ) -> (RuntimeValue, Vec<Diagnostic>) {
         let builtins = builtins::default_builtins();
-        let ctx = StateGraphContext::new(state, page, node, &locals, &builtins);
+        let ctx = StateGraphContext::new(state, page, node, locals, &builtins);
         let v = match vm::run(&self.chunk, &ctx) {
             Ok(v) => v,
             Err(d) => {

@@ -19,9 +19,14 @@ impl ActionImpl for Set {
     }
 
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
+        let locals = ctx.locals_snapshot();
         for (path, expr) in &self.pairs {
-            let (v, warnings) =
-                expr.eval(&ctx.state, ctx.page_id.as_deref(), ctx.node_id.as_deref());
+            let (v, warnings) = expr.eval_with_locals(
+                &ctx.state,
+                ctx.page_id.as_deref(),
+                ctx.node_id.as_deref(),
+                &locals,
+            );
             for w in warnings {
                 ctx.warn(w);
             }
