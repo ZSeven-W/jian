@@ -247,6 +247,44 @@ fn open_url_with_network_declared_is_allowed() {
 }
 
 #[test]
+fn share_without_network_is_denied_and_audited() {
+    // Regression (Codex review): `share` was registered with no
+    // capability requirement while the map declared `Network`.
+    let rt = load(OP_NO_CAPS);
+    let ctx = rt.make_action_ctx();
+    let list = json!([{ "share": { "url": "\"https://example.com\"" } }]);
+    let out = execute_list_shared(&rt.actions, &list, &ctx);
+
+    assert!(matches!(
+        out.result,
+        Err(ActionError::CapabilityDenied {
+            action: "share",
+            needed: Capability::Network,
+        })
+    ));
+    let snap = rt.audit.as_deref().unwrap().snapshot();
+    assert_eq!(snap.len(), 1);
+    assert_eq!(snap[0].action, "share");
+    assert_eq!(snap[0].verdict, Verdict::Denied);
+}
+
+#[test]
+fn focus_and_blur_are_registered_actions() {
+    // Regression: `focus` / `blur` live in the map's pure-runtime list
+    // but weren't registered; now stub factories exist.
+    let rt = load(OP_NO_CAPS);
+    let ctx = rt.make_action_ctx();
+    let list = json!([
+        { "focus": { "node": "\"my-input\"" } },
+        { "blur": { "node": "\"my-input\"" } },
+    ]);
+    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    assert!(out.result.is_ok(), "{:?}", out.result);
+    // No IO capability consulted → audit stays empty.
+    assert!(rt.audit.as_deref().unwrap().is_empty());
+}
+
+#[test]
 fn audit_log_shared_rc_reflects_runtime_activity() {
     let rt = load(OP_WITH_NETWORK);
     let log: Rc<AuditLog> = rt.audit.clone().unwrap();

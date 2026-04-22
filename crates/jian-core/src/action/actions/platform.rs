@@ -61,5 +61,11 @@ macro_rules! stub_factory {
 
 stub_factory!(factory_vibrate, "vibrate", Some(Capability::Haptic));
 stub_factory!(factory_haptic, "haptic", Some(Capability::Haptic));
-stub_factory!(factory_share, "share", None);
+stub_factory!(factory_share, "share", Some(Capability::Network));
 stub_factory!(factory_notify, "notify", Some(Capability::Notifications));
+// `focus` / `blur` programmatically move keyboard focus. Pure-runtime
+// (no capability) — real FocusManager wiring lands with Plan 9
+// host-desktop. The stubs warn + return Ok so the map's declaration of
+// these as registered actions is honoured.
+stub_factory!(factory_focus, "focus", None);
+stub_factory!(factory_blur, "blur", None);

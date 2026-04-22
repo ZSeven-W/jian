@@ -65,6 +65,8 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     r.register("haptic", Box::new(platform::factory_haptic));
     r.register("share", Box::new(platform::factory_share));
     r.register("notify", Box::new(platform::factory_notify));
+    r.register("focus", Box::new(platform::factory_focus));
+    r.register("blur", Box::new(platform::factory_blur));
 
     // Control (nested — via weak registry upgrade)
     let w = weak.clone();
