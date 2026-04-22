@@ -38,7 +38,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
 
     // Size priority: --size > root-frame intrinsic size > 800x600.
     let root_size = root_frame_size(&schema);
-    let (w, h) = match args.size.as_deref() {
+    let (mut w, mut h) = match args.size.as_deref() {
         Some(s) => parse_size(Some(s))?,
         None => root_size.unwrap_or((800.0, 600.0)),
     };
@@ -46,6 +46,21 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     let mut rt = Runtime::new_from_document(schema)
         .with_context(|| format!("build runtime from {}", args.path.display()))?;
     rt.build_layout((w, h)).with_context(|| "layout")?;
+
+    // When auto-sizing, grow the window to cover any content that our
+    // heuristic text measurement pushed below the declared height —
+    // Sign Up-style bottom rows shouldn't clip.
+    if args.size.is_none() {
+        if let Some((mw, mh)) = measured_content_bounds(&rt) {
+            if mw > w {
+                w = mw.ceil();
+            }
+            if mh > h {
+                h = (mh + 12.0).ceil(); // small safety margin
+            }
+            rt.build_layout((w, h)).with_context(|| "re-layout")?;
+        }
+    }
     rt.rebuild_spatial();
 
     let cfg = HostConfig {
@@ -55,6 +70,26 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     let host = DesktopHost::with_config(rt, cfg);
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Walk every laid-out node and return the farthest `(max_x, max_y)`
+/// reached by any node's bottom-right corner. Used to grow the window
+/// when our char-count text measurement lets content overflow the
+/// declared root-frame height (Sign Up rows, subtitle wraps, …).
+fn measured_content_bounds(rt: &Runtime) -> Option<(f32, f32)> {
+    let doc = rt.document.as_ref()?;
+    let mut max_x: f32 = 0.0;
+    let mut max_y: f32 = 0.0;
+    for (key, _node) in doc.tree.nodes.iter() {
+        if let Some(r) = rt.layout.node_rect(key) {
+            max_x = max_x.max(r.max_x());
+            max_y = max_y.max(r.max_y());
+        }
+    }
+    if max_x <= 0.0 || max_y <= 0.0 {
+        return None;
+    }
+    Some((max_x, max_y))
 }
 
 /// Read the root frame's explicit width/height so the window can open
