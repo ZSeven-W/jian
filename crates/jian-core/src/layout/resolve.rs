@@ -79,6 +79,11 @@ pub fn resolve_align(a: Option<&OpsAlign>) -> AlignItems {
 }
 
 pub fn container_to_style(c: &ContainerProps) -> Style {
+    let gap_val = match c.gap.as_ref() {
+        Some(jian_ops_schema::node::base::NumberOrExpression::Number(n)) => *n as f32,
+        _ => 0.0,
+    };
+    let gap_lp: LengthPercentage = length(gap_val);
     Style {
         display: Display::Flex,
         size: Size {
@@ -89,8 +94,46 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
         flex_direction: resolve_flex_direction(c.layout.as_ref()),
         justify_content: Some(resolve_justify(c.justify_content.as_ref())),
         align_items: Some(resolve_align(c.align_items.as_ref())),
-        gap: zero(),
+        gap: Size {
+            width: gap_lp,
+            height: gap_lp,
+        },
         ..Default::default()
+    }
+}
+
+/// Build a Style for any node type. Containers (Frame/Group/Rectangle)
+/// delegate to `container_to_style`; leaf nodes (Text / IconFont /
+/// Image / Line / …) pull their own `width` / `height` so flex parents
+/// measure them correctly.
+pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
+    use jian_ops_schema::node::PenNode;
+    match n {
+        PenNode::Frame(f) => container_to_style(&f.container),
+        PenNode::Group(g) => container_to_style(&g.container),
+        PenNode::Rectangle(r) => container_to_style(&r.container),
+        _ => {
+            let (w, h) = leaf_size(n);
+            Style {
+                size: Size {
+                    width: resolve_sizing(w),
+                    height: resolve_sizing(h),
+                },
+                ..Default::default()
+            }
+        }
+    }
+}
+
+fn leaf_size(
+    n: &jian_ops_schema::node::PenNode,
+) -> (Option<&SizingBehavior>, Option<&SizingBehavior>) {
+    use jian_ops_schema::node::PenNode;
+    match n {
+        PenNode::Text(t) => (t.width.as_ref(), t.height.as_ref()),
+        PenNode::IconFont(i) => (i.width.as_ref(), i.height.as_ref()),
+        PenNode::Image(i) => (i.width.as_ref(), i.height.as_ref()),
+        _ => (None, None),
     }
 }
 

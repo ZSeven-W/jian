@@ -12,6 +12,9 @@ use taffy::prelude::*;
 pub struct LayoutEngine {
     pub(crate) tree: TaffyTree<()>,
     pub(crate) map: SecondaryMap<NodeKey, NodeId>,
+    /// Parent-node lookup, mirrored from `NodeTree` so `node_rect` can
+    /// accumulate per-parent offsets into an absolute scene coordinate.
+    pub(crate) parent: SecondaryMap<NodeKey, NodeKey>,
 }
 
 impl LayoutEngine {
@@ -19,34 +22,30 @@ impl LayoutEngine {
         Self {
             tree: TaffyTree::new(),
             map: SecondaryMap::new(),
+            parent: SecondaryMap::new(),
         }
     }
 
     /// Build a taffy tree mirroring the NodeTree. Returns the root NodeIds.
     pub fn build(&mut self, doc_tree: &NodeTree) -> CoreResult<Vec<NodeId>> {
-        use jian_ops_schema::node::PenNode;
         self.tree = TaffyTree::new();
         self.map = SecondaryMap::new();
+        self.parent = SecondaryMap::new();
 
-        // Pass 1: create a taffy node for each doc node.
+        // Pass 1: create a taffy node for each doc node. `node_to_style`
+        // handles both containers (Frame/Group/Rectangle) and leaves
+        // (Text / IconFont / Image / …) so leaf sizes propagate into
+        // flex measurements.
         for (key, data) in doc_tree.nodes.iter() {
-            let style = match &data.schema {
-                PenNode::Frame(f) => resolve::container_to_style(&f.container),
-                PenNode::Group(g) => resolve::container_to_style(&g.container),
-                PenNode::Rectangle(r) => resolve::container_to_style(&r.container),
-                _ => Style {
-                    size: Size {
-                        width: auto(),
-                        height: auto(),
-                    },
-                    ..Default::default()
-                },
-            };
+            let style = resolve::node_to_style(&data.schema);
             let id = self
                 .tree
                 .new_leaf(style)
                 .map_err(|e| CoreError::Layout(e.to_string()))?;
             self.map.insert(key, id);
+            if let Some(p) = data.parent {
+                self.parent.insert(key, p);
+            }
         }
 
         // Pass 2: wire parent/child relationships.
@@ -73,15 +72,23 @@ impl LayoutEngine {
             .map_err(|e| CoreError::Layout(e.to_string()))
     }
 
+    /// Absolute scene-coord rect for `key`: taffy's `layout.location` is
+    /// relative to the node's flex parent, so we walk up the parent
+    /// chain and accumulate each ancestor's location offset.
     pub fn node_rect(&self, key: NodeKey) -> Option<Rect> {
         let id = self.map.get(key)?;
         let l = self.tree.layout(*id).ok()?;
-        Some(rect(
-            l.location.x,
-            l.location.y,
-            l.size.width,
-            l.size.height,
-        ))
+        let (mut ax, mut ay) = (l.location.x, l.location.y);
+        let (w, h) = (l.size.width, l.size.height);
+        let mut cur = key;
+        while let Some(&p) = self.parent.get(cur) {
+            let pid = self.map.get(p)?;
+            let pl = self.tree.layout(*pid).ok()?;
+            ax += pl.location.x;
+            ay += pl.location.y;
+            cur = p;
+        }
+        Some(rect(ax, ay, w, h))
     }
 }
 
