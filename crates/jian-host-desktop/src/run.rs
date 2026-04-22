@@ -28,6 +28,17 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
+/// Convert a winit physical-pixel `PhysicalSize<u32>` into an `(f32, f32)`
+/// logical-pixel tuple suitable for `Runtime::build_layout`.
+fn logical_size_f32(
+    phys: winit::dpi::PhysicalSize<u32>,
+    scale: f64,
+) -> (f32, f32) {
+    let w = (phys.width as f64 / scale).max(1.0) as f32;
+    let h = (phys.height as f64 / scale).max(1.0) as f32;
+    (w, h)
+}
+
 impl DesktopHost {
     /// Open a window and run the event loop until the user closes it.
     /// Blocks the calling thread; returns `Ok(())` on clean shutdown.
@@ -44,7 +55,13 @@ struct RunApp {
     translator: PointerTranslator,
     window: Option<Rc<Window>>,
     softbuffer: Option<SoftbufferState>,
+    /// Physical surface dimensions (winit `inner_size()` values).
     last_size: (u32, u32),
+    /// Pixel-ratio between physical and logical coords. On a 2x Retina
+    /// display this is 2.0. Layout + state live in logical units; the
+    /// canvas + pointer input are scaled so the raster surface is filled
+    /// pixel-perfect.
+    scale_factor: f64,
 }
 
 struct SoftbufferState {
@@ -66,6 +83,7 @@ impl RunApp {
                 initial.width.max(1.0) as u32,
                 initial.height.max(1.0) as u32,
             ),
+            scale_factor: 1.0,
         }
     }
 
@@ -95,16 +113,27 @@ impl RunApp {
             return;
         };
         let (w, h) = self.last_size;
+        let scale = self.scale_factor as f32;
 
-        // 1. Collect draw ops and rasterize via SkiaBackend.
+        // 1. Collect draw ops and rasterize via SkiaBackend. The canvas
+        // is scaled by DPR so logical-unit rects fill physical pixels.
         let ops = if let Some(doc) = self.host.runtime.document.as_ref() {
             collect_draws(doc, &self.host.runtime.layout)
         } else {
             Vec::new()
         };
         self.host.backend.begin_frame(&mut state.skia, 0xffffffff);
+        let dpr_scaled = (scale - 1.0).abs() > f32::EPSILON;
+        if dpr_scaled {
+            self.host
+                .backend
+                .push_transform(&jian_core::geometry::Affine2::scale(scale, scale));
+        }
         for op in &ops {
             self.host.backend.draw(op);
+        }
+        if dpr_scaled {
+            self.host.backend.pop();
         }
         self.host.backend.end_frame(&mut state.skia);
 
@@ -147,16 +176,15 @@ impl ApplicationHandler for RunApp {
             .create_window(attrs)
             .expect("jian-host-desktop: failed to create window");
         let phys = window.inner_size();
+        self.scale_factor = window.scale_factor();
         self.last_size = (phys.width.max(1), phys.height.max(1));
         self.window = Some(Rc::new(window));
         self.ensure_surface(self.last_size.0, self.last_size.1);
-        // Re-run layout with the actual window size so the scene fills
-        // the physical surface on first paint.
-        let _ = self
-            .host
-            .runtime
-            .build_layout((phys.width as f32, phys.height as f32));
-        self.host.runtime.viewport.size = make_size(phys.width as f32, phys.height as f32);
+        // Layout + viewport live in *logical* coordinates; only the
+        // raster surface and pointer input use physical pixels.
+        let logical = logical_size_f32(phys, self.scale_factor);
+        let _ = self.host.runtime.build_layout(logical);
+        self.host.runtime.viewport.size = make_size(logical.0, logical.1);
         self.host.runtime.rebuild_spatial();
     }
 
@@ -174,12 +202,20 @@ impl ApplicationHandler for RunApp {
             WindowEvent::Resized(new) => {
                 self.last_size = (new.width.max(1), new.height.max(1));
                 self.ensure_surface(self.last_size.0, self.last_size.1);
-                let _ = self
-                    .host
-                    .runtime
-                    .build_layout((new.width as f32, new.height as f32));
-                self.host.runtime.viewport.size = make_size(new.width as f32, new.height as f32);
+                let logical = logical_size_f32(*new, self.scale_factor);
+                let _ = self.host.runtime.build_layout(logical);
+                self.host.runtime.viewport.size = make_size(logical.0, logical.1);
                 self.host.runtime.rebuild_spatial();
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+                return;
+            }
+            WindowEvent::ScaleFactorChanged {
+                scale_factor: new_scale,
+                ..
+            } => {
+                self.scale_factor = *new_scale;
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -196,7 +232,14 @@ impl ApplicationHandler for RunApp {
             _ => {}
         }
 
-        if let Some(pe) = self.translator.translate(&event) {
+        if let Some(mut pe) = self.translator.translate(&event) {
+            // winit delivers cursor positions in physical pixels; the
+            // runtime hit-tests against logical-coord layout rects, so
+            // divide the incoming position by the scale factor.
+            if self.scale_factor != 1.0 {
+                let s = self.scale_factor as f32;
+                pe.position = jian_core::geometry::point(pe.position.x / s, pe.position.y / s);
+            }
             self.host.runtime.dispatch_pointer(pe);
             if let Some(w) = self.window.as_ref() {
                 w.request_redraw();
