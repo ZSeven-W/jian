@@ -1,0 +1,41 @@
+{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "{{APP_ID}}",
+  "app": {
+    "name": "{{APP_NAME}}",
+    "version": "0.1.0",
+    "id": "{{APP_ID}}"
+  },
+  "state": {
+    "count": { "type": "int", "default": 0 }
+  },
+  "children": [
+    {
+      "type": "frame",
+      "id": "root",
+      "width": 400,
+      "height": 300,
+      "layout": "vertical",
+      "gap": 16,
+      "children": [
+        {
+          "type": "text",
+          "id": "label",
+          "content": "Count: 0",
+          "bindings": { "content": "`Count: ${$app.count}`" }
+        },
+        {
+          "type": "rectangle",
+          "id": "btn",
+          "width": 200,
+          "height": 48,
+          "fills": [{ "type": "solid", "color": "#1e88e5" }],
+          "events": {
+            "onTap": [ { "set": { "$app.count": "$app.count + 1" } } ]
+          }
+        }
+      ]
+    }
+  ]
+}

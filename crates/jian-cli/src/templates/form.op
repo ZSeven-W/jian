@@ -1,0 +1,43 @@
+{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "{{APP_ID}}",
+  "app": {
+    "name": "{{APP_NAME}}",
+    "version": "0.1.0",
+    "id": "{{APP_ID}}"
+  },
+  "state": {
+    "name":  { "type": "string", "default": "" },
+    "email": { "type": "string", "default": "" }
+  },
+  "children": [
+    {
+      "type": "frame",
+      "id": "root",
+      "width": 480,
+      "height": 320,
+      "layout": "vertical",
+      "gap": 12,
+      "children": [
+        {
+          "type": "text",
+          "id": "title",
+          "content": "Contact form"
+        },
+        {
+          "type": "rectangle",
+          "id": "submit",
+          "width": 200,
+          "height": 48,
+          "fills": [{ "type": "solid", "color": "#43a047" }],
+          "events": {
+            "onTap": [
+              { "toast": "`Submitted ${$app.name} <${$app.email}>`" }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
