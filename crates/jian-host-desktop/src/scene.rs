@@ -13,7 +13,10 @@
 //! once the jian-skia `draw_canvas` path learns shaders / samplers.
 
 use jian_core::geometry::{point, rect, Point};
-use jian_core::render::{BorderRadii, DrawOp, Paint, PathCommand, StrokeOp, TextRun};
+use jian_core::render::{
+    BorderRadii, DrawOp, GradientStop, LinearGradient, Paint, PathCommand, ShadowSpec, StrokeOp,
+    TextRun,
+};
 use jian_core::scene::Color;
 use jian_ops_schema::node::PenNode;
 use serde_json::Value;
@@ -65,11 +68,34 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
         return;
     }
 
-    // --- Fill (solid only for MVP) + optional stroke.
-    let fill = first_solid_color(json.get("fill"));
+    let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
     let stroke = stroke_op(json);
-    let opacity = 1.0_f32;
 
+    // --- Shadows (first effect entry that's a drop shadow) paint
+    // *underneath* the fill, so emit the shadow op first.
+    if let Some(shadow) = first_shadow(json) {
+        out.push(DrawOp::ShadowedRect {
+            rect: rect_logical,
+            radii,
+            shadow,
+        });
+    }
+
+    // --- Fill can be solid or linear gradient. Inspect `fill[0]`.
+    let fill_arr = json.get("fill").and_then(|v| v.as_array());
+    let first_fill = fill_arr.and_then(|arr| arr.first());
+
+    if let Some(grad) = first_fill.and_then(try_linear_gradient) {
+        out.push(DrawOp::LinearGradientRect {
+            rect: rect_logical,
+            radii,
+            gradient: grad,
+            stroke,
+        });
+        return;
+    }
+
+    let fill = first_solid_color(json.get("fill"));
     if fill.is_none() && stroke.is_none() {
         return;
     }
@@ -77,13 +103,12 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
     let paint = Paint {
         fill,
         stroke,
-        opacity,
+        opacity: 1.0,
     };
-    let radii = corner_radii(json);
-    if radii.map(|rr| rr != BorderRadii::zero()).unwrap_or(false) {
+    if radii != BorderRadii::zero() {
         out.push(DrawOp::RoundedRect {
             rect: rect_logical,
-            radii: radii.unwrap(),
+            radii,
             paint,
         });
     } else {
@@ -92,6 +117,58 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
             paint,
         });
     }
+}
+
+fn try_linear_gradient(fill: &Value) -> Option<LinearGradient> {
+    let obj = fill.as_object()?;
+    if obj.get("type").and_then(|t| t.as_str()) != Some("linear_gradient") {
+        return None;
+    }
+    let angle_deg = obj.get("angle").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    let stops_arr = obj.get("stops")?.as_array()?;
+    let mut stops = Vec::with_capacity(stops_arr.len());
+    for s in stops_arr {
+        let so = s.as_object()?;
+        let offset = so.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let hex = so.get("color")?.as_str()?;
+        let color = Color::from_hex(hex)?;
+        stops.push(GradientStop { offset, color });
+    }
+    if stops.len() < 2 {
+        return None;
+    }
+    Some(LinearGradient {
+        angle_deg,
+        stops,
+        opacity: 1.0,
+    })
+}
+
+fn first_shadow(json: &Value) -> Option<ShadowSpec> {
+    let effects = json.get("effects")?.as_array()?;
+    for e in effects {
+        let obj = e.as_object()?;
+        if obj.get("type").and_then(|t| t.as_str()) != Some("shadow") {
+            continue;
+        }
+        let dx = obj.get("offsetX").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let dy = obj.get("offsetY").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let blur = obj.get("blur").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let spread = obj.get("spread").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let color = obj
+            .get("color")
+            .and_then(|v| v.as_str())
+            .and_then(Color::from_hex)
+            .unwrap_or(Color::rgba(0, 0, 0, 0x40));
+        return Some(ShadowSpec {
+            color,
+            dx,
+            dy,
+            blur,
+            spread,
+        });
+    }
+    None
 }
 
 fn first_solid_color(v: Option<&Value>) -> Option<Color> {
