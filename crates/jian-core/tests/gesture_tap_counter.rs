@@ -16,7 +16,7 @@ const COUNTER_OP: &str = r##"{
       "id": "btn",
       "width": 200,
       "height": 100,
-      "fills": [{ "type": "solid", "color": "#1e88e5" }],
+      "fill": [{ "type": "solid", "color": "#1e88e5" }],
       "events": {
         "onTap": [ { "set": { "$app.count": "$app.count + 1" } } ]
       }

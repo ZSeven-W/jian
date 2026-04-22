@@ -41,6 +41,23 @@ impl SkiaSurface {
     pub fn height(&self) -> i32 {
         self.inner.height()
     }
+
+    /// Copy the surface contents into `buf` in straight (un-premultiplied)
+    /// RGBA8888. `buf.len()` must equal `width * height * 4`. Returns
+    /// `true` on success.
+    pub fn read_rgba8(&mut self, buf: &mut [u8]) -> bool {
+        use skia_safe::{image::CachingHint, AlphaType, ColorType, ISize, ImageInfo};
+        let w = self.inner.width();
+        let h = self.inner.height();
+        let info = ImageInfo::new(
+            ISize::new(w, h),
+            ColorType::RGBA8888,
+            AlphaType::Unpremul,
+            None,
+        );
+        let image = self.inner.image_snapshot();
+        image.read_pixels(&info, buf, (w as usize) * 4, (0, 0), CachingHint::Allow)
+    }
 }
 
 #[cfg(test)]

@@ -15,7 +15,7 @@ const COUNTER_OP: &str = r##"{
   "state": { "count": { "type": "int", "default": 0 } },
   "children": [
     { "type": "rectangle", "id": "btn", "width": 200, "height": 100,
-      "fills": [{ "type": "solid", "color": "#1e88e5" }] }
+      "fill": [{ "type": "solid", "color": "#1e88e5" }] }
   ]
 }"##;
 
