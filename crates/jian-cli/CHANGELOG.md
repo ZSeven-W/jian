@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0] — Plan 9 — `jian player` subcommand
+
+### Added
+
+- `jian player PATH [--size WxH] [--title ...]` — opens a `.op` in
+  a real desktop window backed by `jian_host_desktop::DesktopHost::run`
+  (winit 0.30 + softbuffer CPU presenter). Scene-walk driven by the
+  new `jian_host_desktop::scene::collect_draws` helper.
+- `player` cargo feature (on by default). Turn off via
+  `cargo build --no-default-features` for a headless-only CLI build.
+
 ## [0.1.0] — Plan 9 — jian-cli MVP
 
 ### Added

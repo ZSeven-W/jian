@@ -15,11 +15,10 @@ jian --help
 | `jian pack INPUT OUTPUT` | Zip a `.op` into a `.op.pack` with a generated `manifest.json`. |
 | `jian unpack INPUT OUT_DIR` | Inverse of `pack`. Guards against zip-slip. |
 | `jian new NAME [--template counter\|form] [--path DIR]` | Scaffold a new project from an embedded template with `{{APP_NAME}}` / `{{APP_ID}}` placeholders substituted. |
+| `jian player PATH [--size WxH] [--title ...]` | Open a `.op` in a desktop window and run its interactive pointer / scene pipeline. On by default via the `player` feature; disable with `cargo build --no-default-features` for a headless build. |
 
 ## Roadmap
 
-- `jian player PATH` — open a `.op` in a desktop window (lands once
-  `jian-host-desktop` ships its real event loop under the `run` feature).
 - `jian dev PATH` — hot-reload variant of `player` backed by the
   `notify` crate.
 - Distribution: Homebrew tap, `winget` manifest, Linux install script

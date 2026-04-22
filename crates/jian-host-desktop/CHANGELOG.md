@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.0] — Plan 8 — `DesktopHost::run` real event loop
+
+### Added
+
+- `DesktopHost::run(self) -> Result<(), EventLoopError>` (under the
+  `run` feature) — blocking winit 0.30 event loop that wires every
+  `WindowEvent` through `PointerTranslator::translate` into
+  `Runtime::dispatch_pointer`, runs `tick()` in `about_to_wait` for
+  timer-based recognisers, and requests a redraw when state changes.
+- `softbuffer` 0.4 CPU presenter: rasterize via `SkiaBackend` +
+  `SkiaSurface::new_raster`, snapshot RGBA8888 through the new
+  `SkiaSurface::read_rgba8` helper, pack to `0x00RRGGBB` and present.
+  Keeps the host platform-agnostic — Metal / D3D12 / GL surfaces
+  stay deferred behind their existing feature flags.
+- `scene::collect_draws(document, layout) -> Vec<DrawOp>` — schema-
+  agnostic walker that reads `fill[]` via JSON round-trip and emits
+  a `DrawOp::Rect` with the first solid-fill colour per node.
+- Re-exports `scene::collect_draws` from the crate root.
+
 ## [0.1.0] — Plan 8 — jian-host-desktop MVP
 
 ### Added
