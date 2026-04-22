@@ -7,7 +7,8 @@
 //!   JSON, …). Caller-visible `anyhow::Error`.
 
 use crate::CheckArgs;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use jian_ops_schema::document::PenDocument;
 use jian_ops_schema::error::LoadWarning;
 use std::fs;
 use std::process::ExitCode;
@@ -17,6 +18,27 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
         fs::read_to_string(&args.path).with_context(|| format!("read {}", args.path.display()))?;
     let loaded = jian_ops_schema::load_str(&src)
         .with_context(|| format!("parse {}", args.path.display()))?;
+
+    // `load_str` only enforces the serde-derivable surface. Walk the
+    // document and apply semantic checks that the .op spec requires
+    // but which can't be expressed in serde annotations.
+    if let Err(e) = semantic_check(&loaded.value) {
+        if args.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "severity": "error",
+                    "kind": "semantic",
+                    "detail": { "message": format!("{}", e) },
+                })
+            );
+        } else {
+            eprintln!("jian check: {} — semantic error: {}", args.path.display(), e);
+        }
+        // Same exit code as a parse failure (2) — the document is
+        // structurally valid JSON but violates the .op contract.
+        return Ok(ExitCode::from(2));
+    }
 
     if args.json {
         print_json(&loaded.warnings);
@@ -29,6 +51,21 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
     } else {
         ExitCode::from(1)
     })
+}
+
+/// Post-deserialisation semantic checks. These express invariants the
+/// `.op` spec requires but that `PenDocument`'s serde derives can't
+/// enforce on their own (e.g. "top-level id is required when `app` is
+/// set"). A real-app `.op` without `id` never ships, so we treat this
+/// as a hard error at `check` time even though deserialisation itself
+/// happily allows it.
+fn semantic_check(doc: &PenDocument) -> Result<()> {
+    if doc.app.is_some() && doc.id.as_deref().filter(|s| !s.is_empty()).is_none() {
+        return Err(anyhow!(
+            "document has `app` but no non-empty top-level `id`; one is required"
+        ));
+    }
+    Ok(())
 }
 
 fn print_human(path: &str, warnings: &[LoadWarning]) {

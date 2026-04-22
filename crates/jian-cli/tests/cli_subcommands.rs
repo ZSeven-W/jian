@@ -108,6 +108,56 @@ fn new_then_check_is_clean() {
 }
 
 #[test]
+fn new_rejects_path_traversal_in_name() {
+    let dir = TempDir::new().unwrap();
+    for bad in ["..", "../evil", "a/b", "a\\b", "."] {
+        Command::cargo_bin("jian")
+            .unwrap()
+            .current_dir(dir.path())
+            .args(["new", bad])
+            .assert()
+            .failure();
+    }
+}
+
+#[test]
+fn check_flags_missing_top_level_id_as_semantic_error() {
+    // The spec says `id` is required when `app` is set. serde alone
+    // doesn't enforce that — `check` does.
+    const NO_ID: &str = r##"{
+      "formatVersion": "1.0",
+      "version": "1.0.0",
+      "app": { "name": "x", "version": "1", "id": "x" },
+      "children": []
+    }"##;
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "no_id.op", NO_ID);
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args(["check", path.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("top-level `id`"));
+}
+
+#[test]
+fn new_form_template_scaffolds_and_checks_clean() {
+    let dir = TempDir::new().unwrap();
+    Command::cargo_bin("jian")
+        .unwrap()
+        .current_dir(dir.path())
+        .args(["new", "contact", "--template", "form"])
+        .assert()
+        .success();
+    let op_path = dir.path().join("contact/app.op");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args(["check", op_path.to_str().unwrap()])
+        .assert()
+        .success();
+}
+
+#[test]
 fn pack_then_unpack_roundtrips_app_op() {
     let dir = TempDir::new().unwrap();
     let src = write_tmp(&dir, "src.op", CLEAN_OP);
