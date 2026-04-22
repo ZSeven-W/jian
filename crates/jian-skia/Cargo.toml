@@ -1,0 +1,31 @@
+[package]
+name         = "jian-skia"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "Skia-safe RenderBackend implementation for jian-core"
+
+[features]
+# Raster-only default so `cargo test` doesn't need a GPU context or
+# platform-specific libs. Plan 8 host adapters opt into a GPU backend
+# per-platform.
+default = []
+metal   = ["skia-safe/metal"]
+d3d     = ["skia-safe/d3d"]
+gl      = ["skia-safe/gl"]
+vulkan  = ["skia-safe/vulkan"]
+# Paragraph shaping (ICU + harfbuzz). Opt-in because it bloats the
+# binary by ~15 MB. Without it, `jian-skia` falls back to the canvas'
+# built-in single-line text rendering, which is enough for Stage A.
+textlayout = ["skia-safe/textlayout"]
+
+[dependencies]
+jian-core       = { path = "../jian-core" }
+jian-ops-schema = { path = "../jian-ops-schema" }
+skia-safe       = "0.78"
+
+[dev-dependencies]
+serde_json      = { workspace = true }
