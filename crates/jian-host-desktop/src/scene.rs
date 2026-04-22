@@ -312,7 +312,7 @@ fn try_text(json: &Value, r: jian_core::geometry::Rect) -> Option<DrawOp> {
 #[allow(dead_code)]
 fn _unused(_: PathCommand, _: Point) {}
 #[allow(dead_code)]
-fn _keep_penode<'a>(_: &'a PenNode) {}
+fn _keep_penode(_: &PenNode) {}
 
 #[cfg(test)]
 mod tests {

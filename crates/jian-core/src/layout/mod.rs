@@ -15,6 +15,9 @@ use taffy::prelude::*;
 pub struct TextMeasure {
     pub content: String,
     pub font_size: f32,
+    /// CSS font weight — heavier faces widen glyphs, so the measure
+    /// heuristic varies the per-glyph ratio by weight.
+    pub font_weight: u16,
     pub line_height: f32, // multiplier; 0.0 → 1.3 default
 }
 
@@ -124,7 +127,10 @@ impl Default for LayoutEngine {
 /// via the typed accessor (styled segments are concatenated to their
 /// `.text` field for measurement purposes).
 fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
-    use jian_ops_schema::node::{text::TextContent, PenNode};
+    use jian_ops_schema::node::{
+        text::{FontWeight, TextContent},
+        PenNode,
+    };
     let PenNode::Text(t) = n else {
         return None;
     };
@@ -140,10 +146,23 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
         return None;
     }
     let font_size = t.font_size.map(|v| v as f32).unwrap_or(14.0);
+    let font_weight = match &t.font_weight {
+        Some(FontWeight::Number(n)) => *n as u16,
+        Some(FontWeight::Keyword(s)) => match s.as_str() {
+            "bold" => 700,
+            "semibold" | "semi-bold" => 600,
+            "medium" => 500,
+            "light" => 300,
+            "thin" => 100,
+            _ => 400,
+        },
+        None => 400,
+    };
     let line_height = t.line_height.map(|v| v as f32).unwrap_or(0.0);
     Some(TextMeasure {
         content,
         font_size,
+        font_weight,
         line_height,
     })
 }
@@ -156,7 +175,8 @@ fn measure_text_for_taffy(
     avail: Size<AvailableSpace>,
 ) -> Size<f32> {
     // Natural (single-line) metrics from our character-count heuristic.
-    let (natural_w, _natural_h) = measure::estimate_text_size(&tm.content, tm.font_size);
+    let (natural_w, _natural_h) =
+        measure::estimate_text_size_weighted(&tm.content, tm.font_size, tm.font_weight);
     let line_mult = if tm.line_height > 0.0 {
         tm.line_height
     } else {
