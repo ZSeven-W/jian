@@ -20,6 +20,10 @@ pub fn resolve_sizing(s: Option<&SizingBehavior>) -> Dimension {
 }
 
 pub fn resolve_padding(p: Option<&OpsPadding>) -> Rect<LengthPercentage> {
+    // `.op` padding follows CSS shorthand order despite the variant
+    // names — that's what real designs author against. Two-value form
+    // is `[vertical, horizontal]`; four-value is `[top, right, bottom,
+    // left]` (TRBL).
     match p {
         Some(OpsPadding::Uniform(v)) => {
             let lp: LengthPercentage = length(*v as f32);
@@ -30,21 +34,21 @@ pub fn resolve_padding(p: Option<&OpsPadding>) -> Rect<LengthPercentage> {
                 bottom: lp,
             }
         }
-        Some(OpsPadding::XY([x, y])) => {
-            let lx: LengthPercentage = length(*x as f32);
-            let ly: LengthPercentage = length(*y as f32);
+        Some(OpsPadding::XY([v, h])) => {
+            let lv: LengthPercentage = length(*v as f32);
+            let lh: LengthPercentage = length(*h as f32);
             Rect {
-                left: lx,
-                right: lx,
-                top: ly,
-                bottom: ly,
+                left: lh,
+                right: lh,
+                top: lv,
+                bottom: lv,
             }
         }
-        Some(OpsPadding::LtrB([l, t, r, b])) => Rect {
-            left: length(*l as f32),
+        Some(OpsPadding::LtrB([t, r, b, l])) => Rect {
             top: length(*t as f32),
             right: length(*r as f32),
             bottom: length(*b as f32),
+            left: length(*l as f32),
         },
         _ => zero(),
     }
@@ -223,12 +227,24 @@ mod tests {
     }
 
     #[test]
-    fn padding_ltrb() {
+    fn padding_four_value_trbl() {
+        // Four-value padding follows CSS TRBL shorthand
+        // (top, right, bottom, left) regardless of the variant name.
         let p = OpsPadding::LtrB([1.0, 2.0, 3.0, 4.0]);
         let r = resolve_padding(Some(&p));
-        assert_eq!(r.left, lp_len(1.0));
-        assert_eq!(r.top, lp_len(2.0));
-        assert_eq!(r.right, lp_len(3.0));
-        assert_eq!(r.bottom, lp_len(4.0));
+        assert_eq!(r.top, lp_len(1.0));
+        assert_eq!(r.right, lp_len(2.0));
+        assert_eq!(r.bottom, lp_len(3.0));
+        assert_eq!(r.left, lp_len(4.0));
+    }
+
+    #[test]
+    fn padding_two_value_is_vertical_horizontal() {
+        let p = OpsPadding::XY([10.0, 20.0]);
+        let r = resolve_padding(Some(&p));
+        assert_eq!(r.top, lp_len(10.0));
+        assert_eq!(r.bottom, lp_len(10.0));
+        assert_eq!(r.left, lp_len(20.0));
+        assert_eq!(r.right, lp_len(20.0));
     }
 }
