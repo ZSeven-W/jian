@@ -105,10 +105,13 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
 /// Build a Style for any node type. Containers (Frame/Group/Rectangle)
 /// delegate to `container_to_style`; leaf nodes (Text / IconFont /
 /// Image / Line / …) pull their own `width` / `height` so flex parents
-/// measure them correctly.
+/// measure them correctly. If the node declares an explicit `x` or
+/// `y`, it's treated as absolutely positioned within its parent
+/// (mirrors Figma / design-tool semantics where an overlay icon sits
+/// at a fixed offset inside a layer).
 pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
     use jian_ops_schema::node::PenNode;
-    match n {
+    let mut style = match n {
         PenNode::Frame(f) => container_to_style(&f.container),
         PenNode::Group(g) => container_to_style(&g.container),
         PenNode::Rectangle(r) => container_to_style(&r.container),
@@ -122,7 +125,46 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
                 ..Default::default()
             }
         }
+    };
+    if let Some((x, y)) = explicit_position(n) {
+        style.position = Position::Absolute;
+        style.inset = Rect {
+            left: length(x),
+            top: length(y),
+            right: LengthPercentageAuto::Auto,
+            bottom: LengthPercentageAuto::Auto,
+        };
     }
+    style
+}
+
+/// Extract `x`, `y` from a `PenNodeBase` — `(x, y)` pair if either is
+/// present, `None` if neither.
+fn explicit_position(n: &jian_ops_schema::node::PenNode) -> Option<(f32, f32)> {
+    let base = node_base(n)?;
+    match (base.x, base.y) {
+        (None, None) => None,
+        (x, y) => Some((x.unwrap_or(0.0) as f32, y.unwrap_or(0.0) as f32)),
+    }
+}
+
+fn node_base(
+    n: &jian_ops_schema::node::PenNode,
+) -> Option<&jian_ops_schema::node::base::PenNodeBase> {
+    use jian_ops_schema::node::PenNode;
+    Some(match n {
+        PenNode::Frame(f) => &f.base,
+        PenNode::Group(g) => &g.base,
+        PenNode::Rectangle(r) => &r.base,
+        PenNode::Text(t) => &t.base,
+        PenNode::IconFont(i) => &i.base,
+        PenNode::Image(i) => &i.base,
+        PenNode::Ellipse(e) => &e.base,
+        PenNode::Line(l) => &l.base,
+        PenNode::Path(p) => &p.base,
+        PenNode::Polygon(p) => &p.base,
+        _ => return None,
+    })
 }
 
 fn leaf_size(

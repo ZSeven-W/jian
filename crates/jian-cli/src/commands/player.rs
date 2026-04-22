@@ -36,7 +36,12 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         })
         .unwrap_or_else(|| "Jian".to_owned());
 
-    let (w, h) = parse_size(args.size.as_deref())?;
+    // Size priority: --size > root-frame intrinsic size > 800x600.
+    let root_size = root_frame_size(&schema);
+    let (w, h) = match args.size.as_deref() {
+        Some(s) => parse_size(Some(s))?,
+        None => root_size.unwrap_or((800.0, 600.0)),
+    };
 
     let mut rt = Runtime::new_from_document(schema)
         .with_context(|| format!("build runtime from {}", args.path.display()))?;
@@ -50,6 +55,40 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     let host = DesktopHost::with_config(rt, cfg);
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Read the root frame's explicit width/height so the window can open
+/// at the design's intrinsic size. Returns `None` if the document
+/// doesn't declare a top-level framed root (e.g. a bare children
+/// array with no size metadata).
+fn root_frame_size(
+    schema: &jian_ops_schema::document::PenDocument,
+) -> Option<(f32, f32)> {
+    use jian_ops_schema::node::PenNode;
+    use jian_ops_schema::sizing::SizingBehavior;
+
+    fn pick(s: &Option<SizingBehavior>) -> Option<f32> {
+        match s {
+            Some(SizingBehavior::Number(n)) => Some(*n as f32),
+            _ => None,
+        }
+    }
+
+    let roots = match (&schema.pages, &schema.children) {
+        (Some(pages), _) if !pages.is_empty() => &pages[0].children,
+        _ => schema.children.as_slice(),
+    };
+    let first = roots.first()?;
+    let (w, h) = match first {
+        PenNode::Frame(f) => (pick(&f.container.width), pick(&f.container.height)),
+        PenNode::Group(g) => (pick(&g.container.width), pick(&g.container.height)),
+        PenNode::Rectangle(r) => (pick(&r.container.width), pick(&r.container.height)),
+        _ => (None, None),
+    };
+    match (w, h) {
+        (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some((w, h)),
+        _ => None,
+    }
 }
 
 /// Parse `"WxH"` or `"WIDTHxHEIGHT"` (case-insensitive `x`). Returns
