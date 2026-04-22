@@ -207,26 +207,7 @@ fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp) {
             p.set_anti_alias(true);
             canvas.draw_rect(to_sk_rect(*dst), &p);
         }
-        DrawOp::Text(run) => {
-            let mut p = SkPaint::new(to_sk_color(run.color), None);
-            p.set_anti_alias(true);
-            let font = skia_safe::Font::new(
-                skia_safe::FontMgr::new()
-                    .match_family_style(&run.font_family, skia_safe::FontStyle::normal())
-                    .unwrap_or_else(|| {
-                        skia_safe::FontMgr::new()
-                            .legacy_make_typeface(None, skia_safe::FontStyle::normal())
-                            .expect("default typeface")
-                    }),
-                run.font_size,
-            );
-            canvas.draw_str(
-                &run.content,
-                SkPoint::new(run.origin.x, run.origin.y + run.font_size),
-                &font,
-                &p,
-            );
-        }
+        DrawOp::Text(run) => draw_text(canvas, run),
         DrawOp::LinearGradientRect {
             rect,
             radii,
@@ -236,7 +217,142 @@ fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp) {
         DrawOp::ShadowedRect { rect, radii, shadow } => {
             draw_shadowed_rect(canvas, *rect, *radii, shadow);
         }
+        DrawOp::Icon {
+            rect,
+            name,
+            family: _,
+            color,
+        } => draw_icon(canvas, *rect, name, *color),
     }
+}
+
+fn draw_text(canvas: &skia_safe::Canvas, run: &jian_core::render::TextRun) {
+    use jian_core::render::TextAlign;
+    use skia_safe::font_style::Weight;
+    use skia_safe::FontStyle;
+
+    let mut p = SkPaint::new(to_sk_color(run.color), None);
+    p.set_anti_alias(true);
+
+    let weight = Weight::from(run.font_weight as i32);
+    let style = FontStyle::new(
+        weight,
+        skia_safe::font_style::Width::NORMAL,
+        skia_safe::font_style::Slant::Upright,
+    );
+    let mgr = skia_safe::FontMgr::new();
+    let typeface = if !run.font_family.is_empty() {
+        mgr.match_family_style(&run.font_family, style)
+            .or_else(|| mgr.legacy_make_typeface(None, style))
+    } else {
+        mgr.legacy_make_typeface(None, style)
+    }
+    .expect("default typeface");
+    let font = skia_safe::Font::new(typeface, run.font_size);
+
+    // Line-height in pixels (defaults to 1.3× font_size if unset).
+    let line_mult = if run.line_height > 0.0 {
+        run.line_height
+    } else {
+        1.3
+    };
+    let line_h = run.font_size * line_mult;
+
+    // Simple word-wrap: split by spaces and accumulate runs that fit
+    // within `max_width`. When `max_width == 0` draw on a single line.
+    let lines = if run.max_width > 0.0 {
+        wrap_to_lines(&run.content, &font, &p, run.max_width)
+    } else {
+        vec![run.content.clone()]
+    };
+
+    for (i, line) in lines.iter().enumerate() {
+        let (line_w, _) = font.measure_str(line, Some(&p));
+        let x = match run.align {
+            TextAlign::Start => run.origin.x,
+            TextAlign::Center => run.origin.x + (run.max_width - line_w) * 0.5,
+            TextAlign::End => run.origin.x + (run.max_width - line_w),
+        };
+        // Baseline-y: font_size baseline is roughly 80% of font size.
+        // Using `origin.y + font_size` matches CSS-ish placement.
+        let y = run.origin.y + run.font_size + (i as f32) * line_h;
+        canvas.draw_str(line, SkPoint::new(x, y), &font, &p);
+    }
+}
+
+fn wrap_to_lines(
+    content: &str,
+    font: &skia_safe::Font,
+    paint: &SkPaint,
+    max_width: f32,
+) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for paragraph in content.split('\n') {
+        if paragraph.is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        // Measure the whole paragraph first — if it fits, no wrapping.
+        let (w_all, _) = font.measure_str(paragraph, Some(paint));
+        if w_all <= max_width {
+            lines.push(paragraph.to_owned());
+            continue;
+        }
+        let mut cur = String::new();
+        for word in paragraph.split_whitespace() {
+            let trial = if cur.is_empty() {
+                word.to_owned()
+            } else {
+                format!("{} {}", cur, word)
+            };
+            let (tw, _) = font.measure_str(&trial, Some(paint));
+            if tw <= max_width || cur.is_empty() {
+                cur = trial;
+            } else {
+                lines.push(std::mem::take(&mut cur));
+                cur = word.to_owned();
+            }
+        }
+        if !cur.is_empty() {
+            lines.push(cur);
+        }
+    }
+    lines
+}
+
+fn draw_icon(canvas: &skia_safe::Canvas, r: Rect, name: &str, color: jian_core::scene::Color) {
+    use skia_safe::{utils::parse_path, Matrix};
+    let Some(d) = crate::icons::lookup(name) else {
+        // Unknown glyph — fall back to a small filled square so the
+        // missing icon is visible for debugging.
+        let mut p = SkPaint::new(to_sk_color(color), None);
+        p.set_anti_alias(true);
+        p.set_style(PaintStyle::Fill);
+        canvas.draw_rect(to_sk_rect(r), &p);
+        return;
+    };
+    let Some(mut path) = parse_path::from_svg(d) else {
+        return;
+    };
+    // Lucide icons are authored in a 24×24 viewBox. Scale + translate
+    // into the target rect, preserving aspect ratio.
+    let scale_x = r.size.width / 24.0;
+    let scale_y = r.size.height / 24.0;
+    let mut m = Matrix::new_identity();
+    m.pre_translate((r.min_x(), r.min_y()));
+    m.pre_scale((scale_x, scale_y), None);
+    path.transform(&m);
+
+    let mut sp = SkPaint::new(to_sk_color(color), None);
+    sp.set_anti_alias(true);
+    sp.set_style(PaintStyle::Stroke);
+    // Lucide's native stroke-width is 2 at 24px. Normalise so the
+    // visual weight is consistent across icon sizes.
+    let stroke_w = 2.0 * scale_x.min(scale_y).max(0.1);
+    sp.set_stroke_width(stroke_w);
+    sp.set_stroke_cap(skia_safe::paint::Cap::Round);
+    sp.set_stroke_join(skia_safe::paint::Join::Round);
+    canvas.draw_path(&path, &sp);
 }
 
 fn gradient_endpoints(rect: Rect, angle_deg: f32) -> ((f32, f32), (f32, f32)) {

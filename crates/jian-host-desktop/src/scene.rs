@@ -15,7 +15,7 @@
 use jian_core::geometry::{point, rect, Point};
 use jian_core::render::{
     BorderRadii, DrawOp, GradientStop, LinearGradient, Paint, PathCommand, ShadowSpec, StrokeOp,
-    TextRun,
+    TextAlign, TextRun,
 };
 use jian_core::scene::Color;
 use jian_ops_schema::node::PenNode;
@@ -61,6 +61,27 @@ fn walk(
 
 fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawOp>) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
+
+    // --- Icon font nodes emit a vector-glyph op.
+    if json.get("type").and_then(|t| t.as_str()) == Some("icon_font") {
+        let name = json
+            .get("iconFontName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let family = json
+            .get("iconFontFamily")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        let color = first_solid_color(json.get("fill")).unwrap_or(Color::rgb(0, 0, 0));
+        out.push(DrawOp::Icon {
+            rect: rect_logical,
+            name,
+            family,
+            color,
+        });
+        return;
+    }
 
     // --- Text first: draw_rect isn't the right primitive for text.
     if let Some(text_op) = try_text(json, r) {
@@ -258,13 +279,32 @@ fn try_text(json: &Value, r: jian_core::geometry::Rect) -> Option<DrawOp> {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned();
+    let font_weight = json
+        .get("fontWeight")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u16)
+        .unwrap_or(400);
     let color = first_solid_color(json.get("fill")).unwrap_or(Color::rgb(0, 0, 0));
+    let align = match json.get("textAlign").and_then(|v| v.as_str()) {
+        Some("center") => TextAlign::Center,
+        Some("right") | Some("end") => TextAlign::End,
+        _ => TextAlign::Start,
+    };
+    let line_height = json
+        .get("lineHeight")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as f32)
+        .unwrap_or(0.0);
     Some(DrawOp::Text(TextRun {
         content,
         font_family,
         font_size,
+        font_weight,
         color,
         origin: point(r.min_x(), r.min_y()),
+        max_width: r.size.width,
+        align,
+        line_height,
     }))
 }
 
