@@ -66,13 +66,31 @@ pub struct ShadowSpec {
     pub spread: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextAlign {
+    Start,
+    Center,
+    End,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextRun {
     pub content: String,
     pub font_family: String,
     pub font_size: f32,
+    /// CSS-weight number. 400 = Normal, 700 = Bold.
+    pub font_weight: u16,
     pub color: Color,
+    /// Top-left of the **containing box** — backend derives the
+    /// baseline and horizontal alignment from here.
     pub origin: Point,
+    /// Container width (for centering / right-align). `0.0` means
+    /// "unknown; render at origin with no alignment adjustment."
+    pub max_width: f32,
+    pub align: TextAlign,
+    /// CSS-ish line-height multiplier (`font_size * line_height`).
+    /// 0 means "default".
+    pub line_height: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -134,6 +152,15 @@ pub enum DrawOp {
         rect: Rect,
         radii: BorderRadii,
         shadow: ShadowSpec,
+    },
+    /// Vector icon (Lucide / Feather / bundled family) rendered by a
+    /// name lookup in the backend's glyph table, scaled into the given
+    /// rect and painted in `color`.
+    Icon {
+        rect: Rect,
+        name: String,
+        family: Option<String>,
+        color: Color,
     },
 }
 
