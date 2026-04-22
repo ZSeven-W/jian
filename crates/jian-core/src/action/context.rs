@@ -6,6 +6,7 @@ use super::services::{
     AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, Router, StorageBackend,
 };
 use crate::expression::{Diagnostic, ExpressionCache};
+use crate::logic::LogicProvider;
 use crate::signal::scheduler::Scheduler;
 use crate::state::StateGraph;
 use crate::value::RuntimeValue;
@@ -34,6 +35,9 @@ pub struct ActionContext {
     pub clipboard: Rc<dyn ClipboardService>,
 
     pub capabilities: Rc<dyn CapabilityGate>,
+    /// Tier-3 logic provider. `NullLogicProvider` is installed by
+    /// default; hosts override via `Runtime::set_logic_provider`.
+    pub logic: Rc<dyn LogicProvider>,
     pub expr_cache: Rc<ExpressionCache>,
 
     pub cancel: CancellationToken,
@@ -88,6 +92,7 @@ mod tests {
             async_fb: Rc::new(NullFeedback),
             clipboard: Rc::new(NullClipboard),
             capabilities: Rc::new(DummyCapabilityGate),
+            logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),
             cancel: CancellationToken::new(),
             warnings: RefCell::new(Vec::new()),

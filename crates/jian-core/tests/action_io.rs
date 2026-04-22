@@ -99,6 +99,7 @@ fn setup(
         async_fb: fb_async,
         clipboard,
         capabilities: cap,
+        logic: Rc::new(jian_core::logic::NullLogicProvider),
         expr_cache: Rc::new(ExpressionCache::new()),
         cancel: CancellationToken::new(),
         warnings: RefCell::new(Vec::new()),

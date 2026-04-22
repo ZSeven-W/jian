@@ -8,7 +8,6 @@ use crate::action::context::ActionContext;
 use crate::action::error::{ActionError, ActionResult};
 use crate::action::registry::ActionRegistry;
 use crate::expression::Expression;
-use crate::logic::{LogicProvider, NullLogicProvider};
 use crate::state::path::StatePath;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -42,10 +41,11 @@ impl ActionImpl for Call {
             arg_values.push(v);
         }
 
-        // MVP: no real provider registry on ActionContext yet — use Null.
-        let provider = NullLogicProvider;
+        // Dispatch through the host-injected LogicProvider. When the
+        // host hasn't installed one, `NullLogicProvider` returns an Err
+        // from `call`, which is routed through `on_error` below.
         let _ = &self.module_id;
-        let outcome = provider.call(&self.function, &arg_values);
+        let outcome = ctx.logic.call(&self.function, &arg_values);
 
         match outcome {
             Ok(v) => {
