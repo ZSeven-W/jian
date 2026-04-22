@@ -33,7 +33,11 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
                 })
             );
         } else {
-            eprintln!("jian check: {} — semantic error: {}", args.path.display(), e);
+            eprintln!(
+                "jian check: {} — semantic error: {}",
+                args.path.display(),
+                e
+            );
         }
         // Same exit code as a parse failure (2) — the document is
         // structurally valid JSON but violates the .op contract.

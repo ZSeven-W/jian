@@ -38,6 +38,10 @@ enum Command {
     Unpack(UnpackArgs),
     /// Scaffold a new Jian project from an embedded template.
     New(NewArgs),
+    /// Open a .op file in a desktop window and run its interactive
+    /// pointer / scene pipeline (built with the `player` feature).
+    #[cfg(feature = "player")]
+    Player(PlayerArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -60,6 +64,19 @@ pub struct UnpackArgs {
     pub output_dir: PathBuf,
 }
 
+#[cfg(feature = "player")]
+#[derive(Parser, Debug)]
+pub struct PlayerArgs {
+    pub path: PathBuf,
+    /// Logical window size in `WxH` form. Defaults to 800x600.
+    #[arg(long)]
+    pub size: Option<String>,
+    /// Override the window title. Defaults to the .op file's `app.name`
+    /// when present, otherwise the path's file stem.
+    #[arg(long)]
+    pub title: Option<String>,
+}
+
 #[derive(Parser, Debug)]
 pub struct NewArgs {
     /// Project name — also used as the app id and directory name.
@@ -79,6 +96,8 @@ fn main() -> ExitCode {
         Command::Pack(args) => commands::pack::run(args),
         Command::Unpack(args) => commands::unpack::run(args),
         Command::New(args) => commands::new::run(args),
+        #[cfg(feature = "player")]
+        Command::Player(args) => commands::player::run(args),
     };
 
     match result {

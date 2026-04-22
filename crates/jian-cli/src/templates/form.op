@@ -30,7 +30,7 @@
           "id": "submit",
           "width": 200,
           "height": 48,
-          "fills": [{ "type": "solid", "color": "#43a047" }],
+          "fill": [{ "type": "solid", "color": "#43a047" }],
           "events": {
             "onTap": [
               { "toast": "`Submitted ${$app.name} <${$app.email}>`" }
