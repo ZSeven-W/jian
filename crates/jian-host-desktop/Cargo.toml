@@ -10,14 +10,14 @@ description  = "winit-based desktop host for the Jian runtime"
 
 [features]
 # Default = pure-function translators + in-memory services. No winit
-# event loop is started unless a `run_*` helper is called, and no
+# event loop is started unless a `run` helper is called, and no
 # platform-specific surface feature is picked up automatically so CI
 # stays windowless.
 default = []
 
-# Opt-in to real event-loop run helpers. Gated because opening a
-# real window needs a display and is incompatible with headless CI.
-run = []
+# Opt-in to the real event-loop run helper. Pulls in `softbuffer` for
+# CPU-side pixel presentation (no per-platform GPU context needed).
+run = ["dep:softbuffer"]
 
 # Native OS feature flags for the optional integrations (added when
 # the implementations land):
@@ -27,10 +27,11 @@ clipboard = ["dep:arboard"]
 jian-core       = { path = "../jian-core" }
 jian-ops-schema = { path = "../jian-ops-schema" }
 jian-skia       = { path = "../jian-skia" }
-winit         = "0.30"
-async-trait   = "0.1"
-serde_json    = { workspace = true }
-arboard       = { version = "3", optional = true }
+winit           = "0.30"
+async-trait     = "0.1"
+serde_json      = { workspace = true }
+arboard         = { version = "3", optional = true }
+softbuffer      = { version = "0.4", optional = true }
 
 [dev-dependencies.futures]
 version = "0.3"

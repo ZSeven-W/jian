@@ -32,6 +32,11 @@
 pub mod host;
 pub mod keyboard;
 pub mod pointer;
+pub mod scene;
 pub mod services;
 
+#[cfg(feature = "run")]
+mod run;
+
 pub use host::DesktopHost;
+pub use scene::collect_draws;
