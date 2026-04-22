@@ -52,10 +52,6 @@ jobs:
           - name: macos-aarch64
             os: macos-latest
             target: aarch64-apple-darwin
-          # Intel Mac coverage intentionally dropped: Apple stopped
-          # selling Intel Macs in 2023 and GitHub's `macos-13` runners
-          # have constrained capacity. Re-add if a user reports an
-          # Intel-specific regression.
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -74,6 +70,24 @@ jobs:
       - run: cargo build --workspace --all-targets --target ${{ matrix.target }}
       - run: cargo test --workspace --all-targets --target ${{ matrix.target }}
       - run: cargo test --workspace --doc --target ${{ matrix.target }}
+
+  # Intel Mac (x86_64) coverage: Apple-Silicon runner cross-compiles
+  # to `x86_64-apple-darwin`. This catches cfg / target drift without
+  # waiting on GitHub's constrained `macos-13` queue. Tests can't
+  # execute (no Rosetta in the default `macos-latest` image), so this
+  # is compile-only.
+  macos-x86_64-cross:
+    name: macos-x86_64 (cross-compile)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-apple-darwin-cross
+      - run: cargo build --workspace --all-targets --target x86_64-apple-darwin
 
   docs:
     name: rustdoc
