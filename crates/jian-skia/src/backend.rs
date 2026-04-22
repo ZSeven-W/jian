@@ -227,6 +227,140 @@ fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp) {
                 &p,
             );
         }
+        DrawOp::LinearGradientRect {
+            rect,
+            radii,
+            gradient,
+            stroke,
+        } => draw_linear_gradient_rect(canvas, *rect, *radii, gradient, stroke.as_ref()),
+        DrawOp::ShadowedRect { rect, radii, shadow } => {
+            draw_shadowed_rect(canvas, *rect, *radii, shadow);
+        }
+    }
+}
+
+fn gradient_endpoints(rect: Rect, angle_deg: f32) -> ((f32, f32), (f32, f32)) {
+    // Angle convention matches the .op schema: 0° flows left-to-right,
+    // 90° top-to-bottom (clockwise from +x). We pick the two points on
+    // the rect's edges where the axis-aligned gradient line meets.
+    let cx = rect.min_x() + rect.size.width * 0.5;
+    let cy = rect.min_y() + rect.size.height * 0.5;
+    let rad = angle_deg.to_radians();
+    let dx = rad.cos();
+    let dy = rad.sin();
+    let half_w = rect.size.width * 0.5;
+    let half_h = rect.size.height * 0.5;
+    // Project half-diagonal onto the axis so the gradient spans the
+    // whole rect along the requested direction.
+    let t = (dx.abs() * half_w) + (dy.abs() * half_h);
+    let x0 = cx - dx * t;
+    let y0 = cy - dy * t;
+    let x1 = cx + dx * t;
+    let y1 = cy + dy * t;
+    ((x0, y0), (x1, y1))
+}
+
+fn draw_linear_gradient_rect(
+    canvas: &skia_safe::Canvas,
+    rect: Rect,
+    radii: BorderRadii,
+    g: &jian_core::render::LinearGradient,
+    stroke: Option<&jian_core::render::StrokeOp>,
+) {
+    use skia_safe::{gradient_shader, Shader, TileMode};
+    let (p0, p1) = gradient_endpoints(rect, g.angle_deg);
+    let colors: Vec<Color4f> = g.stops.iter().map(|s| to_sk_color(s.color)).collect();
+    let offsets: Vec<f32> = g.stops.iter().map(|s| s.offset.clamp(0.0, 1.0)).collect();
+    let shader = gradient_shader::linear(
+        (SkPoint::new(p0.0, p0.1), SkPoint::new(p1.0, p1.1)),
+        skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(&colors, None),
+        offsets.as_slice(),
+        TileMode::Clamp,
+        None,
+        None,
+    );
+    let mut paint = SkPaint::default();
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Fill);
+    paint.set_alpha_f(g.opacity);
+    if let Some(s) = shader {
+        paint.set_shader(s as Shader);
+    }
+
+    let is_rounded = radii != BorderRadii::zero();
+    if is_rounded {
+        let sk_rect = to_sk_rect(rect);
+        let radii_arr = [
+            SkPoint::new(radii.tl, radii.tl),
+            SkPoint::new(radii.tr, radii.tr),
+            SkPoint::new(radii.br, radii.br),
+            SkPoint::new(radii.bl, radii.bl),
+        ];
+        let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
+        canvas.draw_rrect(rrect, &paint);
+    } else {
+        canvas.draw_rect(to_sk_rect(rect), &paint);
+    }
+
+    if let Some(stroke) = stroke {
+        let mut p = SkPaint::new(to_sk_color(stroke.color), None);
+        p.set_style(PaintStyle::Stroke);
+        p.set_stroke_width(stroke.width);
+        p.set_anti_alias(true);
+        if is_rounded {
+            let sk_rect = to_sk_rect(rect);
+            let radii_arr = [
+                SkPoint::new(radii.tl, radii.tl),
+                SkPoint::new(radii.tr, radii.tr),
+                SkPoint::new(radii.br, radii.br),
+                SkPoint::new(radii.bl, radii.bl),
+            ];
+            let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
+            canvas.draw_rrect(rrect, &p);
+        } else {
+            canvas.draw_rect(to_sk_rect(rect), &p);
+        }
+    }
+}
+
+fn draw_shadowed_rect(
+    canvas: &skia_safe::Canvas,
+    rect: Rect,
+    radii: BorderRadii,
+    shadow: &jian_core::render::ShadowSpec,
+) {
+    // Draw a blurred copy of the shape in `shadow.color` offset by
+    // (dx, dy). The foreground fill lands via a subsequent draw-op.
+    let c4 = to_sk_color(shadow.color);
+    let mut paint = SkPaint::new(c4, None);
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Fill);
+    // Skia's blur filter uses sigma; CSS-ish `blur` is ~= sigma * 2.
+    let sigma = (shadow.blur * 0.5).max(0.0);
+    if sigma > 0.0 {
+        paint.set_mask_filter(skia_safe::MaskFilter::blur(
+            BlurStyle::Normal,
+            sigma,
+            None,
+        ));
+    }
+    let offset_rect = Rect::new(
+        jian_core::geometry::point(rect.min_x() + shadow.dx, rect.min_y() + shadow.dy),
+        rect.size,
+    );
+    let is_rounded = radii != BorderRadii::zero();
+    if is_rounded {
+        let sk_rect = to_sk_rect(offset_rect);
+        let radii_arr = [
+            SkPoint::new(radii.tl, radii.tl),
+            SkPoint::new(radii.tr, radii.tr),
+            SkPoint::new(radii.br, radii.br),
+            SkPoint::new(radii.bl, radii.bl),
+        ];
+        let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
+        canvas.draw_rrect(rrect, &paint);
+    } else {
+        canvas.draw_rect(to_sk_rect(offset_rect), &paint);
     }
 }
 
