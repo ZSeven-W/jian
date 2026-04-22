@@ -1,0 +1,40 @@
+[package]
+name         = "jian-host-desktop"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "winit-based desktop host for the Jian runtime"
+
+[features]
+# Default = pure-function translators + in-memory services. No winit
+# event loop is started unless a `run_*` helper is called, and no
+# platform-specific surface feature is picked up automatically so CI
+# stays windowless.
+default = []
+
+# Opt-in to real event-loop run helpers. Gated because opening a
+# real window needs a display and is incompatible with headless CI.
+run = []
+
+# Native OS feature flags for the optional integrations (added when
+# the implementations land):
+clipboard = ["dep:arboard"]
+
+[dependencies]
+jian-core       = { path = "../jian-core" }
+jian-ops-schema = { path = "../jian-ops-schema" }
+jian-skia       = { path = "../jian-skia" }
+winit         = "0.30"
+async-trait   = "0.1"
+serde_json    = { workspace = true }
+arboard       = { version = "3", optional = true }
+
+[dev-dependencies.futures]
+version = "0.3"
+
+[[bin]]
+name = "jian-player"
+path = "src/bin/jian-player.rs"

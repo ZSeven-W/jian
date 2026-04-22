@@ -29,7 +29,10 @@ enum Cmd {
     PushClip(Rect),
     PushTransform(Affine2),
     Pop,
-    PushLayer { bounds: Rect, filter: Option<ImageFilter> },
+    PushLayer {
+        bounds: Rect,
+        filter: Option<ImageFilter>,
+    },
     PopLayer,
     Draw(DrawOp),
 }
