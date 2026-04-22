@@ -49,12 +49,13 @@ jobs:
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - name: macos-x86_64
-            os: macos-13
-            target: x86_64-apple-darwin
           - name: macos-aarch64
             os: macos-latest
             target: aarch64-apple-darwin
+          # Intel Mac coverage intentionally dropped: Apple stopped
+          # selling Intel Macs in 2023 and GitHub's `macos-13` runners
+          # have constrained capacity. Re-add if a user reports an
+          # Intel-specific regression.
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
