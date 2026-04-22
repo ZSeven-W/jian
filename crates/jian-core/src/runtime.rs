@@ -70,6 +70,9 @@ pub struct Runtime {
     /// when the runtime is built via `new_from_document`.
     pub audit: Option<Rc<AuditLog>>,
     pub permissions: Rc<dyn PermissionBroker>,
+    /// Tier-3 logic provider — how `call` actions dispatch. Null by
+    /// default; hosts override with `set_logic_provider`.
+    pub logic: Rc<dyn crate::logic::LogicProvider>,
 }
 
 impl Runtime {
@@ -99,7 +102,16 @@ impl Runtime {
             capabilities: Rc::new(DummyCapabilityGate),
             audit: None,
             permissions: Rc::new(NullPermissionBroker),
+            logic: Rc::new(crate::logic::NullLogicProvider),
         }
+    }
+
+    /// Install a Tier-3 `LogicProvider`. Replaces the default
+    /// `NullLogicProvider` and takes effect for every subsequent
+    /// `call` action dispatch (the cached `ActionContext` is rebuilt
+    /// per action chain, so no cache invalidation is needed).
+    pub fn set_logic_provider(&mut self, provider: Rc<dyn crate::logic::LogicProvider>) {
+        self.logic = provider;
     }
 
     /// Build a runtime whose `CapabilityGate` is derived from the
@@ -153,6 +165,7 @@ impl Runtime {
             capabilities: gate,
             audit: Some(audit),
             permissions: Rc::new(NullPermissionBroker),
+            logic: Rc::new(crate::logic::NullLogicProvider),
         })
     }
 
@@ -214,7 +227,12 @@ impl Runtime {
     fn dispatch_semantic(&self, event: &SemanticEvent) -> ExecOutcome {
         let doc = self.document.as_ref().expect("no document loaded");
         let ctx = self.make_action_ctx();
-        dispatch_event(doc, event, &self.actions, &ctx)
+        let outcome = dispatch_event(doc, event, &self.actions, &ctx);
+        // Actions mutate state via Signals whose effects are scheduled;
+        // flush synchronously so bindings / scene observers see the new
+        // values before the host's next frame.
+        self.scheduler.flush();
+        outcome
     }
 
     /// Build an `ActionContext` tied to this runtime's services. Exposed
@@ -235,6 +253,7 @@ impl Runtime {
             async_fb: self.async_feedback.clone(),
             clipboard: self.clipboard.clone(),
             capabilities: self.capabilities.clone(),
+            logic: self.logic.clone(),
             expr_cache: self.expr_cache.clone(),
             cancel: CancellationToken::new(),
             warnings: RefCell::new(Vec::new()),

@@ -178,6 +178,62 @@ fn long_press_claim_via_tick_suppresses_subsequent_tap() {
 }
 
 #[test]
+fn dispatch_pointer_flushes_bindings() {
+    // Regression (Codex review): Runtime::dispatch_pointer used to run
+    // actions without flushing the signal scheduler, leaving bindings
+    // stale. A binding observer captures effect invocations — after a
+    // tap, it must see the new value without any manual flush.
+    use jian_core::binding::BindingEffect;
+    use jian_core::expression::Expression;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut rt = make_runtime();
+    let btn = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+    let rect = rt.layout.node_rect(btn).unwrap();
+    let cx = rect.min_x() + rect.size.width / 2.0;
+    let cy = rect.min_y() + rect.size.height / 2.0;
+
+    let observed: Rc<RefCell<Vec<i64>>> = Rc::new(RefCell::new(Vec::new()));
+    let obs = observed.clone();
+    let expr = Expression::compile("$app.count").unwrap();
+    let _binding = BindingEffect::new(
+        &rt.effects,
+        expr,
+        rt.state.clone(),
+        None,
+        None,
+        move |v, _| {
+            if let Some(n) = v.as_i64() {
+                obs.borrow_mut().push(n);
+            }
+        },
+    );
+
+    // Initial eval fires once with count=0.
+    assert_eq!(observed.borrow().as_slice(), &[0]);
+
+    let _ = rt.dispatch_pointer(PointerEvent::simple(
+        7,
+        PointerPhase::Down,
+        jian_core::geometry::point(cx, cy),
+    ));
+    let _ = rt.dispatch_pointer(PointerEvent::simple(
+        7,
+        PointerPhase::Up,
+        jian_core::geometry::point(cx, cy),
+    ));
+
+    // No explicit scheduler.flush() call — the runtime should have
+    // flushed internally after the tap fired its handler.
+    assert_eq!(
+        observed.borrow().as_slice(),
+        &[0, 1],
+        "binding observer should have seen both 0 (initial) and 1 (after tap)"
+    );
+}
+
+#[test]
 fn miss_outside_button_does_not_fire_tap() {
     let mut rt = make_runtime();
     let down = PointerEvent::simple(
