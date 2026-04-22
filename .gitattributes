@@ -1,0 +1,16 @@
+# Force LF line endings for all text files so Windows checkout (with
+# core.autocrlf=true by default) doesn't rewrite JSON schemas / Rust
+# sources into CRLF, which breaks byte-exact tests like schema_drift.
+* text=auto eol=lf
+
+# Binary assets: never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

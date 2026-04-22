@@ -16,8 +16,12 @@ fn schema_is_up_to_date() {
     let tracked_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("bindings")
         .join("ops.schema.json");
-    let tracked = fs::read_to_string(&tracked_path)
+    let tracked_raw = fs::read_to_string(&tracked_path)
         .unwrap_or_else(|_| panic!("missing tracked schema file: {}", tracked_path.display()));
+    // Normalize line endings — on Windows `core.autocrlf` may rewrite the
+    // tracked file into CRLF on checkout, which would fail byte-exact
+    // comparison against the LF output of serde_json.
+    let tracked = tracked_raw.replace("\r\n", "\n");
 
     if current_json != tracked {
         let cur_lines: Vec<_> = current_json.lines().collect();
