@@ -11,11 +11,13 @@ pub fn to_sk_point(p: Point) -> SkPoint {
     SkPoint::new(p.x, p.y)
 }
 
-/// `euclid::Affine2` stores `[m11, m12, m21, m22, m31, m32]` where the
-/// matrix is `[[m11, m12, 0], [m21, m22, 0], [m31, m32, 1]]` in row-major
-/// column-vector convention (pre-multiply). Skia's `Matrix` takes
-/// `scale_x, skew_x, trans_x, skew_y, scale_y, trans_y` in row-major
-/// row-vector convention. The lift is a transpose plus row reorder.
+/// `euclid::Transform2D` uses **row-vector × matrix** convention
+/// (`[x y 1] · M`), so `to_array() = [m11, m12, m21, m22, m31, m32]`
+/// where `x' = x*m11 + y*m21 + m31`. Skia's `Matrix::set_all` takes
+/// `(scale_x, skew_x, trans_x, skew_y, scale_y, trans_y, 0, 0, 1)`
+/// under the same row-vector convention, so the mapping is a direct
+/// column-swap (columns 0 and 1 of euclid's matrix become rows 0 and 1
+/// of Skia's).
 pub fn to_sk_matrix(m: &Affine2) -> Matrix {
     let a = m.to_array();
     let mut out = Matrix::new_identity();

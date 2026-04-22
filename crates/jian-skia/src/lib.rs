@@ -14,6 +14,7 @@
 //! let mut backend = SkiaBackend::new();
 //! let mut surface = backend.new_surface(size(100.0, 100.0));
 //! backend.begin_frame(&mut surface, 0xffffffff);
+//! // Trait calls are buffered; `end_frame` replays them onto the canvas.
 //! backend.draw(&DrawOp::Rect {
 //!     rect: rect(10.0, 10.0, 80.0, 80.0),
 //!     paint: Paint::solid(Color::rgb(0x1e, 0x88, 0xe5)),
