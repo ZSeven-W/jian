@@ -78,6 +78,23 @@ pub struct TextRun {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ImageHandle(pub u64);
 
+/// A single colour stop in a gradient, `offset` in `[0.0, 1.0]`.
+#[derive(Debug, Clone, Copy)]
+pub struct GradientStop {
+    pub offset: f32,
+    pub color: Color,
+}
+
+/// Gradient fill description — a linear sweep across the target rect
+/// at `angle_deg` (0° = left-to-right, 90° = top-to-bottom). MVP
+/// supports only linear; radial can join as a sibling variant.
+#[derive(Debug, Clone)]
+pub struct LinearGradient {
+    pub angle_deg: f32,
+    pub stops: Vec<GradientStop>,
+    pub opacity: f32,
+}
+
 /// A self-contained drawing operation issued by the scene walker to the backend.
 #[derive(Debug, Clone)]
 pub enum DrawOp {
@@ -100,6 +117,24 @@ pub enum DrawOp {
         opacity: f32,
     },
     Text(TextRun),
+    /// Rounded rect with a linear gradient fill (and optional stroke).
+    /// `radii` may be `BorderRadii::zero()` for a plain rect. Emitted
+    /// directly by the scene walker for nodes whose `fill[]` starts
+    /// with a `linear_gradient` entry.
+    LinearGradientRect {
+        rect: Rect,
+        radii: BorderRadii,
+        gradient: LinearGradient,
+        stroke: Option<StrokeOp>,
+    },
+    /// A rounded rect with an outer drop shadow drawn underneath. The
+    /// paint / gradient layer draws on top of the blur. Emitted when a
+    /// node has `effects: [{ type: "shadow", ... }]`.
+    ShadowedRect {
+        rect: Rect,
+        radii: BorderRadii,
+        shadow: ShadowSpec,
+    },
 }
 
 #[cfg(test)]
