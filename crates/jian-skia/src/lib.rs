@@ -26,6 +26,7 @@
 pub mod backend;
 pub mod color;
 pub mod convert;
+pub mod icons;
 pub mod path;
 pub mod surface;
 
