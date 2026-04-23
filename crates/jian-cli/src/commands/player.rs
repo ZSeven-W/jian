@@ -96,9 +96,7 @@ fn measured_content_bounds(rt: &Runtime) -> Option<(f32, f32)> {
 /// at the design's intrinsic size. Returns `None` if the document
 /// doesn't declare a top-level framed root (e.g. a bare children
 /// array with no size metadata).
-fn root_frame_size(
-    schema: &jian_ops_schema::document::PenDocument,
-) -> Option<(f32, f32)> {
+fn root_frame_size(schema: &jian_ops_schema::document::PenDocument) -> Option<(f32, f32)> {
     use jian_ops_schema::node::PenNode;
     use jian_ops_schema::sizing::SizingBehavior;
 

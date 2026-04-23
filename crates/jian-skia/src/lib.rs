@@ -1,9 +1,11 @@
 //! `jian-skia` — Skia-backed `RenderBackend` for the Jian runtime.
 //!
 //! The crate is backend-agnostic by default: the raster surface (created
-//! with [`SkiaBackend::new_raster`]) lets tests render without a GPU
-//! context. Host adapters (desktop Plan 8, web Plan 12) plug in a
-//! platform-specific GPU surface via [`SkiaBackend::new_with_surface`].
+//! via [`RenderBackend::new_surface`]) lets tests render without a GPU
+//! context. Host adapters (desktop Plan 8, web Plan 12) drive Skia
+//! through their own GPU-backed [`SkiaSurface`].
+//!
+//! [`RenderBackend::new_surface`]: jian_core::render::RenderBackend::new_surface
 //!
 //! ```no_run
 //! use jian_core::geometry::{rect, size};

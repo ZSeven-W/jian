@@ -9,8 +9,8 @@ pub mod paint;
 
 pub use commands::{affine_to_array, RenderCommand};
 pub use paint::{
-    BorderRadii, DrawOp, GradientStop, ImageHandle, LinearGradient, Paint, PathCommand,
-    ShadowSpec, StrokeOp, TextAlign, TextRun,
+    BorderRadii, DrawOp, GradientStop, ImageHandle, LinearGradient, Paint, PathCommand, ShadowSpec,
+    StrokeOp, TextAlign, TextRun,
 };
 
 use crate::geometry::{Affine2, Rect, Size};

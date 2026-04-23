@@ -212,7 +212,9 @@ fn stroke_op(json: &Value) -> Option<StrokeOp> {
         if let Some(n) = t.as_f64() {
             Some(n as f32)
         } else if let Some(obj) = t.as_object() {
-            obj.get("uniform").and_then(|u| u.as_f64()).map(|n| n as f32)
+            obj.get("uniform")
+                .and_then(|u| u.as_f64())
+                .map(|n| n as f32)
         } else {
             None
         }
@@ -258,7 +260,10 @@ fn try_text(json: &Value, r: jian_core::geometry::Rect) -> Option<DrawOp> {
         Value::Array(segs) => {
             let mut buf = String::new();
             for seg in segs {
-                if let Some(t) = seg.as_object().and_then(|o| o.get("text")).and_then(|t| t.as_str())
+                if let Some(t) = seg
+                    .as_object()
+                    .and_then(|o| o.get("text"))
+                    .and_then(|t| t.as_str())
                 {
                     buf.push_str(t);
                 }

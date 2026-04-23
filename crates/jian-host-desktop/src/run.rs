@@ -30,10 +30,7 @@ use winit::window::{Window, WindowId};
 
 /// Convert a winit physical-pixel `PhysicalSize<u32>` into an `(f32, f32)`
 /// logical-pixel tuple suitable for `Runtime::build_layout`.
-fn logical_size_f32(
-    phys: winit::dpi::PhysicalSize<u32>,
-    scale: f64,
-) -> (f32, f32) {
+fn logical_size_f32(phys: winit::dpi::PhysicalSize<u32>, scale: f64) -> (f32, f32) {
     let w = (phys.width as f64 / scale).max(1.0) as f32;
     let h = (phys.height as f64 / scale).max(1.0) as f32;
     (w, h)

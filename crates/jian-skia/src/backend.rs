@@ -214,7 +214,11 @@ fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp) {
             gradient,
             stroke,
         } => draw_linear_gradient_rect(canvas, *rect, *radii, gradient, stroke.as_ref()),
-        DrawOp::ShadowedRect { rect, radii, shadow } => {
+        DrawOp::ShadowedRect {
+            rect,
+            radii,
+            shadow,
+        } => {
             draw_shadowed_rect(canvas, *rect, *radii, shadow);
         }
         DrawOp::Icon {
@@ -454,11 +458,7 @@ fn draw_shadowed_rect(
     // Skia's blur filter uses sigma; CSS-ish `blur` is ~= sigma * 2.
     let sigma = (shadow.blur * 0.5).max(0.0);
     if sigma > 0.0 {
-        paint.set_mask_filter(skia_safe::MaskFilter::blur(
-            BlurStyle::Normal,
-            sigma,
-            None,
-        ));
+        paint.set_mask_filter(skia_safe::MaskFilter::blur(BlurStyle::Normal, sigma, None));
     }
     let offset_rect = Rect::new(
         jian_core::geometry::point(rect.min_x() + shadow.dx, rect.min_y() + shadow.dy),

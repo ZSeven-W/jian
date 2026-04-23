@@ -2,7 +2,7 @@
 //!
 //! This crate wires [`jian_core::Runtime`] into a real OS window:
 //!
-//! - [`pointer`] translates `winit::event::WindowEvent` mouse / touch
+//! - [`mod@pointer`] translates `winit::event::WindowEvent` mouse / touch
 //!   input into `jian_core::gesture::PointerEvent`.
 //! - [`keyboard`] translates `winit::event::KeyEvent` into a neutral
 //!   key-string + `Modifiers` pair.

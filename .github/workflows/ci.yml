@@ -60,7 +60,21 @@ jobs:
             target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
+      # Windows: enable long path support so skia-bindings can extract
+      # harfbuzz's vendor tree (test fixtures with very long names)
+      # during `cargo build`. Must run before checkout / build.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
       - uses: actions/checkout@v4
+      # Linux: skia-safe links system fontconfig + freetype by default.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
