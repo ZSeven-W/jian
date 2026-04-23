@@ -55,9 +55,6 @@ jobs:
           - name: windows-x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
-          - name: windows-aarch64
-            os: windows-11-arm
-            target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
       # Windows: enable long path support so skia-bindings can extract
@@ -84,6 +81,29 @@ jobs:
       - run: cargo build --workspace --all-targets --target ${{ matrix.target }}
       - run: cargo test --workspace --all-targets --target ${{ matrix.target }}
       - run: cargo test --workspace --doc --target ${{ matrix.target }}
+
+  # ARM64 Windows coverage: x86_64 runner cross-compiles to
+  # `aarch64-pc-windows-msvc`. The `fetch-gn` script in skia-bindings
+  # has no prebuilt gn binary for ARM64 Windows, so native
+  # `windows-11-arm` runners fail. Tests can't execute on a mismatched
+  # host, so this is compile-only.
+  windows-aarch64-cross:
+    name: windows-aarch64 (cross-compile)
+    runs-on: windows-latest
+    steps:
+      - shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-pc-windows-msvc-cross
+      - run: cargo build --workspace --all-targets --target aarch64-pc-windows-msvc
 
   # Intel Mac (x86_64) coverage: Apple-Silicon runner cross-compiles
   # to `x86_64-apple-darwin`. This catches cfg / target drift without
