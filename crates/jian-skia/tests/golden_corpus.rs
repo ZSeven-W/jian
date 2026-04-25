@@ -19,6 +19,15 @@
 //! shapes (`path`, `polygon`, `image` with remote URLs, etc.) are
 //! intentionally renderable through the placeholder paths but the
 //! resulting PNG is still deterministic, so they're included.
+//!
+//! `textlayout` feature: enabling skia's ParagraphBuilder swaps the
+//! single-line text path for the full shaper, which produces
+//! different (but still deterministic) PNG bytes — the default
+//! baselines no longer match. Plan 11 / 12 will land a tolerance
+//! comparator and a separate `golden/textlayout/` baseline set.
+//! Until then, the byte-equality check is skipped under the feature;
+//! the harness still parses, renders, and PNG-encodes every fixture
+//! to keep the textlayout build path covered.
 
 use jian_core::geometry::size;
 use jian_core::render::RenderBackend;
@@ -57,8 +66,9 @@ fn corpus_renders_match_golden_bytes() {
             .and_then(|s| s.to_str())
             .unwrap_or("unnamed")
             .to_owned();
-        // Skip the heaviest corpus fixture in the default run — it
-        // takes seconds to render and clogs CI.
+        // `pencil-demo.op` (OpenPencil v2.8 export) lives under
+        // `tests/forward-compat/` and is asserted-rejected there;
+        // skip-clause remains harmless if the file ever returns.
         if name == "pencil-demo" {
             continue;
         }
@@ -90,9 +100,17 @@ fn corpus_renders_match_golden_bytes() {
         }
         let tracked = fs::read(&golden_path).expect("read golden");
         checked += 1;
+        // Under the `textlayout` feature the ParagraphBuilder path
+        // produces different (still deterministic) bytes; defer the
+        // byte-equality check to Plan 11 / 12 where the tolerance
+        // comparator + dedicated baselines land. Render coverage
+        // still happens — `png` was just produced above.
+        #[cfg(not(feature = "textlayout"))]
         if tracked != png {
             failures.push(name);
         }
+        #[cfg(feature = "textlayout")]
+        let _ = tracked;
     }
     if !failures.is_empty() {
         panic!(

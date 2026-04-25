@@ -41,10 +41,9 @@ fn with_variables() {
 fn pages() {
     assert_roundtrip("pages.op");
 }
-#[test]
-fn pencil_demo() {
-    assert_roundtrip("pencil-demo.op");
-}
+// `pencil-demo.op` (OpenPencil v2.8 export) lives under
+// `tests/forward-compat/` now — `forward_compat.rs` asserts the
+// loader rejects v2 documents with `UnsupportedFormatVersion`.
 #[test]
 fn full_jian_extensions() {
     assert_roundtrip("full-jian-extensions.op");
