@@ -66,37 +66,48 @@ fn walk(
 fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawOp>) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
 
-    // --- Image nodes emit a `DrawOp::Image` directly. The decoder
-    // lives in jian-skia's image cache, keyed by URL string; data:
-    // URLs decode inline, http(s) URLs need a host resolver (Plan 12)
-    // and currently fall back to a grey placeholder in the backend.
-    if json.get("type").and_then(|t| t.as_str()) == Some("image") {
-        if let Some(src) = json.get("src").and_then(|v| v.as_str()) {
-            let opacity = json
-                .get("opacity")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1.0) as f32;
-            out.push(DrawOp::Image {
-                source: classify_source(src),
-                dst: rect_logical,
-                opacity,
+    // --- Image emission. Image nodes and `image` fills both paint
+    // through `DrawOp::Image`, but they still want any drop-shadow
+    // *under* and any stroke *around* the image. Compute shadow/stroke
+    // up-front so the emit ordering is shadow → image → stroke even
+    // when this branch returns early.
+    let image_source = image_source_for(json);
+    if let Some((source, opacity)) = image_source {
+        let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
+        if let Some(shadow) = first_shadow(json) {
+            out.push(DrawOp::ShadowedRect {
+                rect: rect_logical,
+                radii,
+                shadow,
             });
-            return;
         }
-    }
-
-    // --- Image fills (PenFill::Image) — paint the underlying rect via
-    // an Image op so the fill resolves through the same cache path.
-    let first_fill_for_image = json
-        .get("fill")
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.first());
-    if let Some(image_fill) = first_fill_for_image.and_then(try_image_fill) {
         out.push(DrawOp::Image {
-            source: classify_source(&image_fill.url),
+            source,
             dst: rect_logical,
-            opacity: image_fill.opacity,
+            opacity,
         });
+        if let Some(stroke) = stroke_op(json) {
+            // Image carries no built-in stroke; emit a stroke-only
+            // rect on top so border styling round-trips. Rounded
+            // corners use RoundedRect for a matching outline.
+            let paint = Paint {
+                fill: None,
+                stroke: Some(stroke),
+                opacity: 1.0,
+            };
+            if radii != BorderRadii::zero() {
+                out.push(DrawOp::RoundedRect {
+                    rect: rect_logical,
+                    radii,
+                    paint,
+                });
+            } else {
+                out.push(DrawOp::Rect {
+                    rect: rect_logical,
+                    paint,
+                });
+            }
+        }
         return;
     }
 
@@ -199,19 +210,29 @@ fn classify_source(src: &str) -> ImageSource {
     }
 }
 
-struct ImageFill {
-    url: String,
-    opacity: f32,
-}
-
-fn try_image_fill(fill: &Value) -> Option<ImageFill> {
-    let obj = fill.as_object()?;
+/// Resolve which image source (if any) a node should paint with. Image
+/// nodes win over image fills; fills only fire on non-image nodes with
+/// `fill[0].type == "image"`. Returns `(source, opacity)`.
+fn image_source_for(json: &Value) -> Option<(ImageSource, f32)> {
+    if json.get("type").and_then(|t| t.as_str()) == Some("image") {
+        let src = json.get("src").and_then(|v| v.as_str())?;
+        let opacity = json
+            .get("opacity")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0) as f32;
+        return Some((classify_source(src), opacity));
+    }
+    let first_fill = json
+        .get("fill")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())?;
+    let obj = first_fill.as_object()?;
     if obj.get("type").and_then(|t| t.as_str()) != Some("image") {
         return None;
     }
     let url = obj.get("url").and_then(|v| v.as_str())?.to_owned();
     let opacity = obj.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    Some(ImageFill { url, opacity })
+    Some((classify_source(&url), opacity))
 }
 
 fn try_linear_gradient(fill: &Value) -> Option<LinearGradient> {
