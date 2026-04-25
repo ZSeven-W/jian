@@ -22,6 +22,13 @@ run = ["dep:softbuffer"]
 # Native OS feature flags for the optional integrations (added when
 # the implementations land):
 clipboard = ["dep:arboard"]
+# Native menus via `muda` — cross-platform (macOS / Windows / Linux).
+# Phase 1 ships a pure menu *spec* (`MenuSpec`) so authors can
+# declare File / Edit / View entries; the actual `muda::Menu`
+# wiring activates when the host opens its window. Pulled in
+# under a feature flag because the shared library footprint isn't
+# needed for headless / CI builds.
+menus = ["dep:muda"]
 
 [dependencies]
 jian-core       = { path = "../jian-core" }
@@ -29,9 +36,11 @@ jian-ops-schema = { path = "../jian-ops-schema" }
 jian-skia       = { path = "../jian-skia" }
 winit           = "0.30"
 async-trait     = "0.1"
+serde           = { workspace = true }
 serde_json      = { workspace = true }
 arboard         = { version = "3", optional = true }
 softbuffer      = { version = "0.4", optional = true }
+muda            = { version = "0.13", optional = true }
 
 [dev-dependencies.futures]
 version = "0.3"

@@ -31,6 +31,7 @@
 
 pub mod host;
 pub mod keyboard;
+pub mod menus;
 pub mod pointer;
 pub mod scene;
 pub mod services;
@@ -39,4 +40,5 @@ pub mod services;
 mod run;
 
 pub use host::DesktopHost;
+pub use menus::{MenuItem, MenuSpec};
 pub use scene::collect_draws;
