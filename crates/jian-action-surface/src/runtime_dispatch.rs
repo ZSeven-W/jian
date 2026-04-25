@@ -57,7 +57,29 @@ impl<'a> ActionDispatcher for RuntimeDispatcher<'a> {
         match action.source_kind {
             SourceKind::SetValue => dispatch_set_value(self.runtime, action, params),
             SourceKind::OpenRoute => dispatch_open_route(self.runtime, action, params),
-            _ => dispatch_pointer_tap(self.runtime, action),
+            // Phase 1 only synthesises Tap. A bare Down+Up at the
+            // node centre claims through `TapRecognizer` and fires
+            // `events.onTap` — which is also where authors wire
+            // `events.onSubmit` / `onConfirm` / `onDismiss` in
+            // practice, so those reuse the same synthesis safely.
+            SourceKind::Tap | SourceKind::Submit | SourceKind::Confirm | SourceKind::Dismiss => {
+                dispatch_pointer_tap(self.runtime, action)
+            }
+            // DoubleTap / LongPress / Swipe* / Scroll / LoadMore each
+            // need their own semantic-event synthesis (a tick-driven
+            // LongPress claim, a multi-step swipe path, a wheel
+            // dispatch, etc). Until those paths land, refuse the
+            // call rather than misroute it through `onTap` — the
+            // surface returns ExecutionFailed(handler_error) and the
+            // audit row records the same code, matching spec §4.2.
+            SourceKind::DoubleTap
+            | SourceKind::LongPress
+            | SourceKind::SwipeLeft
+            | SourceKind::SwipeRight
+            | SourceKind::SwipeUp
+            | SourceKind::SwipeDown
+            | SourceKind::Scroll
+            | SourceKind::LoadMore => Err(ExecuteError::handler_error()),
         }
     }
 }
@@ -80,6 +102,20 @@ fn dispatch_pointer_tap(runtime: &mut Runtime, action: &ActionDefinition) -> Res
     Ok(())
 }
 
+/// SetValue dispatch — writes the bound value into the **app** state
+/// scope.
+///
+/// `derive::bind_target` validates the source binding is
+/// `$state.<flat-key>` (no dotted segments, no other scope prefix).
+/// At read time `$state.<key>` walks `$self → $page → $app`, but the
+/// runtime's own `set` action only writes scopes that were named
+/// explicitly (`$app.x` / `$self.x` / `$page.x`); `$state.x` is not a
+/// writable form. We therefore canonicalise SetValue dispatch to
+/// `app_set` — which matches the OpenPencil convention where
+/// document-level `state: { … }` declarations live in the app scope
+/// and `bind:value` is wired against them. Authors who need to
+/// write `$self`- or `$page`-scoped state should use an explicit
+/// `set:` action handler in `events.*` rather than a `bind:value`.
 fn dispatch_set_value(
     runtime: &mut Runtime,
     action: &ActionDefinition,
@@ -165,9 +201,11 @@ fn source_node<'a>(runtime: &'a Runtime, node_id: &str) -> Option<&'a PenNode> {
 }
 
 /// Replace `:name` segments in `template` with the corresponding
-/// `params[name]` value (stringified). Unknown placeholders pass
-/// through unchanged so the router can surface a 404 / not-found
-/// rather than us silently dropping the segment.
+/// `params[name]` value, percent-encoded so `/`, `?`, `#`, `%`,
+/// whitespace, and other reserved characters can't break out of the
+/// path segment. Unknown placeholders pass through unchanged so
+/// the router surfaces a 404 / not-found rather than us silently
+/// dropping the segment.
 fn substitute_route_params(template: &str, params: &Map<String, Value>) -> String {
     template
         .split('/')
@@ -182,12 +220,48 @@ fn substitute_route_params(template: &str, params: &Map<String, Value>) -> Strin
         .join("/")
 }
 
+/// Stringify a JSON value into a single URL path segment. Escapes
+/// every character that isn't an unreserved RFC 3986 char so the
+/// resulting path is unambiguous when the router parses it back.
 fn value_to_path_segment(v: &Value) -> String {
-    match v {
+    let raw = match v {
         Value::String(s) => s.clone(),
         Value::Number(n) => n.to_string(),
         Value::Bool(b) => b.to_string(),
         _ => v.to_string(),
+    };
+    percent_encode_segment(&raw)
+}
+
+/// Percent-encode anything outside the RFC 3986 *unreserved* set
+/// (`A-Z a-z 0-9 - _ . ~`). That's stricter than what URLs accept
+/// inside a path segment, but errs on the safe side: the router
+/// will percent-decode whichever bytes it cares about.
+fn percent_encode_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for byte in s.as_bytes() {
+        let b = *byte;
+        let unreserved = b.is_ascii_alphanumeric()
+            || b == b'-'
+            || b == b'_'
+            || b == b'.'
+            || b == b'~';
+        if unreserved {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(hex_nibble(b >> 4));
+            out.push(hex_nibble(b & 0x0f));
+        }
+    }
+    out
+}
+
+fn hex_nibble(n: u8) -> char {
+    match n {
+        0..=9 => (b'0' + n) as char,
+        10..=15 => (b'A' + n - 10) as char,
+        _ => '0',
     }
 }
 
@@ -216,6 +290,32 @@ mod path_tests {
         let mut params = Map::new();
         params.insert("slug".into(), Value::String("about".into()));
         assert_eq!(substitute_route_params(":slug", &params), "about");
+    }
+
+    #[test]
+    fn substitute_percent_encodes_reserved_chars() {
+        // A param value containing `/` or whitespace must not break
+        // out of its path segment — otherwise an attacker (or sloppy
+        // input) can hijack the route shape.
+        let mut params = Map::new();
+        params.insert("id".into(), Value::String("a/b c".into()));
+        assert_eq!(
+            substitute_route_params("/detail/:id", &params),
+            "/detail/a%2Fb%20c"
+        );
+    }
+
+    #[test]
+    fn percent_encode_preserves_unreserved() {
+        assert_eq!(percent_encode_segment("Abc-1.2_~"), "Abc-1.2_~");
+    }
+
+    #[test]
+    fn percent_encode_escapes_unicode_bytes() {
+        // Non-ASCII goes byte-by-byte (UTF-8 multi-byte → multiple
+        // %XX pairs). The router can decide whether to percent-decode.
+        let s = percent_encode_segment("中");
+        assert_eq!(s, "%E4%B8%AD");
     }
 }
 
@@ -283,6 +383,45 @@ mod tests {
         assert_eq!(
             rt.state.app_get("email").and_then(|v| v.as_str().map(str::to_owned)),
             Some("fini@example.com".to_owned()),
+        );
+    }
+
+    #[test]
+    fn unsupported_source_kinds_return_handler_error() {
+        // SwipeLeft synthesis isn't wired yet — Phase 1 must refuse
+        // rather than misroute the call through `onTap`.
+        // Derive emits 4 swipe_*_<slug> actions when both
+        // onPanStart + onPanEnd handlers are non-empty.
+        let (mut rt, doc) = build_runtime(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"feed","width":300,"height":200,
+                  "semantics":{ "aiName":"feed" },
+                  "events":{
+                    "onPanStart": [ { "set": { "$state.swiping": "true" } } ],
+                    "onPanEnd":   [ { "set": { "$state.swiped":  "true" } } ]
+                  }
+                }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]);
+        let mut dispatcher = RuntimeDispatcher::new(&mut rt);
+        let action_name = surface
+            .actions()
+            .iter()
+            .find(|a| matches!(a.source_kind, SourceKind::SwipeLeft))
+            .map(|a| a.name.full())
+            .expect("derive must emit a SwipeLeft action");
+        let out = surface.execute(&action_name, None, &mut dispatcher);
+        assert!(
+            matches!(
+                out,
+                ExecuteOutcome::Err(ExecuteError::ExecutionFailed { .. })
+            ),
+            "unsupported source kind must return handler_error, got {out:?}"
         );
     }
 

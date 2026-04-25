@@ -123,6 +123,79 @@ fn position_bindings_override_layout_rect() {
 }
 
 #[test]
+fn bind_value_projects_state_into_text_input_render() {
+    // `bindings.bind:value` is the two-way contract for writable
+    // surfaces. After a SetValue dispatch updates state, the next
+    // render must read the new value — without this projection,
+    // the input keeps painting the static schema `value`.
+    let rt = rt(
+        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+              "app": { "name":"x","version":"1","id":"x" },
+              "state": { "email": { "type":"string", "default":"fini@example.com" } },
+              "children": [
+                { "type":"text_input", "id":"email-input",
+                  "width":200, "height":40,
+                  "placeholder":"you@example.com",
+                  "value":"",
+                  "bindings": { "bind:value": "$state.email" } }
+              ]}"##,
+    );
+    let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
+    let painted = ops
+        .iter()
+        .find_map(|op| match op {
+            DrawOp::Text(run) => Some(run.content.clone()),
+            _ => None,
+        })
+        .expect("text run emitted");
+    assert_eq!(painted, "fini@example.com");
+
+    // Mutate state — re-render reflects the new value via the binding.
+    rt.state.app_set("email", json!("someone@new.com"));
+    let after = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
+    let updated = after
+        .iter()
+        .find_map(|op| match op {
+            DrawOp::Text(run) => Some(run.content.clone()),
+            _ => None,
+        })
+        .expect("text run emitted after update");
+    assert_eq!(updated, "someone@new.com");
+}
+
+#[test]
+fn fill_color_binding_skips_gradient_first_fill() {
+    // `fill[0].color` is a solid-fill contract. When the first
+    // fill is a gradient, the binding must leave it alone rather
+    // than writing a stray `color` field that the renderer ignores.
+    let rt = rt(
+        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+              "app": { "name":"x","version":"1","id":"x" },
+              "state": { "tint": { "type":"string", "default":"#ff0000" } },
+              "children": [
+                { "type":"rectangle", "id":"a", "width":100, "height":50,
+                  "fill":[{
+                    "type":"linear_gradient",
+                    "angle":0,
+                    "stops":[
+                      { "offset":0, "color":"#000000" },
+                      { "offset":1, "color":"#ffffff" }
+                    ]
+                  }],
+                  "bindings": { "fill[0].color": "$state.tint" } }
+              ]}"##,
+    );
+    let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
+    // Gradient renders unchanged — no Rect/RoundedRect with the
+    // bound colour leaks through.
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, DrawOp::LinearGradientRect { .. })),
+        "gradient must still render: {ops:?}"
+    );
+}
+
+#[test]
 fn disabled_binding_writes_through_without_breaking_render() {
     // `disabled` is metadata for the action-surface state-gate; the
     // scene walker just propagates it through. This test confirms the

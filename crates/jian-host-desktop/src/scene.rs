@@ -211,6 +211,23 @@ fn apply_bindings(
                     set_first_fill_color(obj, s);
                 }
             }
+            // Two-way input binding: project the bound state value
+            // into the node's `value` field so `emit_text_input`
+            // (and any future writable surfaces) repaint from
+            // current state. Without this, a SetValue dispatch
+            // mutates state but the input still shows the static
+            // schema `value`.
+            "bind:value" => {
+                if let Some(s) = value.as_str() {
+                    obj.insert("value".into(), Value::String(s.to_owned()));
+                } else if let Some(n) = number_from_runtime(&value) {
+                    if let Some(num) = serde_json::Number::from_f64(n) {
+                        obj.insert("value".into(), Value::Number(num));
+                    }
+                } else if let Some(b) = value.as_bool() {
+                    obj.insert("value".into(), Value::Bool(b));
+                }
+            }
             _ => {}
         }
     }
@@ -236,11 +253,30 @@ fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
         arr.push(serde_json::json!({ "type": "solid", "color": color }));
         return;
     }
-    if let Some(first) = arr[0].as_object_mut() {
-        first
-            .entry("type".to_owned())
-            .or_insert_with(|| Value::String("solid".into()));
-        first.insert("color".to_owned(), Value::String(color.to_owned()));
+    // Only mutate the first fill when it's already a solid colour.
+    // Gradient and image fills don't carry a flat `color` field, so
+    // writing one would either be a silent no-op (renderer keeps
+    // reading the gradient stops) or, worse, leave the node with a
+    // bogus mixed shape. The binding name itself — `fill[0].color`
+    // — implies a solid fill, so restricting to that contract keeps
+    // the binding honest.
+    let Some(first) = arr[0].as_object_mut() else { return };
+    let kind = first
+        .get("type")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    match kind.as_deref() {
+        // No type yet → assume solid (matches the `arr.is_empty()`
+        // branch above where we materialise a fresh solid fill).
+        None => {
+            first.insert("type".into(), Value::String("solid".into()));
+            first.insert("color".into(), Value::String(color.to_owned()));
+        }
+        Some("solid") => {
+            first.insert("color".into(), Value::String(color.to_owned()));
+        }
+        // Gradient / image / unknown types: leave untouched.
+        _ => {}
     }
 }
 

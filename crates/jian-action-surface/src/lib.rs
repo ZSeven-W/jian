@@ -5,16 +5,22 @@
 //!
 //! - `ActionSurface::list(opts)` — render the MCP-shaped response for
 //!   `list_available_actions`. Doesn't consume rate-limit tokens.
-//! - `ActionSurface::execute(name, params)` — full gating chain
-//!   (rate limit → unknown_action → static/confirm gate → params
-//!   validation → busy check). Returns either `Ok(serde_json::Value)`
-//!   in the spec's `{ ok: true }` shape or a structured `ExecuteError`
-//!   in the four-tier taxonomy.
+//! - `ActionSurface::execute(name, params)` / `execute_with_gate(...)`
+//!   — full gating chain in spec §4.2 order: lookup (`unknown_action`)
+//!   → StaticHidden / ConfirmGated → StateGated (the supplied
+//!   `StateGate`) → swipe throttle → rate limit → concurrency
+//!   (`already_running`) → param validation → dispatch. Returns
+//!   either `ExecuteOutcome::Ok` (serialises to `{ ok: true }`) or
+//!   a structured `ExecuteError` in the four-tier taxonomy.
 //!
-//! The actual side-effect (synthesised PointerEvent / SetValue /
-//! navigation) is not yet wired — that's a small follow-on; the
-//! surface returns `Ok({ok:true})` once gating + validation pass and
-//! invokes a host-supplied dispatch closure.
+//! Side effects ride on a host-supplied `ActionDispatcher`. The
+//! built-in [`RuntimeDispatcher`] wraps `&mut Runtime` and
+//! synthesises real runtime writes — Tap-class actions go through
+//! `Runtime::dispatch_pointer`, SetValue writes the state graph,
+//! OpenRoute drives the router. Less-trivial source kinds
+//! (DoubleTap / LongPress / Swipe* / Scroll / LoadMore) currently
+//! return `handler_error` until each gets its own synthesis path.
+//! Tests that only care about gating use `SinkDispatcher`.
 //!
 //! No MCP transport here yet — that's gated behind the future `mcp`
 //! cargo feature with rmcp + tokio. The Rust API is enough for
