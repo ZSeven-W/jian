@@ -511,7 +511,7 @@ fn state_type_for_path(doc_json: &Value, path: &str) -> Option<ParamTy> {
     let head = iter.next()?;
     let head_key = match head {
         PathSegment::Key(k) => k,
-        PathSegment::Index(_) => return None, // `$state.[0]` is invalid
+        PathSegment::Index => return None, // `$state.[0]` is invalid
     };
     let entry = doc_json.get("state")?.as_object()?.get(&head_key)?.get("type")?;
     let mut current = entry.clone();
@@ -524,7 +524,10 @@ fn state_type_for_path(doc_json: &Value, path: &str) -> Option<ParamTy> {
 #[derive(Debug)]
 enum PathSegment {
     Key(String),
-    Index(i64),
+    /// `[N]` / `.N` — array index. Numeric value isn't carried because
+    /// the schema-level type lookup in `traverse_type` only needs to
+    /// know the segment is *some* index, not which one.
+    Index,
 }
 
 /// Parse `a.b[0].c` / `a.0.c` into `[Key("a"), Key("b"), Index(0), Key("c")]`.
@@ -547,8 +550,8 @@ fn parse_path_segments(path: &str) -> Option<Vec<PathSegment>> {
                 in_bracket = true;
             }
             ']' if in_bracket => {
-                let n: i64 = cur.parse().ok()?;
-                out.push(PathSegment::Index(n));
+                cur.parse::<i64>().ok()?; // validate digits
+                out.push(PathSegment::Index);
                 cur.clear();
                 in_bracket = false;
                 if let Some('.') = chars.peek() {
@@ -572,8 +575,8 @@ fn parse_path_segments(path: &str) -> Option<Vec<PathSegment>> {
 }
 
 fn push_segment(out: &mut Vec<PathSegment>, raw: String) {
-    if let Ok(n) = raw.parse::<i64>() {
-        out.push(PathSegment::Index(n));
+    if raw.parse::<i64>().is_ok() {
+        out.push(PathSegment::Index);
     } else {
         out.push(PathSegment::Key(raw));
     }
@@ -586,7 +589,7 @@ fn traverse_type(ty: &Value, seg: &PathSegment) -> Option<Value> {
             // `{ object: { ... } }` — descend by named key.
             obj.get("object")?.get(k).cloned()
         }
-        PathSegment::Index(_) => {
+        PathSegment::Index => {
             // `{ array: T }` — index doesn't matter, type stays T.
             obj.get("array").cloned()
         }
@@ -860,14 +863,13 @@ mod tests {
 
     #[test]
     fn bind_value_emits_set_action() {
-        // Schema MVP doesn't define a `text_input` variant yet —
-        // a `frame` carrying `bindings: bind:value` is the closest
-        // valid form that exercises this rule.
         let doc = doc_from(
             r#"{
               "version":"0.8.0",
+              "state":{ "email":{ "type":"string", "default":"" } },
               "pages":[{ "id":"signup","name":"Sign up","children":[
-                { "type":"frame","id":"email-input",
+                { "type":"text_input","id":"email-input",
+                  "placeholder":"you@example.com",
                   "semantics":{ "aiName":"email" },
                   "bindings": { "bind:value": "$state.email" }
                 }

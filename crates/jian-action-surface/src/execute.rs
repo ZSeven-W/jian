@@ -18,7 +18,11 @@ use jian_core::action_surface::{ActionDefinition, AvailabilityStatic, ParamSpec,
 use serde_json::{Map, Value};
 
 /// What the surface decided to do with the request — either dispatch
-/// the named action or short-circuit with an error.
+/// the named action or short-circuit with an error. Test-only helper
+/// retained as a tighter contract for unit tests that don't need the
+/// state-gate / rate-limit / concurrency steps `execute_with_gate`
+/// interleaves.
+#[cfg(test)]
 #[derive(Debug)]
 pub(crate) enum Decision<'a> {
     Dispatch {
@@ -30,11 +34,11 @@ pub(crate) enum Decision<'a> {
 
 /// Resolve `name` against the derived list (matching aliases too)
 /// and run the static gate + parameter validation steps in spec
-/// §4.2 order. Side-effect-free. Kept as a single entry point for
-/// callers that don't need to interleave a state-gate / rate-limit
-/// step between gating and validation; `lookup_static_gate` +
-/// `validate_params` cover the split case (used by
-/// `ActionSurface::execute_with_gate`).
+/// §4.2 order. Side-effect-free. Test-only because production
+/// callers go through `ActionSurface::execute_with_gate`, which
+/// splits the static / state-gate / validate steps so it can
+/// interleave rate limit + concurrency between them.
+#[cfg(test)]
 pub(crate) fn decide<'a>(
     actions: &'a [ActionDefinition],
     name: &str,

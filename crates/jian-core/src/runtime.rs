@@ -622,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_wheel_finds_onScroll_target() {
+    fn dispatch_wheel_finds_on_scroll_target() {
         use crate::geometry::point;
         use crate::gesture::pointer::WheelEvent;
         let mut rt = Runtime::new();

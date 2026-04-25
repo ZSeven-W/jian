@@ -31,6 +31,7 @@ impl TokenBucket {
 
     /// Test-friendly variant that uses an injected clock so we don't
     /// need to sleep in unit tests.
+    #[cfg(test)]
     pub fn take_at(&mut self, now: Instant) -> bool {
         self.refill(now)
     }
