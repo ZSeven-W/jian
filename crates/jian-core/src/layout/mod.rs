@@ -104,11 +104,15 @@ impl LayoutEngine {
         }
     }
 
-    /// Swap the measurement backend in place. Preserves the existing
-    /// taffy tree + node-id map + parent map, so the next
-    /// `build`/`compute` cycle reuses them. Hosts call this when a
-    /// real shaper becomes available mid-session (e.g. lazy-loaded
-    /// font set finishes its initial scan).
+    /// Swap the measurement backend in place. Mutates only the
+    /// backend slot — `compute()` clones the `Rc` on entry, so a
+    /// swap *before* the next `compute()` takes effect on that
+    /// pass. The taffy tree + node-id map + parent map are *not*
+    /// preserved across `Self::build()` (which always rebuilds
+    /// from scratch); this method only matters between a `build()`
+    /// + `compute()` pair. Hosts typically call `set_backend` once
+    /// at startup, then drive layout via the regular
+    /// `build_layout` path.
     pub fn set_backend(&mut self, measure: Rc<dyn MeasureBackend>) {
         self.measure = measure;
     }
@@ -309,11 +313,13 @@ fn resolve_style(s: Option<&jian_ops_schema::node::TextFontStyle>) -> FontStyleK
 /// - `Auto`: use the container's available width (default).
 /// - `FixedWidth`: use the node's authored width *only*. When the
 ///   node was authored as `width: auto` the budget falls back to
-///   the container's available width — same effective behaviour
-///   as `Auto` in that corner case, since there's no fixed budget
-///   to honour. Authors who want a hard wrap to the container
-///   should use `Auto`; `FixedWidth` is intended for nodes with
-///   an explicit numeric width.
+///   a *definite* available width (taffy's `MinContent` /
+///   `MaxContent` intrinsic probes pass through as `None`, so the
+///   backend reports natural extent during sizing rounds) — same
+///   effective behaviour as `Auto` in the definite corner, since
+///   there's no fixed budget to honour. Authors who want a hard
+///   wrap to the container should use `Auto`; `FixedWidth` is
+///   intended for nodes with an explicit numeric width.
 /// - `FixedWidthHeight`: no wrap; report the natural single-line
 ///   extent. The renderer is responsible for clipping at the
 ///   authored bounds.

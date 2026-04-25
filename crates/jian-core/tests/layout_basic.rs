@@ -127,9 +127,14 @@ fn styled_segments_fan_out_into_runs() {
     eng2.compute(roots2[0], (800.0, 600.0)).unwrap();
     let styled = eng2.node_rect(doc_styled.tree.get("t").unwrap()).unwrap();
 
+    // The estimator's weight ratio jumps 0.58 → 0.64 at weight >= 700,
+    // a ~10% widen. Pin the styled run to *strictly wider* than 5%
+    // over uniform-400 so a regression that collapses runs into a
+    // single 400-weight measurement (effectively dropping the bold
+    // segment) actually fails this test. Equality wouldn't.
     assert!(
-        styled.size.width >= uniform.size.width,
-        "styled mix-weight run should not measure narrower than uniform 400 \
+        styled.size.width > uniform.size.width * 1.05,
+        "styled mix-weight should be ≥5% wider than uniform 400 \
          (uniform={}, styled={})",
         uniform.size.width,
         styled.size.width,
