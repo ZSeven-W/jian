@@ -150,6 +150,12 @@ pub struct ActionDefinition {
     /// `set_<slug>` carries `(value: <state-type>)`; `open_<slug>`
     /// carries one entry per `:param` placeholder in the route path.
     pub params: Vec<ParamSpec>,
+    /// `true` when the slug came from `semantics.aiName` (author
+    /// override, no hash4 suffix). `false` for auto-derived slugs.
+    /// Used by §3.4 collision handling — author collisions hide both;
+    /// auto-derived collisions get a numeric suffix instead.
+    #[serde(default)]
+    pub has_explicit_name: bool,
 }
 
 impl ActionDefinition {

@@ -24,7 +24,7 @@ pub mod derive;
 pub mod naming;
 pub mod types;
 
-pub use derive::derive_actions;
+pub use derive::{derive_actions, derive_actions_with_warnings, DeriveWarning};
 pub use naming::{compute_slug, normalize_slug, short_hash};
 pub use types::{
     ActionDefinition, ActionName, AvailabilityStatic, ParamSpec, ParamTy, Scope, SourceKind,

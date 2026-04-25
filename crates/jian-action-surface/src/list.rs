@@ -154,6 +154,7 @@ mod tests {
             status,
             aliases: vec![],
             params,
+            has_explicit_name: false,
         }
     }
 

@@ -23,23 +23,60 @@ use super::types::{
 use jian_ops_schema::document::PenDocument;
 use serde_json::Value;
 
-/// Walk `doc` and emit the deterministic action list. `build_salt` is
-/// the compile-time disambiguator (typically derived from the package
-/// version + git rev) — same input ⇒ same output, byte-for-byte.
-///
-/// Spec §3.4 conflict handling: any author-supplied `aiName` that
-/// produces the same full `<scope>.<slug>` for two or more nodes
-/// causes both (all) to downgrade to `StaticHidden`. The author has
-/// to disambiguate before the agent can call either — we don't pick
-/// a winner. Auto-derived names already disambiguate via the hash4
-/// suffix so they can't collide unless the build_salt + node id
-/// somehow produce identical hashes (16-bit collisions are possible
-/// in very large documents; we treat those the same way).
+/// Spec §3.4 collision warnings emitted by `derive_actions`. Each
+/// entry names every action involved (so an editor panel can
+/// highlight both / all of them) plus the colliding full name.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DeriveWarning {
+    /// Two or more **author-supplied** `aiName`s resolved to the same
+    /// full `<scope>.<slug>`. Spec §3.4: every action involved is
+    /// downgraded to `StaticHidden` and the author is expected to
+    /// rename one. Surfaced through the OpenPencil editor's AI
+    /// Actions Panel as a red banner.
+    AiNameCollision { full_name: String, source_node_ids: Vec<String> },
+    /// A bare or fully-qualified alias claimed a name another action
+    /// already owned (or shared). Same StaticHidden treatment.
+    AliasCollision { full_name: String, source_node_ids: Vec<String> },
+    /// Auto-derived slugs (no `aiName`) collided after the hash4
+    /// suffix. Each colliding action got a numeric suffix `_1` /
+    /// `_2` / … rather than being hidden — they remain callable, the
+    /// suffix is just internal disambiguation.
+    AutoSlugDisambiguated { base: String, count: usize },
+}
+
+/// Walk `doc` and emit the deterministic action list. Convenience
+/// wrapper around [`derive_actions_with_warnings`] for callers that
+/// don't care about §3.4 collision warnings.
 pub fn derive_actions(doc: &PenDocument, build_salt: &[u8; 16]) -> Vec<ActionDefinition> {
+    derive_actions_with_warnings(doc, build_salt).0
+}
+
+/// Walk `doc` and emit the deterministic action list **plus**
+/// load-time §3.4 warnings. Same bitwise-stable derivation as
+/// `derive_actions` — the warnings are populated as a side-product
+/// of the existing collision pass.
+///
+/// `build_salt` is the compile-time disambiguator (typically derived
+/// from the package version + git rev) — same input ⇒ same output,
+/// byte-for-byte.
+///
+/// Spec §3.4 conflict handling:
+/// - Author-supplied `aiName` collisions → all involved actions
+///   downgraded to `StaticHidden`; one `AiNameCollision` warning.
+/// - Alias collisions (an alias matching another action's full name)
+///   → same StaticHidden treatment + `AliasCollision` warning.
+/// - Auto-derived slug + hash4 collisions (rare 16-bit hash hits in
+///   very large docs) → numeric `_1` / `_2` suffix appended in
+///   derivation order, action stays Available, single
+///   `AutoSlugDisambiguated` warning per base name.
+pub fn derive_actions_with_warnings(
+    doc: &PenDocument,
+    build_salt: &[u8; 16],
+) -> (Vec<ActionDefinition>, Vec<DeriveWarning>) {
     let mut out = Vec::new();
     let doc_json = match serde_json::to_value(doc) {
         Ok(v) => v,
-        Err(_) => return out,
+        Err(_) => return (out, Vec::new()),
     };
 
     if let Some(pages) = doc_json.get("pages").and_then(|v| v.as_array()) {
@@ -66,48 +103,105 @@ pub fn derive_actions(doc: &PenDocument, build_salt: &[u8; 16]) -> Vec<ActionDef
         }
     }
 
-    flag_name_collisions(&mut out);
-    out
+    let auto_warnings = disambiguate_auto_slugs(&mut out);
+    let collision_warnings = flag_name_collisions(&mut out);
+    let mut warnings = collision_warnings;
+    warnings.extend(auto_warnings);
+    (out, warnings)
 }
 
-/// Walk the derived list, group by full name, and downgrade every
-/// member of a duplicate group to `StaticHidden`. Source-level alias
-/// names also flag as colliding (an alias that happens to equal a
-/// real action's full name would be impossible to disambiguate at
-/// execute time).
+/// Walk the derived list, group by full name, downgrade every member
+/// of an aiName / alias collision to `StaticHidden`, and emit one
+/// `DeriveWarning` per colliding name. **Auto-slug collisions are
+/// handled separately** by `disambiguate_auto_slugs` — by the time
+/// this pass runs they've already been suffixed, so the only
+/// collisions we still see come from author-supplied aiName / alias.
 ///
 /// **De-dup per action**: an action that keeps its own primary as an
 /// alias (`home.save` with `aiAliases: ["save"]`) or repeats an
-/// alias should still register that name *once* — the collision
-/// rule fires only when ≥ 2 *distinct actions* claim the same full
-/// name.
-fn flag_name_collisions(actions: &mut [ActionDefinition]) {
-    use std::collections::{HashMap, HashSet};
-    // Pass 1: count distinct full names contributed by each action.
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for a in actions.iter() {
+/// alias should still register that name *once*.
+fn flag_name_collisions(actions: &mut [ActionDefinition]) -> Vec<DeriveWarning> {
+    use std::collections::{BTreeMap, HashSet};
+    let mut name_to_actions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut name_is_alias: BTreeMap<String, bool> = BTreeMap::new();
+    for (idx, a) in actions.iter().enumerate() {
         let mut seen: HashSet<String> = HashSet::new();
         seen.insert(a.name.full());
         for alias in &a.aliases {
             seen.insert(alias.full());
         }
         for name in seen {
-            *counts.entry(name).or_insert(0) += 1;
+            let is_alias = name != a.name.full();
+            name_to_actions.entry(name.clone()).or_default().push(idx);
+            // True if *any* action holds this name as an alias.
+            name_is_alias
+                .entry(name)
+                .and_modify(|v| *v = *v || is_alias)
+                .or_insert(is_alias);
         }
     }
-    // Pass 2: any name with count > 1 → StaticHidden for both
-    // actions claiming it. Authors must rename before the agent can
-    // hit either.
-    for a in actions.iter_mut() {
-        let primary_collides = counts.get(&a.name.full()).copied().unwrap_or(0) > 1;
-        let alias_collides = a
-            .aliases
+    let mut warnings = Vec::new();
+    for (name, idxs) in &name_to_actions {
+        if idxs.len() <= 1 {
+            continue;
+        }
+        let source_node_ids: Vec<String> = idxs
             .iter()
-            .any(|al| counts.get(&al.full()).copied().unwrap_or(0) > 1);
-        if primary_collides || alias_collides {
-            a.status = AvailabilityStatic::StaticHidden;
+            .map(|i| actions[*i].source_node_id.clone())
+            .collect();
+        if name_is_alias.get(name).copied().unwrap_or(false) {
+            warnings.push(DeriveWarning::AliasCollision {
+                full_name: name.clone(),
+                source_node_ids,
+            });
+        } else {
+            warnings.push(DeriveWarning::AiNameCollision {
+                full_name: name.clone(),
+                source_node_ids,
+            });
+        }
+        for &i in idxs {
+            actions[i].status = AvailabilityStatic::StaticHidden;
         }
     }
+    warnings
+}
+
+/// Resolve auto-derived slug collisions by appending a numeric `_1`
+/// / `_2` / … suffix in derivation order. Auto-derived means
+/// `has_explicit_name == false` AND no alias overlaps. Authored
+/// names go through `flag_name_collisions` instead.
+///
+/// Returns one warning per collided base name so editors can show a
+/// "rename suggestion" hint — none of the suffixed actions become
+/// hidden, just disambiguated.
+fn disambiguate_auto_slugs(actions: &mut [ActionDefinition]) -> Vec<DeriveWarning> {
+    use std::collections::BTreeMap;
+    let mut name_to_indices: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (idx, a) in actions.iter().enumerate() {
+        if !a.has_explicit_name {
+            name_to_indices
+                .entry(a.name.full())
+                .or_default()
+                .push(idx);
+        }
+    }
+    let mut warnings = Vec::new();
+    for (base, idxs) in name_to_indices {
+        if idxs.len() <= 1 {
+            continue;
+        }
+        warnings.push(DeriveWarning::AutoSlugDisambiguated {
+            base: base.clone(),
+            count: idxs.len(),
+        });
+        // First occurrence keeps the bare slug; the rest get
+        // `_1` / `_2` / … in derivation order (deterministic).
+        for (n, &i) in idxs.iter().enumerate().skip(1) {
+            actions[i].name.slug = format!("{}_{}", actions[i].name.slug, n);
+        }
+    }
+    warnings
 }
 
 fn walk(
@@ -491,6 +585,7 @@ fn make_action(
         status,
         aliases: alias_names,
         params,
+        has_explicit_name: super::naming::has_ai_name(node),
     }
 }
 
@@ -908,6 +1003,128 @@ mod tests {
         let acts = derive_actions(&doc, &[0u8; 16]);
         assert_eq!(acts[0].params.len(), 1);
         assert_eq!(acts[0].params[0].ty, ParamTy::String);
+    }
+
+    #[test]
+    fn collision_emits_warning() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"a","semantics":{ "aiName":"save" },
+                  "events":{ "onTap": [ { "pop": null } ] } },
+                { "type":"frame","id":"b","semantics":{ "aiName":"save" },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let (_acts, warnings) = derive_actions_with_warnings(&doc, &[0u8; 16]);
+        assert_eq!(warnings.len(), 1);
+        match &warnings[0] {
+            DeriveWarning::AiNameCollision {
+                full_name,
+                source_node_ids,
+            } => {
+                assert_eq!(full_name, "home.save");
+                assert!(source_node_ids.contains(&"a".to_owned()));
+                assert!(source_node_ids.contains(&"b".to_owned()));
+            }
+            other => panic!("expected AiNameCollision, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn alias_collision_warning_distinguishes_from_ai_name() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"old","semantics":{ "aiName":"new", "aiAliases":["legacy"] },
+                  "events":{ "onTap": [ { "pop": null } ] } },
+                { "type":"frame","id":"taker","semantics":{ "aiName":"legacy" },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let (_acts, warnings) = derive_actions_with_warnings(&doc, &[0u8; 16]);
+        assert!(warnings
+            .iter()
+            .any(|w| matches!(w, DeriveWarning::AliasCollision { .. })));
+    }
+
+    #[test]
+    fn auto_slug_collision_uses_numeric_suffix() {
+        // Force a 16-bit hash collision by making both auto-slugs
+        // identical in salt + id. Realistic: same-label buttons in
+        // an unsemantic scaffold doc.
+        // Instead of finding a real hash collision, we exploit the
+        // fact that slug derivation falls back to the node id when
+        // there's no aiName/label/text — two nodes with the same id
+        // would produce the same auto slug pre-hash. (Spec normally
+        // expects unique ids, but a robust derivation handles dupes
+        // anyway.) We can't actually have duplicate ids in the same
+        // schema, so simulate via flag-time direct manipulation:
+        //
+        // Easiest deterministic case: two nodes whose ids differ but
+        // happen to hash to the same hash4 under salt 0. Brute-force
+        // fixture would be flaky; instead we test the
+        // disambiguation function directly by constructing two
+        // ActionDefinitions with the same full name + has_explicit_name=false.
+        use crate::action_surface::{ActionName, AvailabilityStatic, Scope, SourceKind};
+        let mut acts = vec![
+            ActionDefinition {
+                name: ActionName {
+                    scope: Scope::page("home"),
+                    slug: "click_dead".into(),
+                },
+                source_node_id: "n1".into(),
+                source_kind: SourceKind::Tap,
+                description: "".into(),
+                status: AvailabilityStatic::Available,
+                aliases: vec![],
+                params: vec![],
+                has_explicit_name: false,
+            },
+            ActionDefinition {
+                name: ActionName {
+                    scope: Scope::page("home"),
+                    slug: "click_dead".into(),
+                },
+                source_node_id: "n2".into(),
+                source_kind: SourceKind::Tap,
+                description: "".into(),
+                status: AvailabilityStatic::Available,
+                aliases: vec![],
+                params: vec![],
+                has_explicit_name: false,
+            },
+        ];
+        let warnings = disambiguate_auto_slugs(&mut acts);
+        assert_eq!(warnings.len(), 1);
+        // First keeps the bare slug; second gets _1.
+        assert_eq!(acts[0].name.slug, "click_dead");
+        assert_eq!(acts[1].name.slug, "click_dead_1");
+        // Both stay Available — auto-slug collision is non-blocking.
+        assert_eq!(acts[0].status, AvailabilityStatic::Available);
+        assert_eq!(acts[1].status, AvailabilityStatic::Available);
+    }
+
+    #[test]
+    fn no_warnings_for_clean_doc() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"a","semantics":{ "aiName":"save" },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let (_acts, warnings) = derive_actions_with_warnings(&doc, &[0u8; 16]);
+        assert!(warnings.is_empty());
     }
 
     #[test]
