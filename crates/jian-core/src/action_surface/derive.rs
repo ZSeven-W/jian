@@ -109,7 +109,9 @@ fn emit_for_node(
 
     let events = node.get("events").and_then(|v| v.as_object());
 
-    // Verb-style actions (no parameters).
+    // Verb-style actions (no parameters). Spec §3.2 requires the
+    // event handler to be **non-empty**; an `onTap: []` stub doesn't
+    // express user intent and shouldn't surface as a callable action.
     let verb_rules: [(&str, &str, SourceKind); 4] = [
         ("onTap", "", SourceKind::Tap),
         ("onDoubleTap", "double_tap_", SourceKind::DoubleTap),
@@ -118,6 +120,9 @@ fn emit_for_node(
     ];
     for (event_key, prefix, kind) in verb_rules {
         if let Some(handler) = events.and_then(|e| e.get(event_key)) {
+            if !is_non_empty_action_list(handler) {
+                continue;
+            }
             let slug_v = format!("{}{}", prefix, suffixed);
             out.push(make_action(
                 scope,
@@ -175,6 +180,17 @@ fn emit_for_node(
     }
 }
 
+/// True when `handler` is an array with at least one entry. Spec
+/// §3.2 phrases every event-source rule as "events.X 非空"; an empty
+/// stub list shouldn't surface a callable action.
+fn is_non_empty_action_list(handler: &Value) -> bool {
+    match handler {
+        Value::Array(a) => !a.is_empty(),
+        Value::Null => false,
+        _ => true,
+    }
+}
+
 /// Extract `bindings["bind:value"]` and validate it points at a
 /// writable `$state.<path>` — bindings to `$route` / `$app` /
 /// computed expressions don't get a `set_*` action because the
@@ -193,36 +209,95 @@ fn bind_target(node: &Value) -> Option<String> {
 }
 
 /// Look up the declared `$state.<path>` type in the document's `state`
-/// schema. Walks dotted segments + numeric `array` indices when the
-/// type tree allows it. Returns `None` if any segment is missing.
-fn state_type_for_path(doc_json: &Value, dotted: &str) -> Option<ParamTy> {
-    let head = dotted.split('.').next()?;
-    let entry = doc_json
-        .get("state")?
-        .as_object()?
-        .get(head)?
-        .get("type")?;
+/// schema. Supports dotted keys *and* `[idx]` array indexing
+/// (e.g. `items[0].title` or `items.0.title`) — runtime accepts both
+/// forms.
+fn state_type_for_path(doc_json: &Value, path: &str) -> Option<ParamTy> {
+    let segments = parse_path_segments(path)?;
+    let mut iter = segments.into_iter();
+    let head = iter.next()?;
+    let head_key = match head {
+        PathSegment::Key(k) => k,
+        PathSegment::Index(_) => return None, // `$state.[0]` is invalid
+    };
+    let entry = doc_json.get("state")?.as_object()?.get(&head_key)?.get("type")?;
     let mut current = entry.clone();
-    for seg in dotted.split('.').skip(1) {
-        current = traverse_type(&current, seg)?;
+    for seg in iter {
+        current = traverse_type(&current, &seg)?;
     }
     Some(primitive_for(&current))
 }
 
-fn traverse_type(ty: &Value, seg: &str) -> Option<Value> {
-    if let Some(obj) = ty.as_object() {
-        if let Some(arr) = obj.get("array") {
-            // Numeric index — type stays `arr` element type.
-            if seg.parse::<i64>().is_ok() {
-                return Some(arr.clone());
+#[derive(Debug)]
+enum PathSegment {
+    Key(String),
+    Index(i64),
+}
+
+/// Parse `a.b[0].c` / `a.0.c` into `[Key("a"), Key("b"), Index(0), Key("c")]`.
+fn parse_path_segments(path: &str) -> Option<Vec<PathSegment>> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_bracket = false;
+    let mut chars = path.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '.' if !in_bracket => {
+                if !cur.is_empty() {
+                    push_segment(&mut out, std::mem::take(&mut cur));
+                }
             }
-            return None;
-        }
-        if let Some(obj_t) = obj.get("object") {
-            return obj_t.get(seg).cloned();
+            '[' if !in_bracket => {
+                if !cur.is_empty() {
+                    push_segment(&mut out, std::mem::take(&mut cur));
+                }
+                in_bracket = true;
+            }
+            ']' if in_bracket => {
+                let n: i64 = cur.parse().ok()?;
+                out.push(PathSegment::Index(n));
+                cur.clear();
+                in_bracket = false;
+                if let Some('.') = chars.peek() {
+                    chars.next();
+                }
+            }
+            _ => cur.push(c),
         }
     }
-    None
+    if in_bracket {
+        return None;
+    }
+    if !cur.is_empty() {
+        push_segment(&mut out, cur);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn push_segment(out: &mut Vec<PathSegment>, raw: String) {
+    if let Ok(n) = raw.parse::<i64>() {
+        out.push(PathSegment::Index(n));
+    } else {
+        out.push(PathSegment::Key(raw));
+    }
+}
+
+fn traverse_type(ty: &Value, seg: &PathSegment) -> Option<Value> {
+    let obj = ty.as_object()?;
+    match seg {
+        PathSegment::Key(k) => {
+            // `{ object: { ... } }` — descend by named key.
+            obj.get("object")?.get(k).cloned()
+        }
+        PathSegment::Index(_) => {
+            // `{ array: T }` — index doesn't matter, type stays T.
+            obj.get("array").cloned()
+        }
+    }
 }
 
 fn primitive_for(ty: &Value) -> ParamTy {
@@ -601,6 +676,44 @@ mod tests {
         assert_eq!(acts[0].params.len(), 1);
         assert_eq!(acts[0].params[0].name, "id");
         assert_eq!(acts[0].params[0].ty, ParamTy::Int);
+    }
+
+    #[test]
+    fn empty_handler_does_not_emit_action() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"a", "events":{ "onTap": [] } },
+                { "type":"frame","id":"b", "events":{ "onSubmit": [] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert!(
+            acts.is_empty(),
+            "empty handlers should not produce actions, got {:#?}",
+            acts
+        );
+    }
+
+    #[test]
+    fn state_path_handles_array_index() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "state":{ "items":{ "type":{ "array":{ "object":{ "title":"string" } } } } },
+              "pages":[{ "id":"p","name":"P","children":[
+                { "type":"frame","id":"input","semantics":{ "aiName":"first_title" },
+                  "bindings": { "bind:value": "$state.items[0].title" } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 1);
+        assert_eq!(acts[0].params[0].ty, ParamTy::String);
     }
 
     #[test]
