@@ -75,20 +75,29 @@ pub fn derive_actions(doc: &PenDocument, build_salt: &[u8; 16]) -> Vec<ActionDef
 /// names also flag as colliding (an alias that happens to equal a
 /// real action's full name would be impossible to disambiguate at
 /// execute time).
+///
+/// **De-dup per action**: an action that keeps its own primary as an
+/// alias (`home.save` with `aiAliases: ["save"]`) or repeats an
+/// alias should still register that name *once* — the collision
+/// rule fires only when ≥ 2 *distinct actions* claim the same full
+/// name.
 fn flag_name_collisions(actions: &mut [ActionDefinition]) {
-    use std::collections::HashMap;
-    // Pass 1: count primary names *and* alias targets so an alias
-    // colliding with a real name flips both.
+    use std::collections::{HashMap, HashSet};
+    // Pass 1: count distinct full names contributed by each action.
     let mut counts: HashMap<String, usize> = HashMap::new();
     for a in actions.iter() {
-        *counts.entry(a.name.full()).or_insert(0) += 1;
+        let mut seen: HashSet<String> = HashSet::new();
+        seen.insert(a.name.full());
         for alias in &a.aliases {
-            *counts.entry(alias.full()).or_insert(0) += 1;
+            seen.insert(alias.full());
+        }
+        for name in seen {
+            *counts.entry(name).or_insert(0) += 1;
         }
     }
-    // Pass 2: any name with count > 1 → StaticHidden for that action
-    // (and for every other action that shares the namespace). Authors
-    // must rename before the agent can hit either.
+    // Pass 2: any name with count > 1 → StaticHidden for both
+    // actions claiming it. Authors must rename before the agent can
+    // hit either.
     for a in actions.iter_mut() {
         let primary_collides = counts.get(&a.name.full()).copied().unwrap_or(0) > 1;
         let alias_collides = a
@@ -946,6 +955,46 @@ mod tests {
         for a in &acts {
             assert_eq!(a.status, AvailabilityStatic::Available);
         }
+    }
+
+    #[test]
+    fn alias_equal_to_own_primary_does_not_self_collide() {
+        // Author keeps the canonical name as an alias too (no-op
+        // migration): `home.save` with `aiAliases: ["save"]` still
+        // resolves to one action, no ambiguity.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"a",
+                  "semantics":{ "aiName":"save", "aiAliases":["save","home.save"] },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 1);
+        assert_eq!(acts[0].status, AvailabilityStatic::Available);
+    }
+
+    #[test]
+    fn duplicate_alias_within_same_action_does_not_self_collide() {
+        // Author lists the same alias twice (typo / copy-paste).
+        // Should still resolve to one action.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"a",
+                  "semantics":{ "aiName":"save", "aiAliases":["legacy","legacy"] },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts[0].status, AvailabilityStatic::Available);
     }
 
     #[test]
