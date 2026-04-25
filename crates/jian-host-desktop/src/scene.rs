@@ -218,15 +218,15 @@ fn apply_bindings(
             // mutates state but the input still shows the static
             // schema `value`. We coerce scalars to a string form
             // because the only consumer today (`emit_text_input`)
-            // reads `value` as text; null becomes the empty string
-            // (the input renders the placeholder instead). Non-
-            // scalar bound values (object / array) are left
-            // un-projected — there's no sensible textual form,
-            // and the eval-warning pipeline already records a
-            // diagnostic if the author tries.
+            // reads `value` as text. A null projection (missing
+            // path, eval error, deliberately-null state) keeps the
+            // static schema `value` rather than blanking it — that
+            // way an author-set placeholder/seed isn't silently
+            // wiped by a path that hasn't been seeded yet.
             "bind:value" => {
-                let projected = bind_value_to_string(&value);
-                obj.insert("value".into(), Value::String(projected));
+                if let Some(projected) = bind_value_to_string(&value) {
+                    obj.insert("value".into(), Value::String(projected));
+                }
             }
             _ => {}
         }
@@ -243,26 +243,27 @@ fn number_from_runtime(v: &jian_core::value::RuntimeValue) -> Option<f64> {
 
 /// Stringify a bound runtime value for an input's `value` field.
 /// Strings come through unchanged; numbers / bools take their
-/// natural display form; null collapses to empty (so the input
-/// shows its placeholder); object / array values stringify to
-/// empty so a misuse doesn't paint stale text.
-fn bind_value_to_string(v: &jian_core::value::RuntimeValue) -> String {
+/// natural display form; object / array values stringify to empty
+/// so a misuse doesn't paint stale text. Null returns `None` —
+/// the caller leaves the existing `value` alone, preserving any
+/// static schema seed when the bound path hasn't been initialised.
+fn bind_value_to_string(v: &jian_core::value::RuntimeValue) -> Option<String> {
     if v.is_null() {
-        return String::new();
+        return None;
     }
     if let Some(s) = v.as_str() {
-        return s.to_owned();
+        return Some(s.to_owned());
     }
     if let Some(b) = v.as_bool() {
-        return b.to_string();
+        return Some(b.to_string());
     }
     if let Some(i) = v.as_i64() {
-        return i.to_string();
+        return Some(i.to_string());
     }
     if let Some(f) = v.as_f64() {
-        return f.to_string();
+        return Some(f.to_string());
     }
-    String::new()
+    Some(String::new())
 }
 
 fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {

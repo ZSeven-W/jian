@@ -164,6 +164,37 @@ fn bind_value_projects_state_into_text_input_render() {
 }
 
 #[test]
+fn bind_value_null_keeps_static_value_seed() {
+    // Bound state path doesn't exist → eval returns null. The
+    // walker must NOT blank out the schema's static `value`;
+    // that would silently wipe author-set seeds whenever a state
+    // key is undeclared or hasn't been initialised yet.
+    let rt = rt(
+        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+              "app": { "name":"x","version":"1","id":"x" },
+              "children": [
+                { "type":"text_input", "id":"missing-input",
+                  "width":160, "height":40,
+                  "placeholder":"never-shown",
+                  "value":"seeded-from-schema",
+                  "bindings": { "bind:value": "$state.unset" } }
+              ]}"##,
+    );
+    let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
+    let painted = ops
+        .iter()
+        .find_map(|op| match op {
+            DrawOp::Text(run) => Some(run.content.clone()),
+            _ => None,
+        })
+        .expect("text run emitted");
+    assert_eq!(
+        painted, "seeded-from-schema",
+        "null projection must preserve static value, not blank it"
+    );
+}
+
+#[test]
 fn bind_value_coerces_non_string_state_for_text_input() {
     // text_input.value is a string field; numeric / bool state
     // bound through bind:value must coerce, not silently drop.

@@ -2,22 +2,25 @@
 //! into a real runtime side effect — synthesised `PointerEvent`,
 //! direct state write, or router navigation.
 //!
-//! The four flavours mirror spec §4.2 #6:
-//! - **Pointer-style** (Tap / DoubleTap / LongPress / Submit / Confirm
-//!   / Dismiss / Swipe* / Scroll / LoadMore): synthesise a Down + Up
-//!   pair at the source node's layout centre and feed them through
-//!   `Runtime::dispatch_pointer`. The gesture arena recognises the
-//!   tap and the action handler runs through the regular `events.*`
-//!   path, so any `set` / `push` / `call` actions the author wrote
-//!   fire as if the user had clicked.
+//! The flavours mirror spec §4.2 #6:
+//! - **Tap**: synthesise a Down + Up pair at the source node's
+//!   layout centre and feed them through `Runtime::dispatch_pointer`.
+//!   The gesture arena recognises the tap and the action handler
+//!   runs through the regular `events.onTap` path. Submit / Confirm
+//!   / Dismiss / DoubleTap / LongPress / Swipe* / Scroll / LoadMore
+//!   each map to a *different* handler key (e.g. `events.onSubmit`),
+//!   so a Down+Up synthesis would silently fire `onTap` instead.
+//!   Those source kinds return `ExecuteError::handler_error()` until
+//!   each has its own dedicated synthesis path; only `SourceKind::Tap`
+//!   takes the pointer route.
 //! - **SetValue**: the source node carries a `bindings.bind:value`
 //!   targeting `$state.<path>`. We skip the arena and write the
 //!   value straight to the state graph — the action surface already
 //!   validated the param type, and there is no host-driven gesture
 //!   to recognise.
 //! - **OpenRoute**: read `route.push` / `route.replace`, substitute
-//!   any `:param` placeholders from the call's params, hand off to
-//!   the runtime's `Router` service.
+//!   any `:param` placeholders (percent-encoded), hand off to the
+//!   runtime's `Router` service.
 //!
 //! Anything we can't statically resolve (missing source node, no
 //! `bind:value` target, malformed route) surfaces as
