@@ -6,9 +6,12 @@
 //!   action tripped the gate.
 //! - `DeclaredCapabilityGate` carries an optional `AuditLog`; every check
 //!   (allowed *or* denied) is recorded when present.
-//! - `AutomationLevel` (graded capability) is ready for Plan 14 Tier-3
-//!   logic but plumbed through here so the satisfaction logic is in one
-//!   place.
+//! - `AutomationLevel` (graded capability) is dev-only — gated behind
+//!   the `dev-asp` cargo feature. It governs the developer Agent Shell
+//!   Protocol endpoint (Plan 18). Production AI access goes through
+//!   `jian-action-surface`'s availability state machine
+//!   (`SemanticsMeta.aiHidden`), **not** this gate, so production builds
+//!   leave `dev-asp` off and never see the `Automation` variant.
 
 use super::audit::{AuditEntry, AuditLog, Verdict};
 use jian_ops_schema::app::Capability as SchemaCapability;
@@ -35,6 +38,9 @@ pub fn from_schema_capability(c: SchemaCapability) -> Capability {
 }
 
 /// Privilege level for graded capabilities (currently only `Automation`).
+///
+/// Dev-only — only compiled when the `dev-asp` feature is on (Plan 18).
+#[cfg(feature = "dev-asp")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AutomationLevel {
     Observe,
@@ -42,6 +48,7 @@ pub enum AutomationLevel {
     Full,
 }
 
+#[cfg(feature = "dev-asp")]
 impl AutomationLevel {
     /// `self` covers `other` iff it grants at least as much access.
     /// `Full` ⊇ `Act` ⊇ `Observe`.
@@ -66,7 +73,10 @@ pub enum Capability {
     Biometric,
     FileSystem,
     Haptic,
-    /// Reserved for Tier-3 automation modules (Plan 14+).
+    /// Dev-only graded capability that gates the developer Agent Shell
+    /// Protocol endpoint (Plan 18). Off in production builds — see
+    /// `jian-action-surface` for the production AI access model.
+    #[cfg(feature = "dev-asp")]
     Automation(AutomationLevel),
 }
 
@@ -112,9 +122,10 @@ impl DeclaredCapabilityGate {
     }
 
     /// Does the declared set satisfy `needed`? For simple capabilities
-    /// this is plain set membership; for graded `Automation` it's
-    /// level-aware (Full satisfies Observe, etc.).
+    /// this is plain set membership; for graded `Automation` (dev-asp
+    /// builds only) it's level-aware (Full satisfies Observe, etc.).
     fn satisfies(&self, needed: Capability) -> bool {
+        #[cfg(feature = "dev-asp")]
         if let Capability::Automation(needed_level) = needed {
             return self.declared.iter().any(|d| match d {
                 Capability::Automation(decl_level) => decl_level.covers(needed_level),
@@ -161,6 +172,7 @@ mod tests {
         assert!(!g.check(Capability::Storage, "storage_set"));
     }
 
+    #[cfg(feature = "dev-asp")]
     #[test]
     fn automation_full_satisfies_lower() {
         let g = DeclaredCapabilityGate::from_iter([Capability::Automation(AutomationLevel::Full)]);
@@ -169,6 +181,7 @@ mod tests {
         assert!(g.check(Capability::Automation(AutomationLevel::Full), "call"));
     }
 
+    #[cfg(feature = "dev-asp")]
     #[test]
     fn automation_act_satisfies_observe_not_full() {
         let g = DeclaredCapabilityGate::from_iter([Capability::Automation(AutomationLevel::Act)]);
@@ -177,6 +190,7 @@ mod tests {
         assert!(!g.check(Capability::Automation(AutomationLevel::Full), "call"));
     }
 
+    #[cfg(feature = "dev-asp")]
     #[test]
     fn automation_observe_does_not_satisfy_act() {
         let g =
@@ -184,6 +198,7 @@ mod tests {
         assert!(!g.check(Capability::Automation(AutomationLevel::Act), "call"));
     }
 
+    #[cfg(feature = "dev-asp")]
     #[test]
     fn empty_denies_automation() {
         let g = DeclaredCapabilityGate::from_iter([]);

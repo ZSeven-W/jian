@@ -3,6 +3,8 @@
 //! continue to work via these re-exports.
 
 pub use crate::capability::{
-    AuditEntry, AuditLog, AutomationLevel, Capability, CapabilityGate, DeclaredCapabilityGate,
-    DummyCapabilityGate, NullPermissionBroker, PermissionBroker, PermissionStatus, Verdict,
+    AuditEntry, AuditLog, Capability, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate,
+    NullPermissionBroker, PermissionBroker, PermissionStatus, Verdict,
 };
+#[cfg(feature = "dev-asp")]
+pub use crate::capability::AutomationLevel;

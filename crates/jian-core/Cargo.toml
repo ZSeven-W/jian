@@ -8,6 +8,15 @@ repository   = { workspace = true }
 description  = "Jian UI framework core — document, signals, scene graph, render trait."
 readme       = "README.md"
 
+[features]
+default = []
+# Dev-only Agent Shell Protocol (Plan 18). Enables the
+# `Capability::Automation` graded capability and its `AutomationLevel`
+# lattice. Production builds leave this off — production AI access is
+# governed by `jian-action-surface`'s availability state machine
+# (`SemanticsMeta.aiHidden`), not the capability gate.
+dev-asp = []
+
 [dependencies]
 jian-ops-schema = { path = "../jian-ops-schema" }
 serde           = { workspace = true }
