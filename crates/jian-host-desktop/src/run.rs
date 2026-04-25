@@ -235,6 +235,42 @@ impl ApplicationHandler for RunApp {
                 self.redraw();
                 return;
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                use jian_core::gesture::pointer::WheelEvent as JianWheel;
+                use winit::event::MouseScrollDelta;
+                // Use the translator's last-known cursor position so
+                // the wheel hit-tests at the spot the user is hovering.
+                let pos = self
+                    .translator
+                    .cursor
+                    .unwrap_or(self.translator.last_known_cursor);
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        // Lines → logical pixels: 16 px per line is
+                        // the conventional desktop fallback. Trackpads
+                        // generally report PixelDelta directly.
+                        (*x * 16.0, *y * 16.0)
+                    }
+                    MouseScrollDelta::PixelDelta(p) => {
+                        let s = self.scale_factor as f32;
+                        ((p.x as f32) / s, (p.y as f32) / s)
+                    }
+                };
+                let logical_pos = if self.scale_factor != 1.0 {
+                    let s = self.scale_factor as f32;
+                    jian_core::geometry::point(pos.x / s, pos.y / s)
+                } else {
+                    pos
+                };
+                self.host.runtime.dispatch_wheel(JianWheel::simple(
+                    logical_pos,
+                    jian_core::geometry::point(dx, dy),
+                ));
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+                return;
+            }
             WindowEvent::ModifiersChanged(mods) => {
                 self.translator.update_modifiers(mods.state());
                 return;

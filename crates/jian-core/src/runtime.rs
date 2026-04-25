@@ -259,6 +259,40 @@ impl Runtime {
         emitted
     }
 
+    /// Route a wheel event to whatever node the cursor is over and
+    /// emit `SemanticEvent::Scroll` for the topmost node carrying an
+    /// `events.onScroll` handler. Wheel doesn't compete in the gesture
+    /// arena (no Tap/Pan rivalry), so we hit-test directly. Returns
+    /// the emitted events for host inspection / tests.
+    pub fn dispatch_wheel(
+        &mut self,
+        event: crate::gesture::pointer::WheelEvent,
+    ) -> Vec<SemanticEvent> {
+        let Some(doc) = self.document.as_ref() else {
+            return Vec::new();
+        };
+        let mut emitted = Vec::new();
+        // Hit-test returns hits topmost-first. Pick the first node
+        // that has an onScroll handler; if none do, the wheel event
+        // is silently dropped (matches scroll behaviour in browsers
+        // when no listener is registered).
+        let hits = self.spatial.hit(event.position);
+        for key in hits {
+            let schema = &doc.tree.nodes[key].schema;
+            if json_has_event_handler(schema, "onScroll") {
+                emitted.push(SemanticEvent::Scroll {
+                    node: key,
+                    delta: event.delta,
+                });
+                break;
+            }
+        }
+        for ev in &emitted {
+            self.dispatch_semantic(ev);
+        }
+        emitted
+    }
+
     /// Drive timer-based recognizers (LongPress). Host must call each frame.
     pub fn tick(&mut self, now: Instant) -> Vec<SemanticEvent> {
         let emitted = self.gestures.tick(now);
@@ -310,6 +344,21 @@ impl Default for Runtime {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Does the node's schema carry a non-null `events.<key>` ActionList?
+/// Round-trips through serde_json::Value so the same code handles all
+/// 11 PenNode variants without per-variant matches — same trick the
+/// scene walker and `extract_handler` use.
+fn json_has_event_handler(node: &jian_ops_schema::node::PenNode, key: &str) -> bool {
+    serde_json::to_value(node)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .and_then(|obj| obj.get("events").cloned())
+        .and_then(|events| events.as_object().cloned())
+        .and_then(|map| map.get(key).cloned())
+        .map(|h| !h.is_null())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -404,6 +453,56 @@ mod tests {
         .unwrap();
         rt.replace_document(with_net).unwrap();
         assert!(rt.capabilities.check(Capability::Network, "fetch"));
+    }
+
+    #[test]
+    fn dispatch_wheel_finds_onScroll_target() {
+        use crate::geometry::point;
+        use crate::gesture::pointer::WheelEvent;
+        let mut rt = Runtime::new();
+        rt.load_str(
+            r#"{
+              "version":"0.8.0",
+              "children":[
+                { "type":"frame","id":"viewport","width":400,"height":300,
+                  "events":{ "onScroll": [ { "set": { "$state.scrolled": "true" } } ] }
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+        rt.rebuild_spatial();
+        let emitted = rt.dispatch_wheel(WheelEvent::simple(
+            point(100.0, 100.0),
+            point(0.0, -10.0),
+        ));
+        assert_eq!(emitted.len(), 1);
+        assert!(matches!(
+            emitted[0],
+            crate::gesture::semantic::SemanticEvent::Scroll { .. }
+        ));
+    }
+
+    #[test]
+    fn dispatch_wheel_ignores_nodes_without_handler() {
+        use crate::geometry::point;
+        use crate::gesture::pointer::WheelEvent;
+        let mut rt = Runtime::new();
+        rt.load_str(
+            r#"{
+              "version":"0.8.0",
+              "children":[
+                { "type":"frame","id":"plain","width":400,"height":300 }
+              ]
+            }"#,
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+        rt.rebuild_spatial();
+        let emitted =
+            rt.dispatch_wheel(WheelEvent::simple(point(100.0, 100.0), point(0.0, -10.0)));
+        assert!(emitted.is_empty());
     }
 
     /// `replace_document` should swap in the new tree without disturbing

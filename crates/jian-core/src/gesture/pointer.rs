@@ -75,6 +75,31 @@ impl PointerEvent {
     }
 }
 
+/// Mouse-wheel / two-finger-trackpad scroll. Scroll is **not** a
+/// gesture-arena recognizer (no competition with Tap/Pan/etc.) —
+/// hosts call `Runtime::dispatch_wheel` and the runtime hit-tests
+/// directly to find the topmost node with `events.onScroll`. Delta
+/// is in logical pixels per spec convention; positive Y = scroll up.
+#[derive(Debug, Clone)]
+pub struct WheelEvent {
+    pub position: Point,
+    pub delta: Point,
+    pub modifiers: Modifiers,
+    pub timestamp: Instant,
+}
+
+impl WheelEvent {
+    /// Minimal constructor used by host adapters and tests.
+    pub fn simple(position: Point, delta: Point) -> Self {
+        Self {
+            position,
+            delta,
+            modifiers: Modifiers::empty(),
+            timestamp: Instant::now(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +125,12 @@ mod tests {
     fn mouse_buttons_default_empty() {
         let b: MouseButtons = Default::default();
         assert!(b.is_empty());
+    }
+
+    #[test]
+    fn wheel_event_round_trip() {
+        let w = WheelEvent::simple(point(10.0, 20.0), point(0.0, -5.0));
+        assert_eq!(w.delta.x, 0.0);
+        assert!(w.modifiers.is_empty());
     }
 }

@@ -17,7 +17,9 @@
 //! exposes pan-direction + key + wheel events through the schema.
 
 use super::naming::{compute_slug, has_ai_name, short_hash};
-use super::types::{ActionDefinition, ActionName, AvailabilityStatic, Scope, SourceKind};
+use super::types::{ActionDefinition, ActionName, Scope, SourceKind};
+#[cfg(test)]
+use super::types::AvailabilityStatic;
 use jian_ops_schema::document::PenDocument;
 use serde_json::Value;
 
