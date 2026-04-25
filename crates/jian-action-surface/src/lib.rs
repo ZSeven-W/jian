@@ -28,6 +28,7 @@ pub mod execute;
 pub mod list;
 pub mod rate_limit;
 pub mod swipe_throttle;
+pub mod transport;
 
 pub use audit::{
     hash_params, ActionAuditLog, ActionSurfaceAuditEntry, AuditVerdict, ReasonCode, SessionId,
