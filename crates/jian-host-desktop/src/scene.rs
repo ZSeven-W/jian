@@ -28,16 +28,36 @@ use serde_json::Value;
 /// Build a flat draw-op list for the given document + layout. Callers
 /// pump each op through `RenderBackend::draw` between
 /// `begin_frame` / `end_frame`.
+///
+/// Static-only walker: `bindings.<prop>` expressions are NOT evaluated
+/// — `content` etc. comes straight from the schema. Use
+/// [`collect_draws_with_state`] when you have a live `StateGraph` and
+/// want bindings reflected in the output (the player / dev paths
+/// always use that one).
 pub fn collect_draws(
     doc: &jian_core::document::RuntimeDocument,
     layout: &jian_core::layout::LayoutEngine,
 ) -> Vec<DrawOp> {
-    // Deterministic order: walk the tree depth-first starting at the
-    // roots so parents paint before children and sibling z-order is
-    // preserved.
     let mut out = Vec::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, root, &mut out);
+        walk(doc, layout, root, None, &mut out);
+    }
+    out
+}
+
+/// Like `collect_draws` but evaluates `bindings.<prop>` expressions
+/// against `state` so dynamic content (e.g. `Count: ${$app.count}`)
+/// reflects the live runtime value. Without this path the walker
+/// emits the schema's static `content` and counter / live-state
+/// labels never refresh.
+pub fn collect_draws_with_state(
+    doc: &jian_core::document::RuntimeDocument,
+    layout: &jian_core::layout::LayoutEngine,
+    state: &jian_core::state::StateGraph,
+) -> Vec<DrawOp> {
+    let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    for &root in &doc.tree.roots {
+        walk(doc, layout, root, Some(state), &mut out);
     }
     out
 }
@@ -46,20 +66,70 @@ fn walk(
     doc: &jian_core::document::RuntimeDocument,
     layout: &jian_core::layout::LayoutEngine,
     key: jian_core::document::NodeKey,
+    state: Option<&jian_core::state::StateGraph>,
     out: &mut Vec<DrawOp>,
 ) {
     let Some(node) = doc.tree.nodes.get(key) else {
         return;
     };
     let r = layout.node_rect(key);
-    let json = serde_json::to_value(&node.schema).ok();
+    let mut json = serde_json::to_value(&node.schema).ok();
+
+    if let (Some(_), Some(j), Some(state)) = (r, json.as_mut(), state) {
+        apply_bindings(j, state);
+    }
 
     if let (Some(r), Some(json)) = (r, &json) {
         emit_for_node(r, json, out);
     }
 
     for &child in &node.children {
-        walk(doc, layout, child, out);
+        walk(doc, layout, child, state, out);
+    }
+}
+
+/// Walk a node's `bindings` map and overwrite any matching field on
+/// the JSON view with the binding's evaluated string/value. Phase 1
+/// supports the common cases: `content` (string), `visible` (bool —
+/// dropped from output if false), `disabled` (bool — pure metadata).
+/// Other props (`fill` / `opacity` / etc.) follow the same shape but
+/// need typed coercion; left as a follow-on once the binding system
+/// has a proper effect-driven scene cache.
+fn apply_bindings(node: &mut Value, state: &jian_core::state::StateGraph) {
+    let Some(obj) = node.as_object_mut() else {
+        return;
+    };
+    let bindings = match obj.get("bindings") {
+        Some(Value::Object(b)) => b.clone(),
+        _ => return,
+    };
+    let node_id = obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    for (prop, expr_v) in &bindings {
+        let Some(src) = expr_v.as_str() else { continue };
+        let compiled = match jian_core::expression::Expression::compile(src) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let (value, _warns) = compiled.eval(state, None, node_id.as_deref());
+        // Accept either string output or any JSON-serialisable runtime
+        // value. For `content` we want a string projection; for
+        // booleans we want the literal `true`/`false`.
+        if prop == "content" {
+            if let Some(s) = value.as_str() {
+                obj.insert("content".into(), Value::String(s.to_owned()));
+            }
+        } else if prop == "visible" {
+            if let Some(b) = value.as_bool() {
+                obj.insert("visible".into(), Value::Bool(b));
+            }
+        }
+        // Other bindings (fill / opacity / x / y / width / height /
+        // disabled) tracked in a follow-on commit alongside an
+        // effect-driven scene cache so we don't recompile every
+        // expression every frame.
     }
 }
 

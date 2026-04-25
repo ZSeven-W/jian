@@ -15,7 +15,7 @@
 //! upgrade lands. Works on every OS winit supports.
 
 use crate::pointer::PointerTranslator;
-use crate::scene::collect_draws;
+use crate::scene::collect_draws_with_state;
 use crate::DesktopHost;
 use jian_core::geometry::size as make_size;
 use jian_core::render::RenderBackend;
@@ -128,7 +128,11 @@ impl RunApp {
         // 1. Collect draw ops and rasterize via SkiaBackend. The canvas
         // is scaled by DPR so logical-unit rects fill physical pixels.
         let ops = if let Some(doc) = self.host.runtime.document.as_ref() {
-            collect_draws(doc, &self.host.runtime.layout)
+            collect_draws_with_state(
+                doc,
+                &self.host.runtime.layout,
+                &self.host.runtime.state,
+            )
         } else {
             Vec::new()
         };
@@ -204,6 +208,51 @@ impl ApplicationHandler for RunApp {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
+        if std::env::var("JIAN_DEBUG_POINTER").is_ok() {
+            // Log every event variant name so a "no MouseInput
+            // arriving" diagnosis is one trace away.
+            let name = match &event {
+                WindowEvent::ActivationTokenDone { .. } => "ActivationTokenDone",
+                WindowEvent::Resized(_) => "Resized",
+                WindowEvent::Moved(_) => "Moved",
+                WindowEvent::CloseRequested => "CloseRequested",
+                WindowEvent::Destroyed => "Destroyed",
+                WindowEvent::DroppedFile(_) => "DroppedFile",
+                WindowEvent::HoveredFile(_) => "HoveredFile",
+                WindowEvent::HoveredFileCancelled => "HoveredFileCancelled",
+                WindowEvent::Focused(_) => "Focused",
+                WindowEvent::KeyboardInput { .. } => "KeyboardInput",
+                WindowEvent::ModifiersChanged(_) => "ModifiersChanged",
+                WindowEvent::Ime(_) => "Ime",
+                WindowEvent::CursorMoved { .. } => "CursorMoved",
+                WindowEvent::CursorEntered { .. } => "CursorEntered",
+                WindowEvent::CursorLeft { .. } => "CursorLeft",
+                WindowEvent::MouseWheel { .. } => "MouseWheel",
+                WindowEvent::MouseInput { state, button, .. } => {
+                    eprintln!(
+                        "win-event: MouseInput state={:?} button={:?}",
+                        state, button
+                    );
+                    "MouseInput"
+                }
+                WindowEvent::PinchGesture { .. } => "PinchGesture",
+                WindowEvent::PanGesture { .. } => "PanGesture",
+                WindowEvent::DoubleTapGesture { .. } => "DoubleTapGesture",
+                WindowEvent::RotationGesture { .. } => "RotationGesture",
+                WindowEvent::TouchpadPressure { .. } => "TouchpadPressure",
+                WindowEvent::AxisMotion { .. } => "AxisMotion",
+                WindowEvent::Touch(_) => "Touch",
+                WindowEvent::ScaleFactorChanged { .. } => "ScaleFactorChanged",
+                WindowEvent::ThemeChanged(_) => "ThemeChanged",
+                WindowEvent::Occluded(_) => "Occluded",
+                WindowEvent::RedrawRequested => "RedrawRequested",
+            };
+            // Skip the noisy CursorMoved spam — already traced below
+            // when it produces a PointerEvent.
+            if name != "CursorMoved" && name != "RedrawRequested" {
+                eprintln!("win-event: {}", name);
+            }
+        }
         match &event {
             WindowEvent::CloseRequested => {
                 event_loop.exit();
