@@ -44,6 +44,31 @@ The **default** feature set is empty — raster surfaces only. This keeps
 Host crates (jian-host-desktop in Plan 8, WASM integration in Plan 12)
 opt into the per-platform GPU feature they need.
 
+### Building with `textlayout`
+
+`skia-bindings` 0.78's bundled `depot_tools` invokes
+`gclient_utils.py`, which `import pipes` — a stdlib module Python
+3.13 removed. On macOS with Homebrew, the easy fix is to point the
+build at Python 3.11's `python3` shim:
+
+```bash
+PATH="/opt/homebrew/opt/python@3.11/libexec/bin:$PATH" \
+  cargo build -p jian-skia --features textlayout
+```
+
+The `libexec/bin` directory exposes a generic `python3` symlink
+(not just `python3.11`), which is what depot_tools' `ninja`
+wrapper looks for via `#!/usr/bin/env python3`. Any Python
+3.10–3.12 works; only 3.13+ trips the missing-`pipes` error.
+
+Linux: install python 3.11 via your package manager and prepend
+it likewise. Windows: install via the MS Store / python.org
+3.11 release; PATH ordering in the build shell matters.
+
+A future skia-bindings bump should drop the `pipes` dependency
+upstream — track <https://github.com/rust-skia/rust-skia/issues> if
+you hit a refreshed error after a version bump.
+
 ## Status
 
 MVP (`v0.1.0-skia`):
