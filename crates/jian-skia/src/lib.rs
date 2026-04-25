@@ -29,6 +29,7 @@ pub mod backend;
 pub mod color;
 pub mod convert;
 pub mod icons;
+pub(crate) mod image;
 pub mod path;
 pub mod surface;
 

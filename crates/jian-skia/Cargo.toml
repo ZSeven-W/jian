@@ -26,6 +26,7 @@ textlayout = ["skia-safe/textlayout"]
 jian-core       = { path = "../jian-core" }
 jian-ops-schema = { path = "../jian-ops-schema" }
 skia-safe       = "0.78"
+base64          = "0.22"
 
 [dev-dependencies]
 serde_json      = { workspace = true }
