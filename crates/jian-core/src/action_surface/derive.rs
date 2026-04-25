@@ -17,15 +17,24 @@
 //! exposes pan-direction + key + wheel events through the schema.
 
 use super::naming::{compute_slug, has_ai_name, short_hash};
-use super::types::{ActionDefinition, ActionName, ParamSpec, ParamTy, Scope, SourceKind};
-#[cfg(test)]
-use super::types::AvailabilityStatic;
+use super::types::{
+    ActionDefinition, ActionName, AvailabilityStatic, ParamSpec, ParamTy, Scope, SourceKind,
+};
 use jian_ops_schema::document::PenDocument;
 use serde_json::Value;
 
 /// Walk `doc` and emit the deterministic action list. `build_salt` is
 /// the compile-time disambiguator (typically derived from the package
 /// version + git rev) — same input ⇒ same output, byte-for-byte.
+///
+/// Spec §3.4 conflict handling: any author-supplied `aiName` that
+/// produces the same full `<scope>.<slug>` for two or more nodes
+/// causes both (all) to downgrade to `StaticHidden`. The author has
+/// to disambiguate before the agent can call either — we don't pick
+/// a winner. Auto-derived names already disambiguate via the hash4
+/// suffix so they can't collide unless the build_salt + node id
+/// somehow produce identical hashes (16-bit collisions are possible
+/// in very large documents; we treat those the same way).
 pub fn derive_actions(doc: &PenDocument, build_salt: &[u8; 16]) -> Vec<ActionDefinition> {
     let mut out = Vec::new();
     let doc_json = match serde_json::to_value(doc) {
@@ -57,7 +66,39 @@ pub fn derive_actions(doc: &PenDocument, build_salt: &[u8; 16]) -> Vec<ActionDef
         }
     }
 
+    flag_name_collisions(&mut out);
     out
+}
+
+/// Walk the derived list, group by full name, and downgrade every
+/// member of a duplicate group to `StaticHidden`. Source-level alias
+/// names also flag as colliding (an alias that happens to equal a
+/// real action's full name would be impossible to disambiguate at
+/// execute time).
+fn flag_name_collisions(actions: &mut [ActionDefinition]) {
+    use std::collections::HashMap;
+    // Pass 1: count primary names *and* alias targets so an alias
+    // colliding with a real name flips both.
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for a in actions.iter() {
+        *counts.entry(a.name.full()).or_insert(0) += 1;
+        for alias in &a.aliases {
+            *counts.entry(alias.full()).or_insert(0) += 1;
+        }
+    }
+    // Pass 2: any name with count > 1 → StaticHidden for that action
+    // (and for every other action that shares the namespace). Authors
+    // must rename before the agent can hit either.
+    for a in actions.iter_mut() {
+        let primary_collides = counts.get(&a.name.full()).copied().unwrap_or(0) > 1;
+        let alias_collides = a
+            .aliases
+            .iter()
+            .any(|al| counts.get(&al.full()).copied().unwrap_or(0) > 1);
+        if primary_collides || alias_collides {
+            a.status = AvailabilityStatic::StaticHidden;
+        }
+    }
 }
 
 fn walk(
@@ -858,6 +899,77 @@ mod tests {
         let acts = derive_actions(&doc, &[0u8; 16]);
         assert_eq!(acts[0].params.len(), 1);
         assert_eq!(acts[0].params[0].ty, ParamTy::String);
+    }
+
+    #[test]
+    fn ai_name_collision_in_same_scope_static_hides_both() {
+        // Spec §3.4: two `aiName: "save"` in the same scope can't be
+        // disambiguated, so both flip to StaticHidden.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"a","semantics":{ "aiName":"save" },
+                  "events":{ "onTap": [ { "pop": null } ] } },
+                { "type":"frame","id":"b","semantics":{ "aiName":"save" },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 2);
+        assert_eq!(acts[0].status, AvailabilityStatic::StaticHidden);
+        assert_eq!(acts[1].status, AvailabilityStatic::StaticHidden);
+    }
+
+    #[test]
+    fn ai_name_same_value_different_scope_does_not_collide() {
+        // `home.save` vs `settings.save` are distinct full names.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[
+                { "id":"home","name":"Home","children":[
+                  { "type":"frame","id":"a","semantics":{ "aiName":"save" },
+                    "events":{ "onTap": [ { "pop": null } ] } }
+                ]},
+                { "id":"settings","name":"Settings","children":[
+                  { "type":"frame","id":"b","semantics":{ "aiName":"save" },
+                    "events":{ "onTap": [ { "pop": null } ] } }
+                ]}
+              ],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        for a in &acts {
+            assert_eq!(a.status, AvailabilityStatic::Available);
+        }
+    }
+
+    #[test]
+    fn alias_colliding_with_canonical_name_hides_both() {
+        // Renamed-with-alias scenario gone wrong: a fresh button
+        // claims the same `aiName` an old button still keeps as a
+        // legacy alias. Both must flip to StaticHidden.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"old","semantics":{ "aiName":"new_name", "aiAliases":["legacy"] },
+                  "events":{ "onTap": [ { "pop": null } ] } },
+                { "type":"frame","id":"new","semantics":{ "aiName":"legacy" },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 2);
+        for a in &acts {
+            assert_eq!(a.status, AvailabilityStatic::StaticHidden);
+        }
     }
 
     #[test]
