@@ -29,4 +29,5 @@ skia-safe       = "0.78"
 base64          = "0.22"
 
 [dev-dependencies]
-serde_json      = { workspace = true }
+serde_json        = { workspace = true }
+jian-host-desktop = { path = "../jian-host-desktop" }

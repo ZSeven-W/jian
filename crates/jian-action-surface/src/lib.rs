@@ -38,6 +38,9 @@ pub use error::{
 pub use list::{list_actions, ListOptions, ListResponse, ListedAction, PageScope};
 
 use crate::concurrency::ConcurrencyTracker;
+// `decide` / `Decision` only used by the public sync `execute()`
+// shim that calls `execute_with_gate(... AlwaysAllow)`.
+#[allow(unused_imports)]
 use crate::execute::{decide, Decision};
 use crate::rate_limit::TokenBucket;
 use jian_core::action_surface::{derive_actions, ActionDefinition};
