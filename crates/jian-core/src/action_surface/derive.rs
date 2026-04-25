@@ -361,6 +361,37 @@ fn emit_for_node(
         }
     }
 
+    // --- onKey → confirm_<slug> (Enter) + dismiss_<slug> (Escape)
+    // Spec §3.2 last row: a node with a non-empty `events.onKey`
+    // handler exposes two keyboard-shortcut actions. The handler
+    // itself fires for every key press (Enter / Escape / etc.);
+    // surfacing them as separate AI tools means the agent can pick
+    // semantics ("confirm" vs "dismiss") without having to encode a
+    // key payload in the call. The dispatcher synthesises
+    // `KeyDown { key: "Enter" | "Escape" }` against the source node.
+    if let Some(handler) = events
+        .and_then(|e| e.get("onKey"))
+        .filter(|h| is_non_empty_action_list(h))
+    {
+        for (prefix, kind) in [
+            ("confirm_", SourceKind::Confirm),
+            ("dismiss_", SourceKind::Dismiss),
+        ] {
+            let slug_v = format!("{}{}", prefix, suffixed);
+            out.push(make_action(
+                scope,
+                &slug_v,
+                id,
+                kind,
+                description.clone(),
+                &aliases,
+                node,
+                Some(handler),
+                Vec::new(),
+            ));
+        }
+    }
+
     // --- onScroll / onReachEnd → load_more_<slug>
     // Spec §3.2 maps either event on a list / feed container to the
     // agent's "load the next page" intent. We pick whichever is
@@ -859,6 +890,62 @@ mod tests {
         let acts = derive_actions(&doc, &[0u8; 16]);
         assert_eq!(acts[0].source_kind, SourceKind::OpenRoute);
         assert_eq!(acts[0].name.slug, "open_open_detail");
+    }
+
+    #[test]
+    fn on_key_emits_confirm_and_dismiss_actions() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"checkout","name":"Checkout","children":[
+                { "type":"frame","id":"order-form",
+                  "semantics":{ "aiName":"order" },
+                  "events":{ "onKey": [ { "set": { "$state.last_key": "$event.key" } } ] }
+                }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        let kinds: Vec<_> = acts.iter().map(|a| a.source_kind).collect();
+        assert!(
+            kinds.contains(&SourceKind::Confirm),
+            "expected Confirm in {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&SourceKind::Dismiss),
+            "expected Dismiss in {kinds:?}"
+        );
+        let confirm = acts
+            .iter()
+            .find(|a| matches!(a.source_kind, SourceKind::Confirm))
+            .unwrap();
+        assert_eq!(confirm.name.slug, "confirm_order");
+        let dismiss = acts
+            .iter()
+            .find(|a| matches!(a.source_kind, SourceKind::Dismiss))
+            .unwrap();
+        assert_eq!(dismiss.name.slug, "dismiss_order");
+    }
+
+    #[test]
+    fn empty_on_key_handler_does_not_emit_actions() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"p","name":"P","children":[
+                { "type":"frame","id":"a",
+                  "events":{ "onKey": [] }
+                }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert!(
+            acts.is_empty(),
+            "empty onKey must not surface confirm_/dismiss_ actions, got {acts:?}"
+        );
     }
 
     #[test]

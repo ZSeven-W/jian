@@ -6,13 +6,18 @@
 //! - **Tap**: synthesise a Down + Up pair at the source node's
 //!   layout centre and feed them through `Runtime::dispatch_pointer`.
 //!   The gesture arena recognises the tap and the action handler
-//!   runs through the regular `events.onTap` path. Submit / Confirm
-//!   / Dismiss / DoubleTap / LongPress / Swipe* / Scroll / LoadMore
-//!   each map to a *different* handler key (e.g. `events.onSubmit`),
-//!   so a Down+Up synthesis would silently fire `onTap` instead.
-//!   Those source kinds return `ExecuteError::handler_error()` until
-//!   each has its own dedicated synthesis path; only `SourceKind::Tap`
-//!   takes the pointer route.
+//!   runs through the regular `events.onTap` path. DoubleTap /
+//!   LongPress / Submit / Swipe* / Scroll / LoadMore each map to
+//!   a *different* handler key, so a Down+Up synthesis would
+//!   silently fire `onTap` instead. Those source kinds return
+//!   `ExecuteError::handler_error()` until each has its own
+//!   dedicated synthesis path.
+//! - **Confirm / Dismiss**: keyboard shortcuts derived from
+//!   `events.onKey`. The dispatcher synthesises a `KeyDown` event
+//!   with `key = "Enter"` (Confirm) or `key = "Escape"` (Dismiss)
+//!   and feeds it through `Runtime::dispatch_key`. The runtime
+//!   exposes `$event.key` / `$event.modifiers` to the handler so
+//!   the author can branch on which shortcut fired.
 //! - **SetValue**: the source node carries a `bindings.bind:value`
 //!   targeting `$state.<path>`. We skip the arena and write the
 //!   value straight to the state graph — the action surface already
@@ -32,7 +37,7 @@ use crate::error::ExecuteError;
 use crate::ActionDispatcher;
 use jian_core::action_surface::{ActionDefinition, SourceKind};
 use jian_core::geometry::point;
-use jian_core::gesture::pointer::{PointerEvent, PointerPhase};
+use jian_core::gesture::pointer::{Modifiers, PointerEvent, PointerPhase};
 use jian_core::Runtime;
 use jian_ops_schema::node::PenNode;
 use serde_json::{Map, Value};
@@ -69,20 +74,24 @@ impl<'a> ActionDispatcher for RuntimeDispatcher<'a> {
             // `onTap`, and silently no-op the actual handler. Refuse
             // them until each has its own synthesis path.
             SourceKind::Tap => dispatch_pointer_tap(self.runtime, action),
-            // DoubleTap / LongPress / Submit / Confirm / Dismiss /
-            // Swipe* / Scroll / LoadMore each need their own
-            // semantic-event synthesis (a tick-driven LongPress
-            // claim, a real onSubmit dispatch, a multi-step swipe
-            // path, a wheel dispatch, etc). Until those paths land,
-            // refuse the call rather than misroute it through
-            // `onTap` — the surface returns
+            // Keyboard shortcuts derive from `events.onKey` and
+            // synthesise a `KeyDown` straight at the source node.
+            // The handler walks the parent chain via the regular
+            // event-dispatch bubbling, so a parent listening for
+            // Enter / Escape catches a child's keystroke.
+            SourceKind::Confirm => dispatch_key(self.runtime, action, "Enter"),
+            SourceKind::Dismiss => dispatch_key(self.runtime, action, "Escape"),
+            // DoubleTap / LongPress / Submit / Swipe* / Scroll /
+            // LoadMore each still need their own semantic-event
+            // synthesis (tick-driven LongPress claim, real onSubmit
+            // dispatch, multi-step swipe path, wheel dispatch, …).
+            // Until each lands, refuse the call rather than misroute
+            // it through `onTap` — the surface returns
             // ExecutionFailed(handler_error) and the audit row
             // records the same code, matching spec §4.2.
             SourceKind::DoubleTap
             | SourceKind::LongPress
             | SourceKind::Submit
-            | SourceKind::Confirm
-            | SourceKind::Dismiss
             | SourceKind::SwipeLeft
             | SourceKind::SwipeRight
             | SourceKind::SwipeUp
@@ -91,6 +100,20 @@ impl<'a> ActionDispatcher for RuntimeDispatcher<'a> {
             | SourceKind::LoadMore => Err(ExecuteError::handler_error()),
         }
     }
+}
+
+fn dispatch_key(
+    runtime: &mut Runtime,
+    action: &ActionDefinition,
+    key: &'static str,
+) -> Result<(), ExecuteError> {
+    let target = runtime
+        .document
+        .as_ref()
+        .and_then(|doc| doc.tree.get(&action.source_node_id))
+        .ok_or_else(ExecuteError::handler_error)?;
+    runtime.dispatch_key(target, key, Modifiers::empty());
+    Ok(())
 }
 
 fn dispatch_pointer_tap(runtime: &mut Runtime, action: &ActionDefinition) -> Result<(), ExecuteError> {
@@ -392,6 +415,65 @@ mod tests {
         assert_eq!(
             rt.state.app_get("email").and_then(|v| v.as_str().map(str::to_owned)),
             Some("fini@example.com".to_owned()),
+        );
+    }
+
+    #[test]
+    fn confirm_and_dismiss_synthesise_key_events() {
+        // Authoring `events.onKey` exposes `confirm_<slug>` (Enter)
+        // and `dismiss_<slug>` (Escape). The dispatcher pipes each
+        // through Runtime::dispatch_key so the handler runs with
+        // `$event.key` set to the synthesised key name.
+        let (mut rt, doc) = build_runtime(
+            r##"{
+              "formatVersion":"1.0","version":"1.0.0",
+              "state":{ "last_key":{ "type":"string", "default":"" } },
+              "children":[
+                { "type":"frame","id":"prompt","width":320,"height":80,
+                  "semantics":{ "aiName":"prompt" },
+                  "events":{ "onKey": [
+                    { "set": { "$app.last_key": "$event.key" } }
+                  ] }
+                }
+              ]
+            }"##,
+        );
+        // Clone the state Rc up front so we can read it while the
+        // dispatcher holds the &mut Runtime borrow.
+        let state = rt.state.clone();
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]);
+
+        let confirm = surface
+            .actions()
+            .iter()
+            .find(|a| matches!(a.source_kind, SourceKind::Confirm))
+            .map(|a| a.name.full())
+            .expect("derive must emit Confirm");
+        let dismiss = surface
+            .actions()
+            .iter()
+            .find(|a| matches!(a.source_kind, SourceKind::Dismiss))
+            .map(|a| a.name.full())
+            .expect("derive must emit Dismiss");
+
+        {
+            let mut dispatcher = RuntimeDispatcher::new(&mut rt);
+            let out = surface.execute(&confirm, None, &mut dispatcher);
+            assert!(matches!(out, ExecuteOutcome::Ok), "confirm outcome={out:?}");
+        }
+        assert_eq!(
+            state.app_get("last_key").and_then(|v| v.as_str().map(str::to_owned)),
+            Some("Enter".to_owned()),
+        );
+
+        {
+            let mut dispatcher = RuntimeDispatcher::new(&mut rt);
+            let out = surface.execute(&dismiss, None, &mut dispatcher);
+            assert!(matches!(out, ExecuteOutcome::Ok), "dismiss outcome={out:?}");
+        }
+        assert_eq!(
+            state.app_get("last_key").and_then(|v| v.as_str().map(str::to_owned)),
+            Some("Escape".to_owned()),
         );
     }
 

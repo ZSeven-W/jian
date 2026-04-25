@@ -294,6 +294,31 @@ impl Runtime {
         emitted
     }
 
+    /// Dispatch a key event to the *named* node — bubbles up the
+    /// parent chain like `dispatch_event` so a key handler on a
+    /// container can claim a child's keystroke. Returns the semantic
+    /// events emitted (one `KeyDown` per call) for host inspection
+    /// and tests. Hosts wire this to OS-level keyboard input;
+    /// `jian-action-surface` synthesises Enter / Escape KeyDowns
+    /// when an AI client invokes `confirm_<slug>` / `dismiss_<slug>`.
+    pub fn dispatch_key(
+        &mut self,
+        target: crate::document::NodeKey,
+        key: impl Into<String>,
+        modifiers: crate::gesture::pointer::Modifiers,
+    ) -> Vec<SemanticEvent> {
+        if self.document.is_none() {
+            return Vec::new();
+        }
+        let event = SemanticEvent::KeyDown {
+            node: target,
+            key: key.into(),
+            modifiers,
+        };
+        self.dispatch_semantic(&event);
+        vec![event]
+    }
+
     /// Drain pending WebSocket messages and fire each session's
     /// `on_message` ActionList for every received frame. Hosts call
     /// this every event-loop iteration (right alongside `tick`) so
@@ -388,7 +413,10 @@ impl Runtime {
 
     fn dispatch_semantic(&self, event: &SemanticEvent) -> ExecOutcome {
         let doc = self.document.as_ref().expect("no document loaded");
-        let ctx = self.make_action_ctx();
+        let ctx = match event_payload(event) {
+            Some(payload) => self.make_action_ctx_with_event(payload),
+            None => self.make_action_ctx(),
+        };
         let outcome = dispatch_event(doc, event, &self.actions, &ctx);
         // Actions mutate state via Signals whose effects are scheduled;
         // flush synchronously so bindings / scene observers see the new
@@ -427,6 +455,37 @@ impl Runtime {
 impl Default for Runtime {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Build the `$event` payload that an `events.*` handler sees for a
+/// given semantic event. Returns `None` for events that don't carry
+/// extra metadata beyond their target node — those handlers run with
+/// `ctx.event = None` and any `$event` access yields null.
+///
+/// `KeyDown` exposes `{ key, modifiers }` so authors can branch on
+/// `$event.key` (e.g. `"Enter"` vs `"Escape"`) — without this the
+/// handler runs but can't tell *which* key fired. Modifiers
+/// stringify to a comma-separated list of "shift" / "ctrl" / "alt"
+/// / "cmd" so simple equality / contains checks work in expressions.
+fn event_payload(event: &SemanticEvent) -> Option<serde_json::Value> {
+    match event {
+        SemanticEvent::KeyDown { key, modifiers, .. } => {
+            let mods: Vec<&str> = [
+                (crate::gesture::pointer::Modifiers::SHIFT, "shift"),
+                (crate::gesture::pointer::Modifiers::CTRL, "ctrl"),
+                (crate::gesture::pointer::Modifiers::ALT, "alt"),
+                (crate::gesture::pointer::Modifiers::CMD, "cmd"),
+            ]
+            .iter()
+            .filter_map(|(flag, name)| modifiers.contains(*flag).then_some(*name))
+            .collect();
+            Some(serde_json::json!({
+                "key": key,
+                "modifiers": mods,
+            }))
+        }
+        _ => None,
     }
 }
 

@@ -85,7 +85,17 @@ impl ActionContext {
     }
 
     pub fn locals_snapshot(&self) -> BTreeMap<String, RuntimeValue> {
-        self.locals.borrow().clone()
+        let mut snap = self.locals.borrow().clone();
+        // Project the active event (if any) into the locals map under
+        // both `event` and `$event` keys, so an action expression can
+        // read `$event.key` / `$event.data` for keyboard / WebSocket
+        // dispatches. Without this the expression VM sees no `$event`
+        // scope and silently resolves to null.
+        if let Some(ev) = &self.event {
+            snap.entry("event".into()).or_insert_with(|| ev.clone());
+            snap.entry("$event".into()).or_insert_with(|| ev.clone());
+        }
+        snap
     }
 }
 
