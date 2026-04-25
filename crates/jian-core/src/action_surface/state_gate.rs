@@ -220,4 +220,128 @@ mod tests {
         // Malformed `visible` → default true → not blocked.
         assert!(gate.allows("root"));
     }
+
+    /// Spec §4.2 #4 says the gate must evaluate `bindings.visible` /
+    /// `bindings.disabled` against the live StateGraph. The Phase 1
+    /// evaluator already runs the full Tier 1 expression suite —
+    /// these tests pin that contract so a future evaluator swap or
+    /// optimisation can't silently regress operator coverage.
+
+    #[test]
+    fn visible_supports_logical_and() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0",
+                 "state":{ "show":{ "type":"bool","default":true },
+                           "perm":{ "type":"bool","default":true } },
+                 "children":[
+                   { "type":"frame","id":"root",
+                     "bindings":{ "visible":"$state.show && $state.perm" } }
+                 ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(gate.allows("root"), "both true → allowed");
+
+        state.app_set("perm", serde_json::json!(false));
+        assert!(!gate.allows("root"), "perm false → blocked");
+    }
+
+    #[test]
+    fn disabled_supports_logical_or() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0",
+                 "state":{ "busy":{ "type":"bool","default":false },
+                           "locked":{ "type":"bool","default":false } },
+                 "children":[
+                   { "type":"frame","id":"root",
+                     "bindings":{ "disabled":"$state.busy || $state.locked" } }
+                 ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(gate.allows("root"), "both false → allowed");
+
+        state.app_set("locked", serde_json::json!(true));
+        assert!(!gate.allows("root"), "locked true → blocked");
+    }
+
+    #[test]
+    fn visible_supports_comparison_and_arithmetic() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0",
+                 "state":{ "count":{ "type":"int","default":3 } },
+                 "children":[
+                   { "type":"frame","id":"root",
+                     "bindings":{ "visible":"$state.count > 0 && $state.count < 10" } }
+                 ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(gate.allows("root"));
+
+        state.app_set("count", serde_json::json!(0));
+        assert!(!gate.allows("root"));
+
+        state.app_set("count", serde_json::json!(99));
+        assert!(!gate.allows("root"));
+    }
+
+    #[test]
+    fn visible_supports_ternary() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0",
+                 "state":{ "mode":{ "type":"string","default":"public" } },
+                 "children":[
+                   { "type":"frame","id":"root",
+                     "bindings":{ "visible":"$state.mode == \"public\" ? true : false" } }
+                 ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(gate.allows("root"));
+
+        state.app_set("mode", serde_json::json!("private"));
+        assert!(!gate.allows("root"));
+    }
+
+    #[test]
+    fn disabled_supports_negation() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0",
+                 "state":{ "ready":{ "type":"bool","default":false } },
+                 "children":[
+                   { "type":"frame","id":"submit",
+                     "bindings":{ "disabled":"!$state.ready" } }
+                 ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(!gate.allows("submit"), "ready=false → !ready=true → disabled → blocked");
+
+        state.app_set("ready", serde_json::json!(true));
+        assert!(gate.allows("submit"), "ready=true → !ready=false → enabled → allowed");
+    }
+
+    #[test]
+    fn visible_template_literal_falls_back_to_default() {
+        // Backtick templates produce *strings*, never bools, so the
+        // strict-bool §4.2 rule rejects them — gate falls back to the
+        // visible:true default. Authors who want bool-valued template
+        // strings should compose the comparison directly:
+        //   "visible": "$state.x > 5"
+        // not
+        //   "visible": "`${$state.x > 5}`".
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0",
+                 "state":{ "x":{ "type":"int","default":10 } },
+                 "children":[
+                   { "type":"frame","id":"root",
+                     "bindings":{ "visible":"`${$state.x > 5}`" } }
+                 ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        // template returns "true" string, not bool → default visible.
+        assert!(gate.allows("root"));
+    }
 }
