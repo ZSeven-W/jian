@@ -123,6 +123,46 @@ jobs:
           key: x86_64-apple-darwin-cross
       - run: cargo build --workspace --all-targets --target x86_64-apple-darwin
 
+  # `textlayout` exercises the skia-paragraph path (ICU + HarfBuzz)
+  # that real-font-metric backends (jian-skia's SkiaMeasure) ride on.
+  # The depot_tools `ninja` wrapper bundled in skia-bindings 0.78
+  # imports the stdlib `pipes` module, which Python 3.13 removed —
+  # default GitHub runners ship 3.13.x as `python3` on macOS and
+  # 3.12.x on Ubuntu. Pin Python 3.11 via `setup-python` so the
+  # wrapper resolves to a Python that still has `pipes`. Windows is
+  # skipped: depot_tools' POSIX shell wrapper isn't usable there
+  # without extra MSys plumbing the rest of CI doesn't depend on.
+  textlayout:
+    name: textlayout ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: textlayout-${{ matrix.target }}
+      - run: cargo build -p jian-skia --features textlayout --target ${{ matrix.target }}
+      - run: cargo test  -p jian-skia --features textlayout --target ${{ matrix.target }}
+
   docs:
     name: rustdoc
     runs-on: ubuntu-latest
