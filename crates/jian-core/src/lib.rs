@@ -12,6 +12,7 @@
 //! - [`logic::LogicProvider`] — how to execute Tier 3 logic modules (reserved for L4).
 
 pub mod action;
+pub mod action_surface;
 pub mod binding;
 pub mod capability;
 pub mod document;
