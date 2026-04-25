@@ -28,6 +28,33 @@ headless and portable across the CI matrix. `jian-cli`'s `player`
 feature (on by default) activates `jian-host-desktop/run`
 transitively.
 
+## Real font metrics under `textlayout`
+
+Default builds use the in-core character-count estimator (good to
+~10% on Latin, undershoots ~50% on CJK). To get glyph-accurate
+measurement that agrees with what jian-skia paints, install
+`SkiaMeasure` once at startup and call
+`Runtime::build_layout_with` instead of `build_layout`:
+
+```rust
+// requires `jian-skia` built with `--features textlayout`
+let measure = std::rc::Rc::new(jian_skia::measure::SkiaMeasure::new());
+runtime.build_layout_with(measure, (w, h))?;
+```
+
+Subsequent `build_layout(size)` calls reuse the same engine (and
+therefore the same backend) until you swap it again. Headless
+tests and the CI fast-path keep the default `EstimateBackend` so
+neither the skia-bindings build nor a system-font scan is required.
+
+`text_growth` semantics in the schema are honoured by every
+backend:
+
+- `auto` — wrap to the container's available width.
+- `fixed-width` — wrap to the node's authored width.
+- `fixed-width-height` — no wrap; report natural extent and let
+  the renderer clip.
+
 ## Status
 
 MVP (`v0.1.0-desktop`):

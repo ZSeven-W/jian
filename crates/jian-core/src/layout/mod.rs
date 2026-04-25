@@ -1,4 +1,17 @@
-//! LayoutEngine — wraps `taffy::TaffyTree` and maps SlotMap keys ↔ taffy NodeIds.
+//! LayoutEngine — wraps `taffy::TaffyTree` and maps SlotMap keys ↔
+//! taffy NodeIds.
+//!
+//! Text leaves measure through a pluggable [`MeasureBackend`]
+//! ([`measure`] module). The default `EstimateBackend` is a
+//! character-count heuristic — fast, font-engine-agnostic, accurate
+//! to ~10% on Latin script. Hosts that want real shaping (CJK / emoji
+//! glyph width, kerning, custom-font metrics) install an alternative
+//! backend at runtime via [`Runtime::build_layout_with`]; jian-skia
+//! ships `SkiaMeasure` under the `textlayout` cargo feature.
+//!
+//! Wrapping is governed by the text node's `text_growth` field
+//! (`Auto` / `FixedWidth` / `FixedWidthHeight`). See
+//! [`measure_text_for_taffy`] for the budget-resolution rules.
 
 pub mod measure;
 pub mod resolve;
@@ -21,6 +34,24 @@ use taffy::prelude::*;
 pub struct TextMeasure {
     pub runs: Vec<OwnedRun>,
     pub line_height: f32, // multiplier; 0.0 → 1.3 default
+    pub growth: TextGrowth,
+}
+
+/// Mirror of `jian_ops_schema::node::TextGrowth` re-exported into
+/// the layout module so the schema dep doesn't leak into measure
+/// callsites. Default `Auto` matches the schema default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextGrowth {
+    /// Wrap to the container's available width; height grows to
+    /// fit. Most common case — body text in a flex column.
+    #[default]
+    Auto,
+    /// Wrap to the node's authored width; height grows to fit. Use
+    /// when the author has a fixed column layout.
+    FixedWidth,
+    /// No wrap; report the natural single-line extent and let the
+    /// renderer clip. Use for one-line labels / chips.
+    FixedWidthHeight,
 }
 
 #[derive(Debug, Clone)]
@@ -223,7 +254,18 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
     };
 
     let line_height = t.line_height.map(|v| v as f32).unwrap_or(0.0);
-    Some(TextMeasure { runs, line_height })
+    let growth = match t.text_growth {
+        Some(jian_ops_schema::node::TextGrowth::FixedWidth) => TextGrowth::FixedWidth,
+        Some(jian_ops_schema::node::TextGrowth::FixedWidthHeight) => {
+            TextGrowth::FixedWidthHeight
+        }
+        Some(jian_ops_schema::node::TextGrowth::Auto) | None => TextGrowth::Auto,
+    };
+    Some(TextMeasure {
+        runs,
+        line_height,
+        growth,
+    })
 }
 
 fn resolve_weight(w: Option<&jian_ops_schema::node::FontWeight>) -> u16 {
@@ -252,6 +294,16 @@ fn resolve_style(s: Option<&jian_ops_schema::node::TextFontStyle>) -> FontStyleK
 
 /// Taffy callback: given the text node's context + container's known
 /// dimensions + available space, hand off to the measure backend.
+///
+/// The `text_growth` field on the node decides how the wrap budget
+/// is computed:
+/// - `Auto`: use the container's available width (default).
+/// - `FixedWidth`: use the node's authored width when known, else
+///   fall back to available — wrap, but don't grow horizontally
+///   beyond what the author asked for.
+/// - `FixedWidthHeight`: no wrap; report the natural single-line
+///   extent. The renderer is responsible for clipping at the
+///   authored bounds.
 fn measure_text_for_taffy(
     backend: &dyn MeasureBackend,
     tm: &TextMeasure,
@@ -260,12 +312,13 @@ fn measure_text_for_taffy(
 ) -> Size<f32> {
     let runs: Vec<StyledRun<'_>> = tm.runs.iter().map(|r| r.as_styled()).collect();
 
-    // Width: prefer known, else clamp to available, else ask the
-    // backend for natural extent.
-    let max_width = match (known.width, avail.width) {
-        (Some(w), _) => Some(w),
-        (None, AvailableSpace::Definite(w)) => Some(w),
-        _ => None,
+    let max_width = match tm.growth {
+        TextGrowth::FixedWidthHeight => None,
+        TextGrowth::FixedWidth | TextGrowth::Auto => match (known.width, avail.width) {
+            (Some(w), _) => Some(w),
+            (None, AvailableSpace::Definite(w)) => Some(w),
+            _ => None,
+        },
     };
 
     let req = MeasureRequest {
