@@ -4,7 +4,7 @@
 //! session. `list_available_actions` does **not** consume a token;
 //! only `execute_action` does.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const CAPACITY: f64 = 10.0;
 const REFILL_PER_SEC: f64 = 10.0;
@@ -73,6 +73,7 @@ mod tests {
 
     #[test]
     fn refills_at_rate() {
+        use std::time::Duration;
         let mut b = TokenBucket::new();
         let t0 = Instant::now();
         for _ in 0..10 {
@@ -88,6 +89,7 @@ mod tests {
 
     #[test]
     fn refill_caps_at_capacity() {
+        use std::time::Duration;
         let mut b = TokenBucket::new();
         let t0 = Instant::now();
         // Drain.

@@ -30,7 +30,7 @@ pub mod rate_limit;
 pub use error::{
     BusyReason, ExecuteError, ExecutionReason, NotAvailableReason, ValidationReason,
 };
-pub use list::{list_actions, ListOptions, ListResponse, ListedAction};
+pub use list::{list_actions, ListOptions, ListResponse, ListedAction, PageScope};
 
 use crate::concurrency::ConcurrencyTracker;
 use crate::execute::{decide, Decision};
@@ -142,22 +142,36 @@ impl ActionSurface {
         list_actions(&self.actions, opts)
     }
 
-    /// `execute_action` with a host-supplied dispatcher. Pure
-    /// gating + dispatch in one call.
+    /// `execute_action` with a host-supplied dispatcher. Runs the
+    /// gating chain in spec §4.2 order:
+    ///
+    ///   1. lookup (`unknown_action`)
+    ///   2. StaticHidden / ConfirmGated short-circuit
+    ///   3. param validation (`missing_required` / `type_mismatch` / …)
+    ///   4. rate limit (`rate_limited`)
+    ///   5. concurrency (`already_running`)
+    ///   6. dispatch
+    ///
+    /// Putting the rate-limit step before the static/lookup gates
+    /// would let a misbehaving client burn the bucket on
+    /// unknown/hidden actions and eventually mask their actual error
+    /// with `rate_limited` — that would confuse legitimate clients
+    /// debugging an aiName change. The bucket is meant to throttle
+    /// real dispatch, not to police lookup typos.
     pub fn execute<D: ActionDispatcher>(
         &mut self,
         name: &str,
         params: Option<&Value>,
         dispatcher: &mut D,
     ) -> ExecuteOutcome {
-        if !self.session.bucket.take() {
-            return ExecuteOutcome::Err(ExecuteError::rate_limited());
-        }
         let decision = decide(&self.actions, name, params);
         let (action, params_map) = match decision {
             Decision::Dispatch { action, params } => (action, params),
             Decision::Reject(e) => return ExecuteOutcome::Err(e),
         };
+        if !self.session.bucket.take() {
+            return ExecuteOutcome::Err(ExecuteError::rate_limited());
+        }
         let full_name = action.name.full();
         if !self.session.concurrency.try_acquire(&full_name) {
             return ExecuteOutcome::Err(ExecuteError::already_running());
