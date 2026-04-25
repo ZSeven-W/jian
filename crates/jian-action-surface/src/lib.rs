@@ -193,7 +193,14 @@ impl ActionSurface {
         let (action, params_map) = match decision {
             Decision::Dispatch { action, params } => (action, params),
             Decision::Reject(e) => {
-                self.audit_for(name, None, params, AuditVerdict::Denied, reason_for_err(&e));
+                self.audit_for(
+                    name,
+                    None,
+                    params,
+                    AuditVerdict::Denied,
+                    reason_for_err(&e),
+                    false,
+                );
                 return ExecuteOutcome::Err(e);
             }
         };
@@ -209,6 +216,7 @@ impl ActionSurface {
                 params,
                 AuditVerdict::Denied,
                 ReasonCode::RateLimited,
+                is_alias,
             );
             return ExecuteOutcome::Err(e);
         }
@@ -220,30 +228,25 @@ impl ActionSurface {
                 params,
                 AuditVerdict::Denied,
                 ReasonCode::AlreadyRunning,
+                is_alias,
             );
             return ExecuteOutcome::Err(e);
-        }
-        // Record alias-used *before* the dispatch so the AuditLog
-        // shows migration progress even if the action then errors.
-        if is_alias {
-            self.audit_for(
-                &full_name,
-                Some(&source_id),
-                params,
-                AuditVerdict::Allowed,
-                ReasonCode::AliasUsed,
-            );
         }
         let result = dispatcher.dispatch(action, &params_map);
         self.session.concurrency.release(&full_name);
         match result {
             Ok(()) => {
+                // Single audit row per `execute_action` (§8.1). When the
+                // call resolved through an alias, that fact rides on
+                // the same row via the dedicated `alias_used` boolean
+                // — no extra entry, no double-counted rate-limit math.
                 self.audit_for(
                     &full_name,
                     Some(&source_id),
                     params,
                     AuditVerdict::Allowed,
                     ReasonCode::Ok,
+                    is_alias,
                 );
                 ExecuteOutcome::Ok
             }
@@ -254,6 +257,7 @@ impl ActionSurface {
                     params,
                     AuditVerdict::Error,
                     reason_for_err(&e),
+                    is_alias,
                 );
                 ExecuteOutcome::Err(e)
             }
@@ -267,6 +271,7 @@ impl ActionSurface {
         params: Option<&Value>,
         outcome: AuditVerdict,
         reason: ReasonCode,
+        alias_used: bool,
     ) {
         let Some(log) = self.audit.as_ref() else {
             return;
@@ -279,6 +284,7 @@ impl ActionSurface {
             source_node_id: source_node_id.map(str::to_owned),
             reason_code: reason,
             outcome,
+            alias_used,
             session_id: self.session_id.clone(),
         });
     }
@@ -451,7 +457,10 @@ mod tests {
     }
 
     #[test]
-    fn audit_records_alias_used_then_ok() {
+    fn audit_records_alias_with_single_entry() {
+        // Spec §8.1: one audit row per `execute_action`, full stop.
+        // When the call resolved through an alias, that fact lives on
+        // the ok row via `alias_used: true` — *not* a second entry.
         let doc: PenDocument = serde_json::from_str(
             r#"{
               "version":"0.8.0",
@@ -471,9 +480,10 @@ mod tests {
         let mut sink = SinkDispatcher;
         surface.execute("home.plus", None, &mut sink);
         let snap = log.snapshot();
-        let reasons: Vec<_> = snap.iter().map(|e| e.reason_code).collect();
-        assert!(reasons.contains(&ReasonCode::AliasUsed));
-        assert!(reasons.contains(&ReasonCode::Ok));
+        assert_eq!(snap.len(), 1, "spec §8.1 — one row per execute");
+        assert_eq!(snap[0].reason_code, ReasonCode::Ok);
+        assert!(snap[0].alias_used, "alias_used flag should be set");
+        assert_eq!(snap[0].action_name, "home.renamed");
     }
 
     #[test]

@@ -68,6 +68,11 @@ pub struct ActionSurfaceAuditEntry {
     pub source_node_id: Option<String>,
     pub reason_code: ReasonCode,
     pub outcome: AuditVerdict,
+    /// `true` when the AI client called this action by an `aiAlias`
+    /// rather than its current canonical name. Lets operators track
+    /// rename-migration progress without scanning two log entries.
+    #[serde(default)]
+    pub alias_used: bool,
     pub session_id: SessionId,
 }
 
@@ -115,18 +120,17 @@ impl Default for ActionAuditLog {
     }
 }
 
-/// FNV-1a 64-bit over `params`'s JSON serialisation, first 8 bytes.
-/// Cheap, deterministic, and good enough at hiding PII at the log
-/// surface (operators reading the log get a pseudo-id, not the email
-/// address).
+/// First 8 bytes of `blake3(serde_json(params))` — spec §8.1's PII
+/// shield. Cryptographic strength means an operator reading the log
+/// can correlate same-payload runs without recovering the original
+/// email / free-text input. Switched from FNV-1a per codex review.
 pub fn hash_params(params: &serde_json::Value) -> [u8; 8] {
     let bytes = serde_json::to_vec(params).unwrap_or_default();
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100_0000_01b3);
-    }
-    h.to_le_bytes()
+    let digest = blake3::hash(&bytes);
+    let full = digest.as_bytes();
+    let mut out = [0u8; 8];
+    out.copy_from_slice(&full[..8]);
+    out
 }
 
 #[cfg(test)]
@@ -142,6 +146,7 @@ mod tests {
             source_node_id: None,
             reason_code: reason,
             outcome,
+            alias_used: false,
             session_id: "s".to_owned(),
         }
     }
