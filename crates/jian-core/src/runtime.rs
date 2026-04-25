@@ -314,6 +314,22 @@ impl Runtime {
         };
         let mut fired = 0usize;
         for (id, session, on_message) in snapshot {
+            // Re-check the registry before running each session's
+            // handler. A previous handler in this same pump pass may
+            // have called `ws_close` (drops the entry) or
+            // `ws_connect` with the same id (replaces the entry with
+            // a new session). Dispatching against the stale `Rc<...>`
+            // would fire on a connection the author already
+            // declared closed.
+            let still_live = self
+                .ws_sessions
+                .borrow()
+                .get(&id)
+                .map(|h| Rc::ptr_eq(&h.session, &session))
+                .unwrap_or(false);
+            if !still_live {
+                continue;
+            }
             let messages: Vec<String> = futures::executor::block_on(session.receive());
             if messages.is_empty() {
                 continue;
@@ -328,6 +344,19 @@ impl Runtime {
                     Ok(c) => c,
                     Err(_) => continue,
                 };
+                // The handler we're about to run could itself touch
+                // ws_sessions (close + reconnect). Re-verify per
+                // message so a mid-burst close stops further
+                // dispatch on the same loop.
+                let still_live = self
+                    .ws_sessions
+                    .borrow()
+                    .get(&id)
+                    .map(|h| Rc::ptr_eq(&h.session, &session))
+                    .unwrap_or(false);
+                if !still_live {
+                    break;
+                }
                 let ctx = self.make_action_ctx_with_event(serde_json::json!({
                     "id": id,
                     "data": msg,

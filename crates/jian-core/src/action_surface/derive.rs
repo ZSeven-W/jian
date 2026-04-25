@@ -120,10 +120,23 @@ pub fn derive_actions_with_warnings(
 /// **De-dup per action**: an action that keeps its own primary as an
 /// alias (`home.save` with `aiAliases: ["save"]`) or repeats an
 /// alias should still register that name *once*.
+///
+/// **Same-source dedup**: a single PenNode can derive multiple
+/// actions (`onTap` + `onLongPress`), and `aiAliases` is currently
+/// node-level so every derived action picks up the same alias list.
+/// Counting each node-level alias once per action would self-collide
+/// every time. We dedup by `(name, source_node_id)` in the count
+/// pass, then collapse to per-name groups for warning + status.
 fn flag_name_collisions(actions: &mut [ActionDefinition]) -> Vec<DeriveWarning> {
     use std::collections::{BTreeMap, HashSet};
     let mut name_to_actions: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     let mut name_is_alias: BTreeMap<String, bool> = BTreeMap::new();
+    // (name, source_node_id) → first idx already counted. A second
+    // action from the same source claiming the same name doesn't
+    // double-count (the §3.4 rule fires on cross-node collisions
+    // only).
+    let mut counted: HashSet<(String, String)> = HashSet::new();
+
     for (idx, a) in actions.iter().enumerate() {
         let mut seen: HashSet<String> = HashSet::new();
         seen.insert(a.name.full());
@@ -131,6 +144,10 @@ fn flag_name_collisions(actions: &mut [ActionDefinition]) -> Vec<DeriveWarning> 
             seen.insert(alias.full());
         }
         for name in seen {
+            let key = (name.clone(), a.source_node_id.clone());
+            if !counted.insert(key) {
+                continue;
+            }
             let is_alias = name != a.name.full();
             name_to_actions.entry(name.clone()).or_default().push(idx);
             // True if *any* action holds this name as an alias.
@@ -169,36 +186,58 @@ fn flag_name_collisions(actions: &mut [ActionDefinition]) -> Vec<DeriveWarning> 
 
 /// Resolve auto-derived slug collisions by appending a numeric `_1`
 /// / `_2` / … suffix in derivation order. Auto-derived means
-/// `has_explicit_name == false` AND no alias overlaps. Authored
-/// names go through `flag_name_collisions` instead.
+/// `has_explicit_name == false`. Authored aiName collisions still
+/// flow into `flag_name_collisions` afterwards.
+///
+/// **Reservation step**: explicit names are collected first so an
+/// auto-derived slug that happens to match an explicit `aiName`
+/// gets bumped to `_1` and the author-stable action keeps the
+/// pristine slug — instead of both falling into `flag_name_collisions`
+/// and the explicit action getting hidden alongside the auto.
 ///
 /// Returns one warning per collided base name so editors can show a
 /// "rename suggestion" hint — none of the suffixed actions become
 /// hidden, just disambiguated.
 fn disambiguate_auto_slugs(actions: &mut [ActionDefinition]) -> Vec<DeriveWarning> {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
+    // Reserved names = every explicit primary + alias. Auto-derived
+    // entries that hit any of these get bumped, so the author-stable
+    // action keeps the unsuffixed slug.
+    let mut reserved: HashSet<String> = HashSet::new();
+    for a in actions.iter() {
+        if a.has_explicit_name {
+            reserved.insert(a.name.full());
+        }
+        for alias in &a.aliases {
+            reserved.insert(alias.full());
+        }
+    }
+    // Group auto-derived entries that share a full name *or* hit
+    // a reserved name. Each group bumps every member that collides.
     let mut name_to_indices: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (idx, a) in actions.iter().enumerate() {
         if !a.has_explicit_name {
-            name_to_indices
-                .entry(a.name.full())
-                .or_default()
-                .push(idx);
+            name_to_indices.entry(a.name.full()).or_default().push(idx);
         }
     }
     let mut warnings = Vec::new();
     for (base, idxs) in name_to_indices {
-        if idxs.len() <= 1 {
+        let collides_with_reserved = reserved.contains(&base);
+        if idxs.len() <= 1 && !collides_with_reserved {
             continue;
         }
         warnings.push(DeriveWarning::AutoSlugDisambiguated {
             base: base.clone(),
             count: idxs.len(),
         });
-        // First occurrence keeps the bare slug; the rest get
-        // `_1` / `_2` / … in derivation order (deterministic).
-        for (n, &i) in idxs.iter().enumerate().skip(1) {
-            actions[i].name.slug = format!("{}_{}", actions[i].name.slug, n);
+        // Rule: when colliding with a reserved (explicit) name, all
+        // auto entries get a suffix — the explicit owner keeps the
+        // pristine slug. Otherwise the first auto keeps the bare
+        // slug (consistent with the previous behaviour).
+        let skip_first = if collides_with_reserved { 0 } else { 1 };
+        for (n, &i) in idxs.iter().enumerate().skip(skip_first) {
+            let suffix = if collides_with_reserved { n + 1 } else { n };
+            actions[i].name.slug = format!("{}_{}", actions[i].name.slug, suffix);
         }
     }
     warnings

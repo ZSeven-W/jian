@@ -115,11 +115,16 @@ impl ImageCache {
     }
 
     /// Drop least-recently-used entries until `byte_total <= byte_cap`.
-    /// `protect` is the just-inserted key — never evicted on the same
-    /// call that created it (tiny entries shouldn't immediately
-    /// evict themselves under contention).
+    /// `protect` is the just-inserted key — protected from same-call
+    /// eviction *unless* it alone exceeds the cap, in which case
+    /// caching it indefinitely would silently bypass the budget.
+    /// Oversize protected entries are dropped immediately.
     fn evict_if_over_budget(&mut self, protect: &str) {
-        while self.byte_total > self.byte_cap {
+        // Drop other LRU victims first.
+        loop {
+            if self.byte_total <= self.byte_cap {
+                return;
+            }
             let victim = self
                 .decoded
                 .iter()
@@ -127,9 +132,19 @@ impl ImageCache {
                 .min_by_key(|(_, e)| e.last_used)
                 .map(|(k, _)| k.clone());
             let Some(key) = victim else {
-                break; // Only the protected entry left.
+                break;
             };
             if let Some(removed) = self.decoded.remove(&key) {
+                self.byte_total = self.byte_total.saturating_sub(removed.bytes);
+            }
+        }
+        // If we're still over budget, the protected entry itself is
+        // larger than the cap — refusing to evict means it lives
+        // forever over budget. Drop it; callers fall back to the
+        // grey placeholder which is cheaper than caching a
+        // budget-busting image.
+        if self.byte_total > self.byte_cap {
+            if let Some(removed) = self.decoded.remove(protect) {
                 self.byte_total = self.byte_total.saturating_sub(removed.bytes);
             }
         }

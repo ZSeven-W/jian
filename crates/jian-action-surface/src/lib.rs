@@ -243,10 +243,15 @@ impl ActionSurface {
         dispatcher: &mut D,
         state_gate: &G,
     ) -> ExecuteOutcome {
-        let decision = decide(&self.actions, name, params);
-        let (action, params_map) = match decision {
-            Decision::Dispatch { action, params } => (action, params),
-            Decision::Reject(e) => {
+        // Spec §4.2 order: 1) lookup → 2) static gate → 3) state gate
+        // → 5) rate limit → 6) concurrency → 7) param validation →
+        // 8) dispatch. Param validation MUST run after the state
+        // gate so a hidden action doesn't get a `validation_failed`
+        // verdict (and an attacker with bad params gets `state_gated`
+        // instead of leaking the schema shape via the error reason).
+        let action = match crate::execute::lookup_static_gate(&self.actions, name) {
+            Ok(a) => a,
+            Err(e) => {
                 self.audit_for(
                     name,
                     None,
@@ -262,10 +267,10 @@ impl ActionSurface {
         let source_id = action.source_node_id.clone();
         let is_alias = full_name != name;
 
-        // Spec §4.2 #4 — dynamic state-gate check. Runs **before**
-        // rate limit so a stale-state rejection doesn't burn a
-        // bucket token (an AI client repeatedly trying a hidden
-        // button shouldn't get throttled out).
+        // Step 4 — dynamic state-gate. Runs **before** rate limit so
+        // a stale-state rejection doesn't burn a bucket token (an
+        // AI client repeatedly trying a briefly-hidden button
+        // shouldn't get throttled out).
         if !state_gate.allows(&source_id) {
             let e = ExecuteError::state_gated();
             self.audit_for(
@@ -303,6 +308,27 @@ impl ActionSurface {
             );
             return ExecuteOutcome::Err(e);
         }
+
+        // Step 7 — param validation runs *after* gates + rate-limit.
+        // Spec §4.2 ordering plus a security argument: an attacker
+        // sending bad params to a hidden action should learn
+        // `state_gated`, not the param schema shape.
+        let params_map = match crate::execute::validate(&action.params, params) {
+            Ok(m) => m,
+            Err(e) => {
+                self.session.concurrency.release(&full_name);
+                self.audit_for(
+                    &full_name,
+                    Some(&source_id),
+                    params,
+                    AuditVerdict::Denied,
+                    reason_for_err(&e),
+                    is_alias,
+                );
+                return ExecuteOutcome::Err(e);
+            }
+        };
+
         let result = dispatcher.dispatch(action, &params_map);
         self.session.concurrency.release(&full_name);
         match result {

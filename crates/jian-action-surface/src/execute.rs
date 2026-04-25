@@ -28,33 +28,57 @@ pub(crate) enum Decision<'a> {
     Reject(ExecuteError),
 }
 
-/// Resolve `name` against the derived list (matching aliases too) and
-/// run the static gate + parameter validation steps. Side-effect-free.
+/// Resolve `name` against the derived list (matching aliases too)
+/// and run the static gate + parameter validation steps in spec
+/// §4.2 order. Side-effect-free. Kept as a single entry point for
+/// callers that don't need to interleave a state-gate / rate-limit
+/// step between gating and validation; `lookup_static_gate` +
+/// `validate_params` cover the split case (used by
+/// `ActionSurface::execute_with_gate`).
 pub(crate) fn decide<'a>(
     actions: &'a [ActionDefinition],
     name: &str,
     raw_params: Option<&Value>,
 ) -> Decision<'a> {
+    match lookup_static_gate(actions, name) {
+        Ok(action) => match validate_params(&action.params, raw_params) {
+            Ok(params) => Decision::Dispatch { action, params },
+            Err(e) => Decision::Reject(e),
+        },
+        Err(e) => Decision::Reject(e),
+    }
+}
+
+/// Spec §4.2 step 1-3: lookup → StaticHidden → ConfirmGated. Returns
+/// the resolved action or the matching `ExecuteError`. Used by
+/// `execute_with_gate` to run the state gate / rate limit / busy
+/// check **before** parameter validation.
+pub(crate) fn lookup_static_gate<'a>(
+    actions: &'a [ActionDefinition],
+    name: &str,
+) -> Result<&'a ActionDefinition, ExecuteError> {
     let Some(action) = lookup(actions, name) else {
-        return Decision::Reject(ExecuteError::unknown_action());
+        return Err(ExecuteError::unknown_action());
     };
     match action.status {
-        AvailabilityStatic::StaticHidden => {
-            return Decision::Reject(ExecuteError::static_hidden());
-        }
+        AvailabilityStatic::StaticHidden => Err(ExecuteError::static_hidden()),
         AvailabilityStatic::ConfirmGated => {
             // Spec §4.2 #3: ConfirmGated rejects regardless of whether
             // the action was listed (include_confirm_gated only opens
             // visibility, not callability).
-            return Decision::Reject(ExecuteError::confirm_gated());
+            Err(ExecuteError::confirm_gated())
         }
-        AvailabilityStatic::Available => {}
+        AvailabilityStatic::Available => Ok(action),
     }
-    let params = match validate_params(&action.params, raw_params) {
-        Ok(map) => map,
-        Err(e) => return Decision::Reject(e),
-    };
-    Decision::Dispatch { action, params }
+}
+
+/// Public alias for `validate_params` so `ActionSurface` can run it
+/// late in the gating chain.
+pub(crate) fn validate(
+    declared: &[ParamSpec],
+    raw: Option<&Value>,
+) -> Result<Map<String, Value>, ExecuteError> {
+    validate_params(declared, raw)
 }
 
 fn lookup<'a>(actions: &'a [ActionDefinition], name: &str) -> Option<&'a ActionDefinition> {

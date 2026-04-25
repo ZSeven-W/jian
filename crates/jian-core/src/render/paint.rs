@@ -108,13 +108,28 @@ pub enum ImageSource {
 }
 
 impl ImageSource {
-    /// Stable cache key. Cheap for `DataUrl`/`Url` (string clone); for
-    /// `Bytes` we hash the pointer address — backends that want
-    /// content-addressed caching wrap with their own hash on insert.
+    /// Stable, content-addressed cache key.
+    ///
+    /// `DataUrl` / `Url` use the string verbatim — already stable
+    /// across allocations and across runs.
+    ///
+    /// `Bytes` keys by FNV-1a 64-bit content hash + length. Pointer
+    /// addresses are *not* stable: an Arc that gets dropped after
+    /// the cache key is computed can have its memory reused by a
+    /// different `Bytes(...)` payload, returning the wrong cached
+    /// image. Hashing the bytes is O(N) but only happens on the
+    /// first insert per source.
     pub fn cache_key(&self) -> String {
         match self {
             Self::DataUrl(s) | Self::Url(s) => s.clone(),
-            Self::Bytes(b) => format!("bytes:{:p}:{}", std::sync::Arc::as_ptr(b), b.len()),
+            Self::Bytes(b) => {
+                let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+                for byte in b.iter() {
+                    h ^= *byte as u64;
+                    h = h.wrapping_mul(0x100_0000_01b3);
+                }
+                format!("bytes:{:016x}:{}", h, b.len())
+            }
         }
     }
 }
