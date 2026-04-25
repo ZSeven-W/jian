@@ -1,13 +1,18 @@
 //! `jian` — CLI toolchain for `.op` files.
 //!
-//! Subcommands (MVP):
+//! Subcommands:
 //! - `jian check PATH` — parse + validate a `.op`, print diagnostics.
 //! - `jian pack PATH OUT` — zip a `.op` + manifest into `.op.pack`.
 //! - `jian unpack PATH OUT_DIR` — inverse of pack.
 //! - `jian new NAME` — scaffold a new project from an embedded template.
+//! - `jian player PATH` — open the `.op` in a real desktop window
+//!   (default `player` feature; needs the `jian-host-desktop` event loop).
+//! - `jian dev PATH` — `player` plus a `notify` filesystem watcher;
+//!   reloads the document on save while preserving `$state.*` values.
 //!
-//! The `player` / `dev` subcommands land once
-//! `jian-host-desktop::DesktopHost::run` ships a real winit event loop.
+//! `player` and `dev` ship under the default `player` cargo feature.
+//! `--no-default-features` builds a headless toolchain (check / pack /
+//! unpack / new) suitable for CI containers without a display.
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
