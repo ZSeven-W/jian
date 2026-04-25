@@ -28,30 +28,42 @@ headless and portable across the CI matrix. `jian-cli`'s `player`
 feature (on by default) activates `jian-host-desktop/run`
 transitively.
 
-## Real font metrics under `textlayout`
+## Real font metrics — backend hook
 
 Default builds use the in-core character-count estimator (good to
 ~10% on Latin, undershoots ~50% on CJK). To get glyph-accurate
-measurement that agrees with what jian-skia paints, install
-`SkiaMeasure` once at startup and call
-`Runtime::build_layout_with` instead of `build_layout`:
+measurement that agrees with what jian-skia paints, hosts install
+a `MeasureBackend` once at startup and call
+`Runtime::build_layout_with` instead of `build_layout`. The
+runtime then mutates the engine's backend slot in place; every
+subsequent `build_layout(size)` reuses the installed backend until
+it's swapped again.
+
+The intended production backend is `SkiaMeasure` over
+`skia_safe::textlayout::Paragraph`, gated by `jian-skia`'s
+`textlayout` cargo feature. **It is not yet implemented** — Tasks
+2 and 3 of the font-metrics plan still wait on the textlayout
+build environment. Headless tests and the CI fast-path keep the
+default `EstimateBackend` so neither the skia-bindings build nor
+a system-font scan is required.
+
+When `SkiaMeasure` lands, the install pattern will look like:
 
 ```rust
-// requires `jian-skia` built with `--features textlayout`
-let measure = std::rc::Rc::new(jian_skia::measure::SkiaMeasure::new());
-runtime.build_layout_with(measure, (w, h))?;
+// future — requires `jian-skia` built with `--features textlayout`,
+// expected once font-metrics plan Task 2 ships:
+//
+// let measure = std::rc::Rc::new(jian_skia::measure::SkiaMeasure::new());
+// runtime.build_layout_with(measure, (w, h))?;
 ```
 
-Subsequent `build_layout(size)` calls reuse the same engine (and
-therefore the same backend) until you swap it again. Headless
-tests and the CI fast-path keep the default `EstimateBackend` so
-neither the skia-bindings build nor a system-font scan is required.
-
-`text_growth` semantics in the schema are honoured by every
-backend:
+`text_growth` semantics in the schema are already honoured by
+every backend (Task 4 shipped):
 
 - `auto` — wrap to the container's available width.
-- `fixed-width` — wrap to the node's authored width.
+- `fixed-width` — wrap to the node's authored numeric width;
+  falls back to `auto` semantics when the node was authored as
+  `width: auto` (no fixed budget to honour).
 - `fixed-width-height` — no wrap; report natural extent and let
   the renderer clip.
 

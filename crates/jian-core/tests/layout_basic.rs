@@ -50,6 +50,93 @@ fn text_growth_fixed_width_height_skips_wrap() {
 }
 
 #[test]
+fn text_growth_fixed_width_honours_authored_width() {
+    // FixedWidth on a node with an authored numeric width must
+    // wrap to that width even when the parent column is wider.
+    // Confirms Task 4's distinction from Auto: an auto-width
+    // FixedWidth node would just stretch; an authored 60px
+    // FixedWidth node wraps at 60.
+    let doc = build(
+        r##"{
+      "version":"0.8.0",
+      "children":[{
+        "type":"frame","id":"col","width":400,"layout":"vertical",
+        "children":[
+          { "type":"text","id":"para",
+            "width":60,
+            "content":"This sentence is intentionally too long to fit",
+            "fontSize":16, "textGrowth":"fixed-width" }
+        ]
+      }]
+    }"##,
+    );
+    let mut eng = LayoutEngine::new();
+    let roots = eng.build(&doc.tree).unwrap();
+    eng.compute(roots[0], (800.0, 600.0)).unwrap();
+    let para = eng.node_rect(doc.tree.get("para").unwrap()).unwrap();
+    assert_eq!(
+        para.size.width, 60.0,
+        "fixed-width must respect authored 60, got width={}",
+        para.size.width,
+    );
+    assert!(
+        para.size.height > 16.0 * 1.4,
+        "wrapping at 60 must produce 2+ rows, got height={}",
+        para.size.height,
+    );
+}
+
+#[test]
+fn styled_segments_fan_out_into_runs() {
+    // Schema-authored TextContent::Styled flows through
+    // text_measure_for as one OwnedRun per segment. Concrete
+    // observable: a styled mix of [400, 700] weights measures
+    // strictly wider than the same total characters at uniform
+    // 400 (the heuristic uses the heaviest weight ratio).
+    let doc_uniform = build(
+        r##"{
+      "version":"0.8.0",
+      "children":[{
+        "type":"text","id":"t",
+        "content":"Hello there friend",
+        "fontSize":16
+      }]
+    }"##,
+    );
+    let doc_styled = build(
+        r##"{
+      "version":"0.8.0",
+      "children":[{
+        "type":"text","id":"t",
+        "content":[
+          { "text":"Hello ", "fontWeight":400 },
+          { "text":"there ", "fontWeight":700 },
+          { "text":"friend",  "fontWeight":400 }
+        ],
+        "fontSize":16
+      }]
+    }"##,
+    );
+    let mut eng = LayoutEngine::new();
+    let roots = eng.build(&doc_uniform.tree).unwrap();
+    eng.compute(roots[0], (800.0, 600.0)).unwrap();
+    let uniform = eng.node_rect(doc_uniform.tree.get("t").unwrap()).unwrap();
+
+    let mut eng2 = LayoutEngine::new();
+    let roots2 = eng2.build(&doc_styled.tree).unwrap();
+    eng2.compute(roots2[0], (800.0, 600.0)).unwrap();
+    let styled = eng2.node_rect(doc_styled.tree.get("t").unwrap()).unwrap();
+
+    assert!(
+        styled.size.width >= uniform.size.width,
+        "styled mix-weight run should not measure narrower than uniform 400 \
+         (uniform={}, styled={})",
+        uniform.size.width,
+        styled.size.width,
+    );
+}
+
+#[test]
 fn text_growth_auto_wraps_to_available() {
     // Default (`auto`) text wraps when the available width is too
     // narrow, growing the row's height instead of the column's.

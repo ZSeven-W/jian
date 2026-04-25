@@ -236,12 +236,17 @@ impl Runtime {
     /// subsequent `build_layout` calls reuse the same backend until
     /// it's swapped again. Default-feature builds and unit tests
     /// stay on the in-core `EstimateBackend`.
+    ///
+    /// The swap mutates the existing layout engine in place
+    /// (preserving any cached taffy state); the next layout pass
+    /// rebuilds the tree from `doc.tree` as usual, but the engine's
+    /// backend slot is now the host-supplied one.
     pub fn build_layout_with(
         &mut self,
         measure: Rc<dyn crate::layout::measure::MeasureBackend>,
         available: (f32, f32),
     ) -> CoreResult<()> {
-        self.layout = crate::layout::LayoutEngine::with_backend(measure);
+        self.layout.set_backend(measure);
         self.build_layout(available)
     }
 

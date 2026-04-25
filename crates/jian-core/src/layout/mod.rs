@@ -104,6 +104,15 @@ impl LayoutEngine {
         }
     }
 
+    /// Swap the measurement backend in place. Preserves the existing
+    /// taffy tree + node-id map + parent map, so the next
+    /// `build`/`compute` cycle reuses them. Hosts call this when a
+    /// real shaper becomes available mid-session (e.g. lazy-loaded
+    /// font set finishes its initial scan).
+    pub fn set_backend(&mut self, measure: Rc<dyn MeasureBackend>) {
+        self.measure = measure;
+    }
+
     /// Build a taffy tree mirroring the NodeTree. Returns the root NodeIds.
     pub fn build(&mut self, doc_tree: &NodeTree) -> CoreResult<Vec<NodeId>> {
         self.tree = TaffyTree::new();
@@ -298,9 +307,13 @@ fn resolve_style(s: Option<&jian_ops_schema::node::TextFontStyle>) -> FontStyleK
 /// The `text_growth` field on the node decides how the wrap budget
 /// is computed:
 /// - `Auto`: use the container's available width (default).
-/// - `FixedWidth`: use the node's authored width when known, else
-///   fall back to available — wrap, but don't grow horizontally
-///   beyond what the author asked for.
+/// - `FixedWidth`: use the node's authored width *only*. When the
+///   node was authored as `width: auto` the budget falls back to
+///   the container's available width — same effective behaviour
+///   as `Auto` in that corner case, since there's no fixed budget
+///   to honour. Authors who want a hard wrap to the container
+///   should use `Auto`; `FixedWidth` is intended for nodes with
+///   an explicit numeric width.
 /// - `FixedWidthHeight`: no wrap; report the natural single-line
 ///   extent. The renderer is responsible for clipping at the
 ///   authored bounds.
@@ -313,8 +326,22 @@ fn measure_text_for_taffy(
     let runs: Vec<StyledRun<'_>> = tm.runs.iter().map(|r| r.as_styled()).collect();
 
     let max_width = match tm.growth {
+        // Hard "no wrap" — the renderer clips at the authored
+        // bounds; we report natural single-line extent.
         TextGrowth::FixedWidthHeight => None,
-        TextGrowth::FixedWidth | TextGrowth::Auto => match (known.width, avail.width) {
+        // FixedWidth honours an *authored* width when taffy
+        // resolved it (passed in via `known.width`); otherwise the
+        // node has no authoritative budget and we fall back to
+        // available — matches Auto's behaviour in that corner.
+        TextGrowth::FixedWidth => match known.width {
+            Some(w) => Some(w),
+            None => match avail.width {
+                AvailableSpace::Definite(w) => Some(w),
+                _ => None,
+            },
+        },
+        // Auto wraps to the container's available width.
+        TextGrowth::Auto => match (known.width, avail.width) {
             (Some(w), _) => Some(w),
             (None, AvailableSpace::Definite(w)) => Some(w),
             _ => None,
