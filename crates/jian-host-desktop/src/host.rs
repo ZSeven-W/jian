@@ -31,6 +31,12 @@ pub struct DesktopHost {
 pub struct HostConfig {
     pub title: String,
     pub initial_size: Size,
+    /// Optional native menu bar. When `Some` the run loop builds
+    /// a `muda::Menu` on first window create and `init_for_*` it
+    /// against the active window. When `None`, no menu attaches —
+    /// useful for headless / kiosk-style apps. Defaults to
+    /// `MenuSpec::default_app_spec(<title>)` via `with_default_menu`.
+    pub menu: Option<crate::menus::MenuSpec>,
 }
 
 impl Default for HostConfig {
@@ -38,6 +44,7 @@ impl Default for HostConfig {
         Self {
             title: "Jian".to_owned(),
             initial_size: size(800.0, 600.0),
+            menu: None,
         }
     }
 }
@@ -72,6 +79,15 @@ impl DesktopHost {
         self
     }
 
+    /// Attach the standard File / Edit / View / Help menu skeleton
+    /// keyed off the current `config.title`. Hosts that want a
+    /// custom menu set `config.menu` directly.
+    pub fn with_default_menu(mut self) -> Self {
+        let title = self.config.title.clone();
+        self.config.menu = Some(crate::menus::MenuSpec::default_app_spec(&title));
+        self
+    }
+
     pub fn title(&self) -> &str {
         &self.config.title
     }
@@ -99,10 +115,26 @@ mod tests {
         let cfg = HostConfig {
             title: "Custom".into(),
             initial_size: size(320.0, 200.0),
+            menu: None,
         };
         let host = DesktopHost::with_config(rt, cfg);
         assert_eq!(host.title(), "Custom");
         assert_eq!(host.initial_size().width, 320.0);
         assert_eq!(host.initial_size().height, 200.0);
+    }
+
+    #[test]
+    fn with_default_menu_attaches_standard_skeleton() {
+        let rt = Runtime::new();
+        let host = DesktopHost::new(rt, "MenuApp").with_default_menu();
+        let spec = host.config.menu.expect("default menu attached");
+        // The skeleton always exposes the app submenu first; its label
+        // matches the title we passed in.
+        match spec.items.first() {
+            Some(crate::menus::MenuItem::Submenu { label, .. }) => {
+                assert_eq!(label, "MenuApp");
+            }
+            other => panic!("expected app submenu first, got {other:?}"),
+        }
     }
 }

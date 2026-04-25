@@ -130,8 +130,11 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
     let cfg = HostConfig {
         title,
         initial_size: size(w, h),
+        menu: None,
     };
-    let host = DesktopHost::with_config(rt, cfg).with_reloader(rx);
+    let host = DesktopHost::with_config(rt, cfg)
+        .with_default_menu()
+        .with_reloader(rx);
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)
 }

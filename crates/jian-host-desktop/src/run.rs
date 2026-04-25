@@ -72,6 +72,13 @@ struct RunApp {
     /// canvas + pointer input are scaled so the raster surface is filled
     /// pixel-perfect.
     scale_factor: f64,
+    /// Materialised native menu (when feature `menus` is on AND
+    /// `host.config.menu` is non-None). Built once on first window
+    /// create and kept alive for the program's lifetime — muda holds
+    /// raw pointers internally, so dropping it would invalidate the
+    /// menu bar.
+    #[cfg(feature = "menus")]
+    menu: Option<muda::Menu>,
 }
 
 struct SoftbufferState {
@@ -94,6 +101,8 @@ impl RunApp {
                 initial.height.max(1.0) as u32,
             ),
             scale_factor: 1.0,
+            #[cfg(feature = "menus")]
+            menu: None,
         }
     }
 
@@ -194,6 +203,24 @@ impl ApplicationHandler for RunApp {
         self.last_size = (phys.width.max(1), phys.height.max(1));
         self.window = Some(Rc::new(window));
         self.ensure_surface(self.last_size.0, self.last_size.1);
+
+        #[cfg(feature = "menus")]
+        if self.menu.is_none() {
+            if let Some(spec) = self.host.config.menu.clone() {
+                let built = crate::menus::build_muda_menu(&spec);
+                for w in &built.warnings {
+                    eprintln!("jian-host-desktop: menu warning: {}", w);
+                }
+                if let Some(window) = self.window.as_ref() {
+                    if let Err(e) =
+                        crate::menus::init_menu_for_window(&built.menu, window.as_ref())
+                    {
+                        eprintln!("jian-host-desktop: menu init failed: {}", e);
+                    }
+                }
+                self.menu = Some(built.menu);
+            }
+        }
         // Layout + viewport live in *logical* coordinates; only the
         // raster surface and pointer input use physical pixels.
         let logical = logical_size_f32(phys, self.scale_factor);

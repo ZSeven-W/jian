@@ -180,6 +180,63 @@ pub fn build_muda_menu(spec: &MenuSpec) -> BuiltMenu {
     BuiltMenu { menu, warnings }
 }
 
+/// Attach a built `muda::Menu` to the host's active window. Each
+/// platform has its own muda entry point — macOS hangs the menu off
+/// the running NSApp (no window needed), Windows wants the HWND,
+/// Linux/GTK needs the underlying GTK window which winit doesn't
+/// expose at this layer.
+///
+/// Returns `Ok(())` on platforms where attachment succeeded (or was
+/// a no-op by design). Linux currently logs to stderr and returns
+/// `Ok(())` rather than failing — the menu spec is still
+/// serialisable for future GTK or Wayland integration.
+#[cfg(feature = "menus")]
+pub fn init_menu_for_window(
+    menu: &muda::Menu,
+    #[allow(unused_variables)] window: &winit::window::Window,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // macOS menus are app-global, not per-window — initialising
+        // once on the running NSApp covers every future window. Calling
+        // it again on a second window is harmless (muda just overwrites).
+        menu.init_for_nsapp();
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let handle = window
+            .window_handle()
+            .map_err(|e| format!("window_handle: {e}"))?;
+        match handle.as_raw() {
+            RawWindowHandle::Win32(h) => menu
+                .init_for_hwnd(h.hwnd.get() as isize)
+                .map_err(|e| format!("init_for_hwnd: {e}")),
+            other => Err(format!("unexpected window handle on Windows: {:?}", other)),
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // muda's Linux backend wants a `gtk::Window`, but winit on
+        // Linux can run on either X11 or Wayland and doesn't surface
+        // a GTK widget for us to hand over. Hosts that need a Linux
+        // menu bar must build their own gtk::Application + gtk::Window
+        // and call `menu.init_for_gtk_window` themselves; the run
+        // loop here just leaves the menu unattached.
+        eprintln!(
+            "jian-host-desktop: native menu unattached on Linux \
+             (muda needs a gtk::Window the winit backend doesn't expose)"
+        );
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = menu;
+        Err("init_menu_for_window: unsupported platform".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
