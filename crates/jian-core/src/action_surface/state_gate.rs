@@ -1,0 +1,213 @@
+//! Built-in `bindings.visible` / `bindings.disabled` evaluator.
+//!
+//! Spec §4.2 #4 — the production state-gate walks the source node
+//! and every ancestor, evaluating the two binding expressions
+//! against the live `StateGraph`. If any ancestor's `visible`
+//! resolves to `false` (or `disabled` to `true`), the action is
+//! `state_gated`. Default for production hosts that don't ship a
+//! custom `StateGate` implementation.
+//!
+//! Lives in `jian-core` because evaluation needs the document tree +
+//! StateGraph + Expression compiler — none of which the
+//! `jian-action-surface` crate carries directly. Hosts construct
+//! `RuntimeStateGate { runtime: &Runtime }` and pass `&gate` to
+//! `ActionSurface::execute_with_gate`.
+
+use crate::document::{NodeKey, RuntimeDocument};
+use crate::expression::{Expression, ExpressionCache};
+use crate::state::StateGraph;
+use jian_ops_schema::node::PenNode;
+use serde_json::Value;
+use std::rc::Rc;
+
+/// Evaluator that walks `source_node_id` + ancestors and tests each
+/// node's `bindings.visible` / `bindings.disabled` expression
+/// against a live state graph. Returns `true` when every ancestor
+/// is visible AND not disabled — false otherwise.
+pub struct RuntimeStateGate<'a> {
+    pub document: &'a RuntimeDocument,
+    pub state: &'a StateGraph,
+    pub expr_cache: Rc<ExpressionCache>,
+}
+
+impl<'a> RuntimeStateGate<'a> {
+    pub fn new(
+        document: &'a RuntimeDocument,
+        state: &'a StateGraph,
+        expr_cache: Rc<ExpressionCache>,
+    ) -> Self {
+        Self {
+            document,
+            state,
+            expr_cache,
+        }
+    }
+
+    /// Returns `true` when the action's source node and every
+    /// ancestor passes the visible/disabled checks. False when any
+    /// hop is hidden, disabled, or the node is missing entirely.
+    pub fn allows(&self, source_node_id: &str) -> bool {
+        let Some(start) = self.document.tree.get(source_node_id) else {
+            // Missing nodes are state-gated — the action references a
+            // tree slot that no longer exists (hot reload that
+            // dropped the node, for instance).
+            return false;
+        };
+        let mut current: Option<NodeKey> = Some(start);
+        while let Some(key) = current {
+            let Some(data) = self.document.tree.nodes.get(key) else {
+                return false;
+            };
+            if !self.node_passes(&data.schema) {
+                return false;
+            }
+            current = data.parent;
+        }
+        true
+    }
+
+    /// Evaluate `bindings.visible` and `bindings.disabled` on a
+    /// single node. Result is `false` (state-gated) when either
+    /// `visible == false` or `disabled == true`. Missing bindings
+    /// default to visible + enabled.
+    fn node_passes(&self, node: &PenNode) -> bool {
+        let json = match serde_json::to_value(node) {
+            Ok(v) => v,
+            Err(_) => return true, // Can't introspect → don't block.
+        };
+        let bindings = json.get("bindings").and_then(|v| v.as_object());
+        let Some(bindings) = bindings else {
+            return true;
+        };
+        let node_id = json.get("id").and_then(|v| v.as_str()).unwrap_or("");
+
+        if let Some(expr) = bindings.get("visible").and_then(|v| v.as_str()) {
+            if !self.eval_bool(expr, node_id, true) {
+                return false;
+            }
+        }
+        if let Some(expr) = bindings.get("disabled").and_then(|v| v.as_str()) {
+            if self.eval_bool(expr, node_id, false) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Compile + evaluate a binding expression to bool. Returns
+    /// `default` on parse failure or when the expression resolves to
+    /// a non-boolean value (so a malformed `visible` binding doesn't
+    /// permanently hide a node — debugging hook is the audit log).
+    fn eval_bool(&self, expr_src: &str, node_id: &str, default: bool) -> bool {
+        let compiled = match Expression::compile(expr_src) {
+            Ok(e) => e,
+            Err(_) => return default,
+        };
+        let (value, _warnings) =
+            compiled.eval(self.state, None, Some(node_id));
+        match value.as_bool() {
+            Some(b) => b,
+            None => match value.as_i64() {
+                Some(0) => false,
+                Some(_) => true,
+                None => match Value::from(serde_json::Value::Null) {
+                    _ => default,
+                },
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::loader;
+    use crate::signal::scheduler::Scheduler;
+    use jian_ops_schema::document::PenDocument;
+
+    fn build(json: &str) -> (RuntimeDocument, Rc<StateGraph>) {
+        let schema: PenDocument = serde_json::from_str(json).unwrap();
+        let scheduler = Rc::new(Scheduler::new());
+        let state = Rc::new(StateGraph::new(scheduler));
+        let doc = loader::build(schema, &state).unwrap();
+        (doc, state)
+    }
+
+    #[test]
+    fn missing_node_is_state_gated() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0", "children":[
+                { "type":"frame","id":"root" }
+            ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(!gate.allows("nonexistent"));
+    }
+
+    #[test]
+    fn no_bindings_means_allowed() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0", "children":[
+                { "type":"frame","id":"root","children":[
+                    { "type":"frame","id":"child" }
+                ]}
+            ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(gate.allows("child"));
+    }
+
+    #[test]
+    fn visible_false_blocks() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0", "children":[
+                { "type":"frame","id":"root", "bindings":{ "visible":"false" } }
+            ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(!gate.allows("root"));
+    }
+
+    #[test]
+    fn disabled_true_blocks() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0", "children":[
+                { "type":"frame","id":"root", "bindings":{ "disabled":"true" } }
+            ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(!gate.allows("root"));
+    }
+
+    #[test]
+    fn ancestor_hidden_blocks_descendant() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0", "children":[
+                { "type":"frame","id":"root", "bindings":{ "visible":"false" },
+                  "children":[
+                    { "type":"frame","id":"deep" }
+                  ]}
+            ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        assert!(!gate.allows("deep"));
+    }
+
+    #[test]
+    fn malformed_expression_falls_back_to_default() {
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0", "children":[
+                { "type":"frame","id":"root", "bindings":{ "visible":"((((" } }
+            ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        // Malformed `visible` → default true → not blocked.
+        assert!(gate.allows("root"));
+    }
+}
