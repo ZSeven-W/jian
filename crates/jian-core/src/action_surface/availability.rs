@@ -65,14 +65,16 @@ fn action_is_destructive(action: &Value) -> bool {
                     .and_then(|v| v.as_str())
                     .unwrap_or("GET")
                     .to_ascii_uppercase();
-                if matches!(
-                    method.as_str(),
-                    "POST" | "PUT" | "PATCH" | "DELETE"
-                ) {
+                if matches!(method.as_str(), "POST" | "PUT" | "PATCH" | "DELETE") {
                     return true;
                 }
             }
             // Control-flow verbs — recurse into nested ActionLists.
+            // `if.then` / `if.else`        — ActionList arrays
+            // `for_each.do`                — ActionList array
+            // `parallel` / `race`          — body itself is an array
+            //   whose items are either action objects or nested
+            //   ActionList arrays (`make_parallel_body` accepts both).
             "if" => {
                 if recurse_branch(body.get("then")) || recurse_branch(body.get("else")) {
                     return true;
@@ -84,7 +86,7 @@ fn action_is_destructive(action: &Value) -> bool {
                 }
             }
             "parallel" | "race" => {
-                if recurse_branch(body.get("actions")) {
+                if scan_parallel_body(body) {
                     return true;
                 }
             }
@@ -92,6 +94,22 @@ fn action_is_destructive(action: &Value) -> bool {
         }
     }
     false
+}
+
+/// Walk a `parallel` / `race` body. Each entry is either an action
+/// object OR an ActionList array — match `make_parallel_body`'s
+/// runtime acceptance.
+fn scan_parallel_body(body: &Value) -> bool {
+    let Some(arr) = body.as_array() else {
+        return false;
+    };
+    arr.iter().any(|item| {
+        if item.is_array() {
+            chain_is_destructive(item)
+        } else {
+            action_is_destructive(item)
+        }
+    })
 }
 
 fn recurse_branch(branch: Option<&Value>) -> bool {
@@ -167,8 +185,28 @@ mod tests {
     }
 
     #[test]
-    fn parallel_destructive() {
-        let chain = json!([{ "parallel": { "actions": [ { "confirm": {} } ] } }]);
+    fn parallel_array_body_destructive() {
+        // `parallel` body is an array of action objects (or nested
+        // ActionList arrays) — the previous `{actions: [...]}` form
+        // didn't match the runtime's actual parser.
+        let chain = json!([{ "parallel": [ { "confirm": {} } ] }]);
+        assert!(chain_is_destructive(&chain));
+    }
+
+    #[test]
+    fn parallel_array_of_actionlists_destructive() {
+        let chain = json!([
+          { "parallel": [
+              [ { "set": { "$state.x": "1" } } ],
+              [ { "storage_wipe": null } ]
+          ]}
+        ]);
+        assert!(chain_is_destructive(&chain));
+    }
+
+    #[test]
+    fn race_destructive_in_array_body() {
+        let chain = json!([{ "race": [ { "fetch": { "url": "/", "method": "POST" } } ] }]);
         assert!(chain_is_destructive(&chain));
     }
 }

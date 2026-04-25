@@ -262,8 +262,10 @@ impl Runtime {
     /// Route a wheel event to whatever node the cursor is over and
     /// emit `SemanticEvent::Scroll` for the topmost node carrying an
     /// `events.onScroll` handler. Wheel doesn't compete in the gesture
-    /// arena (no Tap/Pan rivalry), so we hit-test directly. Returns
-    /// the emitted events for host inspection / tests.
+    /// arena (no Tap/Pan rivalry), so we use `hit_test` directly to
+    /// get the z-ordered path (deepest first, then bubble up
+    /// ancestors). Returns the emitted events for host inspection /
+    /// tests.
     pub fn dispatch_wheel(
         &mut self,
         event: crate::gesture::pointer::WheelEvent,
@@ -272,12 +274,11 @@ impl Runtime {
             return Vec::new();
         };
         let mut emitted = Vec::new();
-        // Hit-test returns hits topmost-first. Pick the first node
-        // that has an onScroll handler; if none do, the wheel event
-        // is silently dropped (matches scroll behaviour in browsers
-        // when no listener is registered).
-        let hits = self.spatial.hit(event.position);
-        for key in hits {
+        // `hit_test` returns the deepest-first hit path including all
+        // ancestors, so a wheel that lands on a child without a
+        // handler still bubbles up to a parent scroll container.
+        let path = crate::gesture::hit::hit_test(&self.spatial, doc, event.position);
+        for key in path.0.iter().copied() {
             let schema = &doc.tree.nodes[key].schema;
             if json_has_event_handler(schema, "onScroll") {
                 emitted.push(SemanticEvent::Scroll {
@@ -346,19 +347,33 @@ impl Default for Runtime {
     }
 }
 
-/// Does the node's schema carry a non-null `events.<key>` ActionList?
+/// Does the node's schema carry a non-empty `events.<key>` ActionList?
 /// Round-trips through serde_json::Value so the same code handles all
 /// 11 PenNode variants without per-variant matches — same trick the
 /// scene walker and `extract_handler` use.
+///
+/// Spec §3.2 says rules trigger on "events.X 非空" — an empty array
+/// `[]` therefore doesn't count, otherwise a parent with a real
+/// onScroll handler would be silently shadowed by an empty stub on
+/// the deepest hit.
 fn json_has_event_handler(node: &jian_ops_schema::node::PenNode, key: &str) -> bool {
-    serde_json::to_value(node)
-        .ok()
-        .and_then(|v| v.as_object().cloned())
-        .and_then(|obj| obj.get("events").cloned())
-        .and_then(|events| events.as_object().cloned())
-        .and_then(|map| map.get(key).cloned())
-        .map(|h| !h.is_null())
-        .unwrap_or(false)
+    use serde_json::Value;
+    let v = match serde_json::to_value(node) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let handler = v
+        .as_object()
+        .and_then(|obj| obj.get("events"))
+        .and_then(|events| events.as_object())
+        .and_then(|map| map.get(key));
+    match handler {
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Null) | None => false,
+        // Object / scalar handler — not strictly an ActionList but
+        // treat as present so authored shorthand still routes.
+        Some(_) => true,
+    }
 }
 
 #[cfg(test)]
