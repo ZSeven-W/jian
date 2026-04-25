@@ -5,16 +5,21 @@
 //! is **bitwise stable** for the same `(doc, build_salt)` pair —
 //! covered by `derive_is_deterministic` in the test suite.
 //!
-//! Phase 1 implements the user-intent rules:
+//! Phase 1 derivation rules (spec §3.2):
 //! - `events.onTap` → `<slug>`
 //! - `events.onDoubleTap` → `double_tap_<slug>`
 //! - `events.onLongPress` → `long_press_<slug>`
 //! - `events.onSubmit` → `submit_<slug>`
 //! - `bindings["bind:value"]` → `set_<slug>(value)` (input-style nodes)
 //! - `route.push` → `open_<slug>(p)` (route params from `RouteSpec.params`)
+//! - `events.onPanStart` + `events.onPanEnd` → 4 swipe actions
+//!   (`swipe_left_<slug>` / `swipe_right_<slug>` / `swipe_up_<slug>`
+//!   / `swipe_down_<slug>` — each is a discrete tool, no
+//!   `direction` parameter)
+//! - `events.onReachEnd` / `events.onScroll` → `load_more_<slug>`
 //!
-//! Swipe / scroll / key actions are deferred until the gesture arena
-//! exposes pan-direction + key + wheel events through the schema.
+//! Key actions (Enter/Esc → confirm_/dismiss_<slug>) still deferred
+//! until KeyDown handlers gain authored intent metadata.
 
 use super::naming::{compute_slug, has_ai_name, short_hash};
 use super::types::{
@@ -316,6 +321,41 @@ fn emit_for_node(
                 &aliases,
                 node,
                 Some(handler),
+                Vec::new(),
+            ));
+        }
+    }
+
+    // --- onPanStart + onPanEnd → swipe_{left,right,up,down}_<slug>
+    // Spec §3.2: a node with both pan handlers exposes 4 independent
+    // swipe actions (no `direction` parameter — each direction is its
+    // own action so the AI surface lists them as discrete tools).
+    let has_pan_start = events
+        .and_then(|e| e.get("onPanStart"))
+        .map(|h| is_non_empty_action_list(h))
+        .unwrap_or(false);
+    let has_pan_end = events
+        .and_then(|e| e.get("onPanEnd"))
+        .map(|h| is_non_empty_action_list(h))
+        .unwrap_or(false);
+    if has_pan_start && has_pan_end {
+        let pan_handler = events.and_then(|e| e.get("onPanEnd"));
+        for (prefix, kind) in [
+            ("swipe_left_", SourceKind::SwipeLeft),
+            ("swipe_right_", SourceKind::SwipeRight),
+            ("swipe_up_", SourceKind::SwipeUp),
+            ("swipe_down_", SourceKind::SwipeDown),
+        ] {
+            let slug_v = format!("{}{}", prefix, suffixed);
+            out.push(make_action(
+                scope,
+                &slug_v,
+                id,
+                kind,
+                description.clone(),
+                &aliases,
+                node,
+                pan_handler,
                 Vec::new(),
             ));
         }

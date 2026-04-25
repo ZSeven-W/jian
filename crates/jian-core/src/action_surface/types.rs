@@ -68,7 +68,7 @@ impl ActionName {
 /// Why this action exists — used for downstream synthesis (the
 /// MCP-side `execute_action` builds a `PointerEvent` keyed off
 /// `SourceKind`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SourceKind {
     Tap,
     DoubleTap,

@@ -27,6 +27,7 @@ pub mod error;
 pub mod execute;
 pub mod list;
 pub mod rate_limit;
+pub mod swipe_throttle;
 
 pub use audit::{
     hash_params, ActionAuditLog, ActionSurfaceAuditEntry, AuditVerdict, ReasonCode, SessionId,
@@ -137,10 +138,12 @@ where
     }
 }
 
-/// Per-session state — rate-limit bucket + in-flight action set.
+/// Per-session state — rate-limit bucket + in-flight action set +
+/// swipe throttle.
 struct Session {
     bucket: TokenBucket,
     concurrency: ConcurrencyTracker,
+    swipe: crate::swipe_throttle::SwipeThrottle,
 }
 
 impl Session {
@@ -148,6 +151,7 @@ impl Session {
         Self {
             bucket: TokenBucket::new(),
             concurrency: ConcurrencyTracker::new(),
+            swipe: crate::swipe_throttle::SwipeThrottle::new(),
         }
     }
 }
@@ -297,6 +301,30 @@ impl ActionSurface {
             return ExecuteOutcome::Err(e);
         }
         if !self.session.concurrency.try_acquire(&full_name) {
+            let e = ExecuteError::already_running();
+            self.audit_for(
+                &full_name,
+                Some(&source_id),
+                params,
+                AuditVerdict::Denied,
+                ReasonCode::AlreadyRunning,
+                is_alias,
+            );
+            return ExecuteOutcome::Err(e);
+        }
+
+        // Spec §6.3 — swipe 400ms throttle. Same direction within
+        // the window → Busy(already_running). Distinct from §6.1
+        // concurrency: a swipe action can fire serially fine, the
+        // throttle just rejects rapid repeats. Released by elapsed
+        // time, not by completion, so we don't release on dispatch
+        // exit.
+        if !self
+            .session
+            .swipe
+            .try_acquire(action.source_kind, &full_name)
+        {
+            self.session.concurrency.release(&full_name);
             let e = ExecuteError::already_running();
             self.audit_for(
                 &full_name,
