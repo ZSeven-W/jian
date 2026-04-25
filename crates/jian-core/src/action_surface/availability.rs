@@ -40,17 +40,32 @@ pub fn classify(node: &Value, handler_chain: Option<&Value>) -> AvailabilityStat
 }
 
 /// Does this `ActionList` contain any verb the runtime treats as
-/// destructive? Walks nested `if` / `for_each` / `parallel` / `race` /
-/// `confirm` bodies so a destructive verb buried inside a control
-/// flow still flips the gate.
+/// destructive? Walks nested `if` / `for_each` / `parallel` / `race`
+/// bodies so a destructive verb buried inside a control flow still
+/// flips the gate. Bounded recursion (`MAX_DEPTH`) — pathological
+/// authored JSON that exceeds the depth is conservatively flagged
+/// destructive (better to gate-confirm than to overflow the stack).
 pub fn chain_is_destructive(handler: &Value) -> bool {
+    chain_destructive_depth(handler, 0)
+}
+
+const MAX_DEPTH: usize = 64;
+
+fn chain_destructive_depth(handler: &Value, depth: usize) -> bool {
+    if depth >= MAX_DEPTH {
+        // Over-deep authored handler — fail safe to ConfirmGated.
+        return true;
+    }
     let Some(arr) = handler.as_array() else {
         return false;
     };
-    arr.iter().any(action_is_destructive)
+    arr.iter().any(|a| action_is_destructive(a, depth + 1))
 }
 
-fn action_is_destructive(action: &Value) -> bool {
+fn action_is_destructive(action: &Value, depth: usize) -> bool {
+    if depth >= MAX_DEPTH {
+        return true;
+    }
     let Some(obj) = action.as_object() else {
         return false;
     };
@@ -69,24 +84,23 @@ fn action_is_destructive(action: &Value) -> bool {
                     return true;
                 }
             }
-            // Control-flow verbs — recurse into nested ActionLists.
-            // `if.then` / `if.else`        — ActionList arrays
-            // `for_each.do`                — ActionList array
-            // `parallel` / `race`          — body itself is an array
-            //   whose items are either action objects or nested
-            //   ActionList arrays (`make_parallel_body` accepts both).
+            // Control-flow verbs — recurse into nested ActionLists,
+            // bumping `depth` so a malicious deeply-nested structure
+            // can't blow the stack.
             "if" => {
-                if recurse_branch(body.get("then")) || recurse_branch(body.get("else")) {
+                if recurse_branch(body.get("then"), depth + 1)
+                    || recurse_branch(body.get("else"), depth + 1)
+                {
                     return true;
                 }
             }
             "for_each" => {
-                if recurse_branch(body.get("do")) {
+                if recurse_branch(body.get("do"), depth + 1) {
                     return true;
                 }
             }
             "parallel" | "race" => {
-                if scan_parallel_body(body) {
+                if scan_parallel_body(body, depth + 1) {
                     return true;
                 }
             }
@@ -99,21 +113,26 @@ fn action_is_destructive(action: &Value) -> bool {
 /// Walk a `parallel` / `race` body. Each entry is either an action
 /// object OR an ActionList array — match `make_parallel_body`'s
 /// runtime acceptance.
-fn scan_parallel_body(body: &Value) -> bool {
+fn scan_parallel_body(body: &Value, depth: usize) -> bool {
+    if depth >= MAX_DEPTH {
+        return true;
+    }
     let Some(arr) = body.as_array() else {
         return false;
     };
     arr.iter().any(|item| {
         if item.is_array() {
-            chain_is_destructive(item)
+            chain_destructive_depth(item, depth + 1)
         } else {
-            action_is_destructive(item)
+            action_is_destructive(item, depth + 1)
         }
     })
 }
 
-fn recurse_branch(branch: Option<&Value>) -> bool {
-    branch.map(chain_is_destructive).unwrap_or(false)
+fn recurse_branch(branch: Option<&Value>, depth: usize) -> bool {
+    branch
+        .map(|b| chain_destructive_depth(b, depth))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -208,5 +227,28 @@ mod tests {
     fn race_destructive_in_array_body() {
         let chain = json!([{ "race": [ { "fetch": { "url": "/", "method": "POST" } } ] }]);
         assert!(chain_is_destructive(&chain));
+    }
+
+    #[test]
+    fn pathological_depth_fails_safe_to_destructive() {
+        // Hand-build a 200-deep `if/then` chain — well above
+        // MAX_DEPTH (64). Should classify as destructive without
+        // overflowing the stack.
+        let mut current = json!([]);
+        for _ in 0..200 {
+            current = json!([{ "if": { "expr": "true", "then": current } }]);
+        }
+        assert!(chain_is_destructive(&current));
+    }
+
+    #[test]
+    fn moderate_depth_chain_evaluates_correctly() {
+        // 32 levels — under the guard, real evaluation should still
+        // work and find the destructive verb at the bottom.
+        let mut current = json!([{ "storage_wipe": null }]);
+        for _ in 0..32 {
+            current = json!([{ "if": { "expr": "true", "then": current } }]);
+        }
+        assert!(chain_is_destructive(&current));
     }
 }
