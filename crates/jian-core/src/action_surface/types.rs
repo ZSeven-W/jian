@@ -99,6 +99,32 @@ pub enum AvailabilityStatic {
     ConfirmGated,
 }
 
+/// Parameter declaration for `set_<slug>(value)` and `open_<slug>(p)`.
+/// Phase 1 only carries a coarse JSON-Schema-friendly type tag — the
+/// MCP server (Phase 2) maps it to the wire-level JsonSchema.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ParamSpec {
+    pub name: String,
+    pub ty: ParamTy,
+}
+
+/// Atomic parameter types. Mirrors the subset of `state::StateType`
+/// the surface emits in Phase 1 — no `oneOf` / nested object/array
+/// expansion until Phase 2.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParamTy {
+    Int,
+    Float,
+    Number,
+    String,
+    Bool,
+    Date,
+    /// Type couldn't be statically inferred (e.g. expression depended
+    /// on runtime state). Runtime accepts any JSON value and validates
+    /// at execute-time.
+    Unknown,
+}
+
 /// One entry in the action surface. Pure data — `derive_actions`
 /// returns a deterministic `Vec<ActionDefinition>` for any given
 /// `(document, build_salt)`.
@@ -117,6 +143,10 @@ pub struct ActionDefinition {
     /// Historical names still accepted by `execute_action` for
     /// transparent migration after a rename. See spec §9.
     pub aliases: Vec<ActionName>,
+    /// Declared parameters (empty for verb-style actions like Tap).
+    /// `set_<slug>` carries `(value: <state-type>)`; `open_<slug>`
+    /// carries one entry per `:param` placeholder in the route path.
+    pub params: Vec<ParamSpec>,
 }
 
 impl ActionDefinition {

@@ -17,7 +17,7 @@
 //! exposes pan-direction + key + wheel events through the schema.
 
 use super::naming::{compute_slug, has_ai_name, short_hash};
-use super::types::{ActionDefinition, ActionName, Scope, SourceKind};
+use super::types::{ActionDefinition, ActionName, ParamSpec, ParamTy, Scope, SourceKind};
 #[cfg(test)]
 use super::types::AvailabilityStatic;
 use jian_ops_schema::document::PenDocument;
@@ -109,65 +109,33 @@ fn emit_for_node(
 
     let events = node.get("events").and_then(|v| v.as_object());
 
-    // --- onTap → <slug>
-    if let Some(handler) = events.and_then(|e| e.get("onTap")) {
-        out.push(make_action(
-            scope,
-            &suffixed,
-            id,
-            SourceKind::Tap,
-            description.clone(),
-            &aliases,
-            node,
-            Some(handler),
-        ));
-    }
-    if let Some(handler) = events.and_then(|e| e.get("onDoubleTap")) {
-        let slug_v = format!("double_tap_{}", suffixed);
-        out.push(make_action(
-            scope,
-            &slug_v,
-            id,
-            SourceKind::DoubleTap,
-            description.clone(),
-            &aliases,
-            node,
-            Some(handler),
-        ));
-    }
-    if let Some(handler) = events.and_then(|e| e.get("onLongPress")) {
-        let slug_v = format!("long_press_{}", suffixed);
-        out.push(make_action(
-            scope,
-            &slug_v,
-            id,
-            SourceKind::LongPress,
-            description.clone(),
-            &aliases,
-            node,
-            Some(handler),
-        ));
-    }
-    if let Some(handler) = events.and_then(|e| e.get("onSubmit")) {
-        let slug_v = format!("submit_{}", suffixed);
-        out.push(make_action(
-            scope,
-            &slug_v,
-            id,
-            SourceKind::Submit,
-            description.clone(),
-            &aliases,
-            node,
-            Some(handler),
-        ));
+    // Verb-style actions (no parameters).
+    let verb_rules: [(&str, &str, SourceKind); 4] = [
+        ("onTap", "", SourceKind::Tap),
+        ("onDoubleTap", "double_tap_", SourceKind::DoubleTap),
+        ("onLongPress", "long_press_", SourceKind::LongPress),
+        ("onSubmit", "submit_", SourceKind::Submit),
+    ];
+    for (event_key, prefix, kind) in verb_rules {
+        if let Some(handler) = events.and_then(|e| e.get(event_key)) {
+            let slug_v = format!("{}{}", prefix, suffixed);
+            out.push(make_action(
+                scope,
+                &slug_v,
+                id,
+                kind,
+                description.clone(),
+                &aliases,
+                node,
+                Some(handler),
+                Vec::new(),
+            ));
+        }
     }
 
-    // --- bindings["bind:value"] → set_<slug>
-    let bind_value = node
-        .get("bindings")
-        .and_then(|b| b.get("bind:value"))
-        .and_then(|v| v.as_str());
-    if bind_value.is_some() {
+    // --- bindings["bind:value"] → set_<slug>(value: typeof($state.X))
+    if let Some(target) = bind_target(node) {
+        let ty = state_type_for_path(doc_json, &target).unwrap_or(ParamTy::Unknown);
         let slug_v = format!("set_{}", suffixed);
         out.push(make_action(
             scope,
@@ -178,16 +146,20 @@ fn emit_for_node(
             &aliases,
             node,
             None,
+            vec![ParamSpec {
+                name: "value".to_owned(),
+                ty,
+            }],
         ));
     }
 
-    // --- route.push → open_<slug>
+    // --- route.push → open_<slug>(p₁: ..., p₂: ...)
     let route_push = node
         .get("route")
         .and_then(|r| r.get("push"))
         .and_then(|v| v.as_str());
-    if route_push.is_some() {
-        let _ = doc_json; // RouteSpec.params consultation lands in Phase 2.
+    if let Some(path_pattern) = route_push {
+        let params = route_param_specs(doc_json, path_pattern);
         let slug_v = format!("open_{}", suffixed);
         out.push(make_action(
             scope,
@@ -198,8 +170,101 @@ fn emit_for_node(
             &aliases,
             node,
             None,
+            params,
         ));
     }
+}
+
+/// Extract `bindings["bind:value"]` and validate it points at a
+/// writable `$state.<path>` — bindings to `$route` / `$app` /
+/// computed expressions don't get a `set_*` action because the
+/// runtime can't write to them directly.
+fn bind_target(node: &Value) -> Option<String> {
+    let raw = node
+        .get("bindings")
+        .and_then(|b| b.get("bind:value"))
+        .and_then(|v| v.as_str())?;
+    let trimmed = raw.trim();
+    let rest = trimmed.strip_prefix("$state.")?;
+    if rest.is_empty() || rest.contains(|c: char| c.is_whitespace()) {
+        return None;
+    }
+    Some(rest.to_owned())
+}
+
+/// Look up the declared `$state.<path>` type in the document's `state`
+/// schema. Walks dotted segments + numeric `array` indices when the
+/// type tree allows it. Returns `None` if any segment is missing.
+fn state_type_for_path(doc_json: &Value, dotted: &str) -> Option<ParamTy> {
+    let head = dotted.split('.').next()?;
+    let entry = doc_json
+        .get("state")?
+        .as_object()?
+        .get(head)?
+        .get("type")?;
+    let mut current = entry.clone();
+    for seg in dotted.split('.').skip(1) {
+        current = traverse_type(&current, seg)?;
+    }
+    Some(primitive_for(&current))
+}
+
+fn traverse_type(ty: &Value, seg: &str) -> Option<Value> {
+    if let Some(obj) = ty.as_object() {
+        if let Some(arr) = obj.get("array") {
+            // Numeric index — type stays `arr` element type.
+            if seg.parse::<i64>().is_ok() {
+                return Some(arr.clone());
+            }
+            return None;
+        }
+        if let Some(obj_t) = obj.get("object") {
+            return obj_t.get(seg).cloned();
+        }
+    }
+    None
+}
+
+fn primitive_for(ty: &Value) -> ParamTy {
+    match ty.as_str() {
+        Some("int") => ParamTy::Int,
+        Some("float") => ParamTy::Float,
+        Some("number") => ParamTy::Number,
+        Some("string") => ParamTy::String,
+        Some("bool") => ParamTy::Bool,
+        Some("date") => ParamTy::Date,
+        _ => ParamTy::Unknown,
+    }
+}
+
+/// Parse `:param` segments out of a route path and look up declared
+/// types in `routes.routes[<path>].params`. Missing declarations
+/// default to `String` per spec §3.5.
+fn route_param_specs(doc_json: &Value, path_pattern: &str) -> Vec<ParamSpec> {
+    let mut specs = Vec::new();
+    let declared = doc_json
+        .get("routes")
+        .and_then(|r| r.get("routes"))
+        .and_then(|m| m.as_object())
+        .and_then(|m| m.get(path_pattern))
+        .and_then(|spec| spec.get("params"))
+        .and_then(|p| p.as_object())
+        .cloned();
+
+    for seg in path_pattern.split('/').filter(|s| !s.is_empty()) {
+        if let Some(name) = seg.strip_prefix(':') {
+            let ty = declared
+                .as_ref()
+                .and_then(|m| m.get(name))
+                .map(primitive_for)
+                .unwrap_or(ParamTy::String);
+            specs.push(ParamSpec {
+                name: name.to_owned(),
+                ty,
+            });
+        }
+    }
+    specs
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -212,6 +277,7 @@ fn make_action(
     aliases: &[String],
     node: &Value,
     handler: Option<&Value>,
+    params: Vec<ParamSpec>,
 ) -> ActionDefinition {
     let name = ActionName {
         scope: scope.clone(),
@@ -235,6 +301,7 @@ fn make_action(
         description: auto_desc,
         status,
         aliases: alias_names,
+        params,
     }
 }
 
@@ -465,6 +532,92 @@ mod tests {
         let a = derive_actions(&doc, &salt);
         let b = derive_actions(&doc, &salt);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn bind_value_skips_non_state_targets() {
+        // Bindings that point at $route / $app / a computed expression
+        // can't be written through `set_*` — derive should skip them.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"p","name":"P","children":[
+                { "type":"frame","id":"a","semantics":{ "aiName":"a" },
+                  "bindings": { "bind:value": "$route.params.q" } },
+                { "type":"frame","id":"b","semantics":{ "aiName":"b" },
+                  "bindings": { "bind:value": "$state.x + 1" } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert!(
+            acts.is_empty(),
+            "expected zero set_* actions, got: {:#?}",
+            acts
+        );
+    }
+
+    #[test]
+    fn bind_value_emits_param_with_inferred_type() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "state":{ "count":{ "type":"int", "default":0 } },
+              "pages":[{ "id":"p","name":"P","children":[
+                { "type":"frame","id":"input","semantics":{ "aiName":"counter" },
+                  "bindings": { "bind:value": "$state.count" } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 1);
+        assert_eq!(acts[0].source_kind, SourceKind::SetValue);
+        assert_eq!(acts[0].params.len(), 1);
+        assert_eq!(acts[0].params[0].name, "value");
+        assert_eq!(acts[0].params[0].ty, ParamTy::Int);
+    }
+
+    #[test]
+    fn route_params_inferred_from_routes_config() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "routes":{
+                "entry":"/",
+                "routes":{
+                  "/detail/:id":{ "pageId":"detail", "params":{ "id":"int" } }
+                }
+              },
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"card","semantics":{ "aiName":"open" },
+                  "route":{ "push": "/detail/:id" } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts[0].params.len(), 1);
+        assert_eq!(acts[0].params[0].name, "id");
+        assert_eq!(acts[0].params[0].ty, ParamTy::Int);
+    }
+
+    #[test]
+    fn route_params_default_to_string_when_undeclared() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"card","semantics":{ "aiName":"open" },
+                  "route":{ "push": "/detail/:slug" } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts[0].params.len(), 1);
+        assert_eq!(acts[0].params[0].ty, ParamTy::String);
     }
 
     #[test]

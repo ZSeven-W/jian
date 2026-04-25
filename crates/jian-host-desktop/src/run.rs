@@ -262,10 +262,12 @@ impl ApplicationHandler for RunApp {
                 } else {
                     pos
                 };
-                self.host.runtime.dispatch_wheel(JianWheel::simple(
-                    logical_pos,
-                    jian_core::geometry::point(dx, dy),
-                ));
+                self.host.runtime.dispatch_wheel(JianWheel {
+                    position: logical_pos,
+                    delta: jian_core::geometry::point(dx, dy),
+                    modifiers: self.translator.modifiers,
+                    timestamp: Instant::now(),
+                });
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }

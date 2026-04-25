@@ -49,10 +49,57 @@ pub fn slug_source(node: &Value) -> String {
         }
     }
 
+    // Spec §3.3: containers (button-shaped frames) commonly hold a
+    // single text child; use that text before falling back to the
+    // structural id. We require *exactly one* text descendant so the
+    // semantics stay deterministic — multi-text frames must rely on
+    // an explicit `aiName` / `label` instead.
+    if let Some(text) = unique_text_descendant(node) {
+        if !text.is_empty() {
+            return text;
+        }
+    }
+
     node.get("id")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_owned()
+}
+
+/// Return the lone `text`-node descendant's content if exactly one is
+/// found in the subtree (excluding `node` itself). Two or more text
+/// descendants → `None` so the slug stays unambiguous.
+fn unique_text_descendant(node: &Value) -> Option<String> {
+    let mut found: Option<String> = None;
+    let mut count = 0usize;
+    walk_for_text(node, true, &mut count, &mut found);
+    if count == 1 {
+        found
+    } else {
+        None
+    }
+}
+
+fn walk_for_text(node: &Value, is_root: bool, count: &mut usize, found: &mut Option<String>) {
+    if !is_root && node.get("type").and_then(|v| v.as_str()) == Some("text") {
+        if let Some(text) = node.get("content").and_then(extract_text) {
+            *count += 1;
+            if *count == 1 {
+                *found = Some(text);
+            }
+            // Don't recurse into a text node — its `content` array of
+            // styled segments is intentional, not a child tree.
+            return;
+        }
+    }
+    if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+        for child in children {
+            walk_for_text(child, false, count, found);
+            if *count > 1 {
+                return;
+            }
+        }
+    }
 }
 
 fn extract_text(content: &Value) -> Option<String> {
@@ -214,5 +261,29 @@ mod tests {
         let without = json!({ "semantics": { "label": "x" } });
         assert!(has_ai_name(&with));
         assert!(!has_ai_name(&without));
+    }
+
+    #[test]
+    fn unique_text_child_promoted_to_slug() {
+        // Frame with exactly one text descendant → use the text.
+        let frame = json!({
+            "id": "btn-9",
+            "children": [
+                { "id": "lbl", "type": "text", "content": "Sign Up" }
+            ]
+        });
+        assert_eq!(slug_source(&frame), "Sign Up");
+    }
+
+    #[test]
+    fn multiple_text_children_fall_back_to_id() {
+        let frame = json!({
+            "id": "row-2",
+            "children": [
+                { "id": "a", "type": "text", "content": "First" },
+                { "id": "b", "type": "text", "content": "Second" }
+            ]
+        });
+        assert_eq!(slug_source(&frame), "row-2");
     }
 }

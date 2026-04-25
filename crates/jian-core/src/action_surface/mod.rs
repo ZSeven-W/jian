@@ -26,4 +26,6 @@ pub mod types;
 
 pub use derive::derive_actions;
 pub use naming::{compute_slug, normalize_slug, short_hash};
-pub use types::{ActionDefinition, ActionName, AvailabilityStatic, Scope, SourceKind};
+pub use types::{
+    ActionDefinition, ActionName, AvailabilityStatic, ParamSpec, ParamTy, Scope, SourceKind,
+};
