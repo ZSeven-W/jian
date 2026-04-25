@@ -1610,7 +1610,7 @@ checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "jian"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1628,7 +1628,7 @@ dependencies = [
 
 [[package]]
 name = "jian-action-surface"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "blake3",
@@ -1642,7 +1642,7 @@ dependencies = [
 
 [[package]]
 name = "jian-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "async-trait",
  "bitflags 2.11.1",
@@ -1664,7 +1664,7 @@ dependencies = [
 
 [[package]]
 name = "jian-host-desktop"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "arboard",
  "async-trait",
@@ -1681,7 +1681,7 @@ dependencies = [
 
 [[package]]
 name = "jian-ops-schema"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "insta",
  "schemars",
@@ -1693,7 +1693,7 @@ dependencies = [
 
 [[package]]
 name = "jian-skia"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "base64",
  "jian-core",
