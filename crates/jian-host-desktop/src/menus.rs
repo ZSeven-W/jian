@@ -96,15 +96,41 @@ impl MenuSpec {
     }
 }
 
+/// Result of materialising a `MenuSpec`. The `menu` is the muda
+/// handle the host attaches to its window; `warnings` lists any
+/// authored accelerator strings that failed to parse — these are
+/// surfaced rather than silently dropped so a typo doesn't leave
+/// the user wondering why their shortcut doesn't work.
+#[cfg(feature = "menus")]
+pub struct BuiltMenu {
+    pub menu: muda::Menu,
+    pub warnings: Vec<String>,
+}
+
 /// Materialise a `MenuSpec` into a `muda::Menu`. Available only when
 /// the `menus` cargo feature is on. Host then `init_for_*` the menu
 /// against the active window per the muda docs.
 #[cfg(feature = "menus")]
-pub fn build_muda_menu(spec: &MenuSpec) -> muda::Menu {
+pub fn build_muda_menu(spec: &MenuSpec) -> BuiltMenu {
     use muda::{accelerator::Accelerator, Menu, MenuItem as MudaItem, PredefinedMenuItem, Submenu};
     use std::str::FromStr;
 
-    fn append(parent: &Submenu, items: &[MenuItem]) {
+    fn parse_accel(
+        raw: Option<&str>,
+        ctx: &str,
+        warnings: &mut Vec<String>,
+    ) -> Option<Accelerator> {
+        let s = raw?;
+        match Accelerator::from_str(s) {
+            Ok(a) => Some(a),
+            Err(e) => {
+                warnings.push(format!("{}: bad accelerator {:?}: {}", ctx, s, e));
+                None
+            }
+        }
+    }
+
+    fn append(parent: &Submenu, items: &[MenuItem], warnings: &mut Vec<String>) {
         for item in items {
             match item {
                 MenuItem::Separator => {
@@ -115,28 +141,27 @@ pub fn build_muda_menu(spec: &MenuSpec) -> muda::Menu {
                     label,
                     accelerator,
                 } => {
-                    let accel: Option<Accelerator> = accelerator
-                        .as_deref()
-                        .and_then(|s| Accelerator::from_str(s).ok());
+                    let accel = parse_accel(accelerator.as_deref(), id, warnings);
                     let muda_item = MudaItem::with_id(id, label, true, accel);
                     let _ = parent.append(&muda_item);
                 }
                 MenuItem::Submenu { label, items } => {
                     let sub = Submenu::new(label, true);
                     let _ = parent.append(&sub);
-                    append(&sub, items);
+                    append(&sub, items, warnings);
                 }
             }
         }
     }
 
     let menu = Menu::new();
+    let mut warnings = Vec::new();
     for item in &spec.items {
         match item {
             MenuItem::Submenu { label, items } => {
                 let sub = Submenu::new(label, true);
                 let _ = menu.append(&sub);
-                append(&sub, items);
+                append(&sub, items, &mut warnings);
             }
             MenuItem::Separator => {
                 let _ = menu.append(&PredefinedMenuItem::separator());
@@ -146,15 +171,13 @@ pub fn build_muda_menu(spec: &MenuSpec) -> muda::Menu {
                 label,
                 accelerator,
             } => {
-                let accel: Option<Accelerator> = accelerator
-                    .as_deref()
-                    .and_then(|s| Accelerator::from_str(s).ok());
+                let accel = parse_accel(accelerator.as_deref(), id, &mut warnings);
                 let muda_item = MudaItem::with_id(id, label, true, accel);
                 let _ = menu.append(&muda_item);
             }
         }
     }
-    menu
+    BuiltMenu { menu, warnings }
 }
 
 #[cfg(test)]

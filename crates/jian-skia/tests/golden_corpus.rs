@@ -76,9 +76,16 @@ fn corpus_renders_match_golden_bytes() {
             }
         };
         let golden_path = golden_dir.join(format!("{}.png", name));
-        if bless || !golden_path.exists() {
+        if bless {
             fs::write(&golden_path, &png).expect("write golden");
             blessed += 1;
+            continue;
+        }
+        if !golden_path.exists() {
+            // Missing baseline is a hard failure — we shouldn't
+            // silently mutate the workspace mid-CI. Authors must
+            // run `GOLDEN_BLESS=1 cargo test ...` to opt in.
+            failures.push(format!("{} (no baseline)", name));
             continue;
         }
         let tracked = fs::read(&golden_path).expect("read golden");

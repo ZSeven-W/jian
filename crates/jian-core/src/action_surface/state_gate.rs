@@ -96,25 +96,19 @@ impl<'a> RuntimeStateGate<'a> {
 
     /// Compile + evaluate a binding expression to bool. Returns
     /// `default` on parse failure or when the expression resolves to
-    /// a non-boolean value (so a malformed `visible` binding doesn't
-    /// permanently hide a node — debugging hook is the audit log).
+    /// a non-boolean value — spec §4.2 #4 calls for a strict
+    /// boolean, not a JS-style truthy/falsey coercion. A binding
+    /// like `visible: "$state.count"` should be authored as
+    /// `visible: "$state.count > 0"` so the type contract is
+    /// explicit; this keeps the gate predictable.
     fn eval_bool(&self, expr_src: &str, node_id: &str, default: bool) -> bool {
         let compiled = match Expression::compile(expr_src) {
             Ok(e) => e,
             Err(_) => return default,
         };
-        let (value, _warnings) =
-            compiled.eval(self.state, None, Some(node_id));
-        match value.as_bool() {
-            Some(b) => b,
-            None => match value.as_i64() {
-                Some(0) => false,
-                Some(_) => true,
-                None => match Value::from(serde_json::Value::Null) {
-                    _ => default,
-                },
-            },
-        }
+        let (value, _warnings) = compiled.eval(self.state, None, Some(node_id));
+        let _ = Value::Null; // keep `serde_json::Value` import alive
+        value.as_bool().unwrap_or(default)
     }
 }
 
@@ -196,6 +190,22 @@ mod tests {
         let cache = Rc::new(ExpressionCache::new());
         let gate = RuntimeStateGate::new(&doc, &state, cache);
         assert!(!gate.allows("deep"));
+    }
+
+    #[test]
+    fn non_boolean_expression_falls_back_to_default() {
+        // `visible: "1"` must NOT evaluate as truthy — spec §4.2
+        // requires an explicit bool. Number/string results land on
+        // the default (visible:true → not blocked).
+        let (doc, state) = build(
+            r#"{ "version":"0.8.0", "children":[
+                { "type":"frame","id":"root", "bindings":{ "visible":"1" } }
+            ]}"#,
+        );
+        let cache = Rc::new(ExpressionCache::new());
+        let gate = RuntimeStateGate::new(&doc, &state, cache);
+        // `1` is not a bool → default visible:true → allowed.
+        assert!(gate.allows("root"));
     }
 
     #[test]

@@ -94,25 +94,43 @@ pub fn handle_request_with_gate<D: ActionDispatcher, G: StateGate>(
     state_gate: &G,
     raw: &str,
 ) -> String {
-    let req: RpcRequest = match serde_json::from_str(raw) {
+    // Two-step parse so we can distinguish "JSON syntax error"
+    // (parse_error) from "valid JSON, wrong shape" (invalid_request).
+    let raw_value: Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(e) => {
+            return reply_err(Value::Null, codes::PARSE_ERROR, &format!("parse: {}", e));
+        }
+    };
+    let req: RpcRequest = match serde_json::from_value(raw_value.clone()) {
         Ok(r) => r,
         Err(e) => {
-            return serialise(&RpcResponse {
-                jsonrpc: "2.0",
-                id: Value::Null,
-                result: None,
-                error: Some(RpcError {
-                    code: codes::PARSE_ERROR,
-                    message: format!("parse error: {}", e),
-                }),
-            })
+            // Recover the id if present so the client can correlate.
+            let id = raw_value.get("id").cloned().unwrap_or(Value::Null);
+            return reply_err(
+                id,
+                codes::INVALID_REQUEST,
+                &format!("invalid request shape: {}", e),
+            );
         }
     };
     if req.jsonrpc != "2.0" {
         return reply_err(req.id, codes::INVALID_REQUEST, "jsonrpc must be \"2.0\"");
     }
+    // §5.1 invariant: when present, `params` must be an object so
+    // each method can address fields by name. Reject non-object
+    // shapes (e.g. arrays) up-front.
+    if let Some(p) = req.params.as_ref() {
+        if !p.is_object() && !p.is_null() {
+            return reply_err(
+                req.id,
+                codes::INVALID_PARAMS,
+                "params must be an object",
+            );
+        }
+    }
     let result = match req.method.as_str() {
-        "list_available_actions" => list(surface, req.params.as_ref()),
+        "list_available_actions" => list(surface, state_gate, req.params.as_ref()),
         "execute_action" => execute(surface, dispatcher, state_gate, req.params.as_ref()),
         _ => {
             return reply_err(
@@ -133,8 +151,9 @@ pub fn handle_request_with_gate<D: ActionDispatcher, G: StateGate>(
     }
 }
 
-fn list(
+fn list<G: StateGate>(
     surface: &ActionSurface,
+    state_gate: &G,
     params: Option<&Value>,
 ) -> Result<Value, (i32, String)> {
     let mut opts = ListOptions::default();
@@ -158,7 +177,22 @@ fn list(
             opts.current_page = Some(s.to_owned());
         }
     }
-    let resp = surface.list(opts);
+    let mut resp = surface.list(opts);
+    // Spec consistency: an action that's `state_gated` would
+    // immediately reject `execute_action`, so it shouldn't appear
+    // in the listed set. Walk the rendered actions and drop any
+    // whose source node currently fails the gate. Source ids are
+    // recoverable from the underlying derive list since
+    // `surface.list` doesn't echo them.
+    let derived = surface.actions();
+    resp.actions.retain(|listed| {
+        derived
+            .iter()
+            .find(|a| a.name.full() == listed.name)
+            .map(|a| state_gate.allows(&a.source_node_id))
+            .unwrap_or(true)
+    });
+    resp.total = resp.actions.len();
     serde_json::to_value(resp).map_err(|e| (codes::INVALID_PARAMS, format!("serialise: {}", e)))
 }
 

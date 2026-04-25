@@ -389,6 +389,15 @@ fn draw_text_paragraph(
     if !run.font_family.is_empty() {
         text_style.set_font_families(&[run.font_family.as_str()]);
     }
+    // Match the single-line fallback's font-weight handling so
+    // enabling the `textlayout` feature doesn't change visual
+    // output for ASCII text.
+    let fs = skia_safe::FontStyle::new(
+        skia_safe::font_style::Weight::from(run.font_weight as i32),
+        skia_safe::font_style::Width::NORMAL,
+        skia_safe::font_style::Slant::Upright,
+    );
+    text_style.set_font_style(fs);
     style.set_text_style(&text_style);
 
     let mut builder = ParagraphBuilder::new(&style, collection);
