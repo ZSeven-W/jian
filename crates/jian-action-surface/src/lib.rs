@@ -21,12 +21,16 @@
 //! in-process use (jian-host-desktop dev panel, OpenPencil editor
 //! preview).
 
+pub mod audit;
 pub mod concurrency;
 pub mod error;
 pub mod execute;
 pub mod list;
 pub mod rate_limit;
 
+pub use audit::{
+    hash_params, ActionAuditLog, ActionSurfaceAuditEntry, AuditVerdict, ReasonCode, SessionId,
+};
 pub use error::{
     BusyReason, ExecuteError, ExecutionReason, NotAvailableReason, ValidationReason,
 };
@@ -39,6 +43,8 @@ use jian_core::action_surface::{derive_actions, ActionDefinition};
 use jian_ops_schema::document::PenDocument;
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::rc::Rc;
+use std::time::Instant;
 
 /// Author-stable build seed. Hosts derive this from `package.version +
 /// git.rev` (or any equivalent monotonic identifier) so action hashes
@@ -114,6 +120,8 @@ impl Session {
 pub struct ActionSurface {
     actions: Vec<ActionDefinition>,
     session: Session,
+    audit: Option<Rc<ActionAuditLog>>,
+    session_id: String,
 }
 
 impl ActionSurface {
@@ -123,7 +131,24 @@ impl ActionSurface {
         Self {
             actions: derive_actions(doc, salt),
             session: Session::new(),
+            audit: None,
+            session_id: "default".to_owned(),
         }
+    }
+
+    /// Attach an audit log — every `execute` call writes one
+    /// `ActionSurfaceAuditEntry` (success or failure) per spec §8.1.
+    pub fn with_audit(mut self, log: Rc<ActionAuditLog>) -> Self {
+        self.audit = Some(log);
+        self
+    }
+
+    /// Override the session id stamped on each audit entry. Default
+    /// `"default"` works for single-client setups; multiplex hosts
+    /// generate one per AI client connection.
+    pub fn with_session_id(mut self, id: impl Into<String>) -> Self {
+        self.session_id = id.into();
+        self
     }
 
     /// Re-derive after a hot-reload — spec's "AI = 人对称" property
@@ -167,21 +192,125 @@ impl ActionSurface {
         let decision = decide(&self.actions, name, params);
         let (action, params_map) = match decision {
             Decision::Dispatch { action, params } => (action, params),
-            Decision::Reject(e) => return ExecuteOutcome::Err(e),
+            Decision::Reject(e) => {
+                self.audit_for(name, None, params, AuditVerdict::Denied, reason_for_err(&e));
+                return ExecuteOutcome::Err(e);
+            }
         };
-        if !self.session.bucket.take() {
-            return ExecuteOutcome::Err(ExecuteError::rate_limited());
-        }
         let full_name = action.name.full();
+        let source_id = action.source_node_id.clone();
+        let is_alias = full_name != name;
+
+        if !self.session.bucket.take() {
+            let e = ExecuteError::rate_limited();
+            self.audit_for(
+                &full_name,
+                Some(&source_id),
+                params,
+                AuditVerdict::Denied,
+                ReasonCode::RateLimited,
+            );
+            return ExecuteOutcome::Err(e);
+        }
         if !self.session.concurrency.try_acquire(&full_name) {
-            return ExecuteOutcome::Err(ExecuteError::already_running());
+            let e = ExecuteError::already_running();
+            self.audit_for(
+                &full_name,
+                Some(&source_id),
+                params,
+                AuditVerdict::Denied,
+                ReasonCode::AlreadyRunning,
+            );
+            return ExecuteOutcome::Err(e);
+        }
+        // Record alias-used *before* the dispatch so the AuditLog
+        // shows migration progress even if the action then errors.
+        if is_alias {
+            self.audit_for(
+                &full_name,
+                Some(&source_id),
+                params,
+                AuditVerdict::Allowed,
+                ReasonCode::AliasUsed,
+            );
         }
         let result = dispatcher.dispatch(action, &params_map);
         self.session.concurrency.release(&full_name);
         match result {
-            Ok(()) => ExecuteOutcome::Ok,
-            Err(e) => ExecuteOutcome::Err(e),
+            Ok(()) => {
+                self.audit_for(
+                    &full_name,
+                    Some(&source_id),
+                    params,
+                    AuditVerdict::Allowed,
+                    ReasonCode::Ok,
+                );
+                ExecuteOutcome::Ok
+            }
+            Err(e) => {
+                self.audit_for(
+                    &full_name,
+                    Some(&source_id),
+                    params,
+                    AuditVerdict::Error,
+                    reason_for_err(&e),
+                );
+                ExecuteOutcome::Err(e)
+            }
         }
+    }
+
+    fn audit_for(
+        &self,
+        action_name: &str,
+        source_node_id: Option<&str>,
+        params: Option<&Value>,
+        outcome: AuditVerdict,
+        reason: ReasonCode,
+    ) {
+        let Some(log) = self.audit.as_ref() else {
+            return;
+        };
+        let payload = params.cloned().unwrap_or(Value::Null);
+        log.record(ActionSurfaceAuditEntry {
+            at: Some(Instant::now()),
+            action_name: action_name.to_owned(),
+            params_hash: crate::audit::hash_params(&payload),
+            source_node_id: source_node_id.map(str::to_owned),
+            reason_code: reason,
+            outcome,
+            session_id: self.session_id.clone(),
+        });
+    }
+}
+
+fn reason_for_err(e: &ExecuteError) -> ReasonCode {
+    use crate::error::{
+        BusyReason as B, ExecutionReason as Ex, NotAvailableReason as N, ValidationReason as V,
+    };
+    match e {
+        ExecuteError::NotAvailable { reason } => match reason {
+            N::UnknownAction => ReasonCode::UnknownAction,
+            N::StaticHidden => ReasonCode::StaticHidden,
+            N::StateGated => ReasonCode::StateGated,
+            N::ConfirmGated => ReasonCode::ConfirmGated,
+            N::RateLimited => ReasonCode::RateLimited,
+        },
+        ExecuteError::Busy {
+            reason: B::AlreadyRunning,
+        } => ReasonCode::AlreadyRunning,
+        ExecuteError::ValidationFailed { reason } => match reason {
+            V::MissingRequired => ReasonCode::MissingRequired,
+            V::TypeMismatch => ReasonCode::TypeMismatch,
+            V::OutOfRange => ReasonCode::SchemaViolation,
+            V::SchemaViolation => ReasonCode::SchemaViolation,
+        },
+        ExecuteError::ExecutionFailed { reason } => match reason {
+            Ex::CapabilityDenied => ReasonCode::CapabilityDenied,
+            Ex::HandlerError => ReasonCode::HandlerError,
+            Ex::Timeout => ReasonCode::Timeout,
+            Ex::Unknown => ReasonCode::UnknownError,
+        },
     }
 }
 
@@ -289,6 +418,62 @@ mod tests {
                 reason: NotAvailableReason::RateLimited
             })
         ));
+    }
+
+    #[test]
+    fn audit_records_success_with_ok_reason() {
+        let doc = fixture();
+        let log = Rc::new(ActionAuditLog::new(100));
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16])
+            .with_audit(log.clone())
+            .with_session_id("s-42");
+        let mut sink = SinkDispatcher;
+        surface.execute("home.plus", None, &mut sink);
+        let snap = log.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].outcome, AuditVerdict::Allowed);
+        assert_eq!(snap[0].reason_code, ReasonCode::Ok);
+        assert_eq!(snap[0].action_name, "home.plus");
+        assert_eq!(snap[0].session_id, "s-42");
+    }
+
+    #[test]
+    fn audit_records_unknown_action() {
+        let doc = fixture();
+        let log = Rc::new(ActionAuditLog::new(10));
+        let mut surface =
+            ActionSurface::from_document(&doc, &[0u8; 16]).with_audit(log.clone());
+        let mut sink = SinkDispatcher;
+        surface.execute("home.does_not_exist", None, &mut sink);
+        let snap = log.snapshot();
+        assert_eq!(snap[0].reason_code, ReasonCode::UnknownAction);
+        assert_eq!(snap[0].outcome, AuditVerdict::Denied);
+    }
+
+    #[test]
+    fn audit_records_alias_used_then_ok() {
+        let doc: PenDocument = serde_json::from_str(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"btn",
+                  "semantics":{ "aiName":"renamed", "aiAliases":["plus"] },
+                  "events":{ "onTap": [ { "set": { "$state.x": "1" } } ] }
+                }
+              ]}],
+              "children":[]
+            }"#,
+        )
+        .unwrap();
+        let log = Rc::new(ActionAuditLog::new(10));
+        let mut surface =
+            ActionSurface::from_document(&doc, &[0u8; 16]).with_audit(log.clone());
+        let mut sink = SinkDispatcher;
+        surface.execute("home.plus", None, &mut sink);
+        let snap = log.snapshot();
+        let reasons: Vec<_> = snap.iter().map(|e| e.reason_code).collect();
+        assert!(reasons.contains(&ReasonCode::AliasUsed));
+        assert!(reasons.contains(&ReasonCode::Ok));
     }
 
     #[test]
