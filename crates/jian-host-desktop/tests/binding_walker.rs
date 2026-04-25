@@ -164,6 +164,33 @@ fn bind_value_projects_state_into_text_input_render() {
 }
 
 #[test]
+fn bind_value_coerces_non_string_state_for_text_input() {
+    // text_input.value is a string field; numeric / bool state
+    // bound through bind:value must coerce, not silently drop.
+    let rt = rt(
+        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+              "app": { "name":"x","version":"1","id":"x" },
+              "state": { "qty": { "type":"int", "default":7 } },
+              "children": [
+                { "type":"text_input", "id":"qty-input",
+                  "width":120, "height":40,
+                  "placeholder":"qty",
+                  "value":"",
+                  "bindings": { "bind:value": "$state.qty" } }
+              ]}"##,
+    );
+    let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
+    let painted = ops
+        .iter()
+        .find_map(|op| match op {
+            DrawOp::Text(run) => Some(run.content.clone()),
+            _ => None,
+        })
+        .expect("text run emitted");
+    assert_eq!(painted, "7");
+}
+
+#[test]
 fn fill_color_binding_skips_gradient_first_fill() {
     // `fill[0].color` is a solid-fill contract. When the first
     // fill is a gradient, the binding must leave it alone rather

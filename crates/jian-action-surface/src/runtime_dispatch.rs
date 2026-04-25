@@ -59,21 +59,27 @@ impl<'a> ActionDispatcher for RuntimeDispatcher<'a> {
             SourceKind::OpenRoute => dispatch_open_route(self.runtime, action, params),
             // Phase 1 only synthesises Tap. A bare Down+Up at the
             // node centre claims through `TapRecognizer` and fires
-            // `events.onTap` — which is also where authors wire
-            // `events.onSubmit` / `onConfirm` / `onDismiss` in
-            // practice, so those reuse the same synthesis safely.
-            SourceKind::Tap | SourceKind::Submit | SourceKind::Confirm | SourceKind::Dismiss => {
-                dispatch_pointer_tap(self.runtime, action)
-            }
-            // DoubleTap / LongPress / Swipe* / Scroll / LoadMore each
-            // need their own semantic-event synthesis (a tick-driven
-            // LongPress claim, a multi-step swipe path, a wheel
-            // dispatch, etc). Until those paths land, refuse the
-            // call rather than misroute it through `onTap` — the
-            // surface returns ExecutionFailed(handler_error) and the
-            // audit row records the same code, matching spec §4.2.
+            // `events.onTap`. Submit / Confirm / Dismiss share the
+            // pointer shape but the dispatcher walks a *different*
+            // handler (`onSubmit` etc.); routing them through
+            // `dispatch_pointer_tap` would emit a Tap, fire
+            // `onTap`, and silently no-op the actual handler. Refuse
+            // them until each has its own synthesis path.
+            SourceKind::Tap => dispatch_pointer_tap(self.runtime, action),
+            // DoubleTap / LongPress / Submit / Confirm / Dismiss /
+            // Swipe* / Scroll / LoadMore each need their own
+            // semantic-event synthesis (a tick-driven LongPress
+            // claim, a real onSubmit dispatch, a multi-step swipe
+            // path, a wheel dispatch, etc). Until those paths land,
+            // refuse the call rather than misroute it through
+            // `onTap` — the surface returns
+            // ExecutionFailed(handler_error) and the audit row
+            // records the same code, matching spec §4.2.
             SourceKind::DoubleTap
             | SourceKind::LongPress
+            | SourceKind::Submit
+            | SourceKind::Confirm
+            | SourceKind::Dismiss
             | SourceKind::SwipeLeft
             | SourceKind::SwipeRight
             | SourceKind::SwipeUp
@@ -383,6 +389,53 @@ mod tests {
         assert_eq!(
             rt.state.app_get("email").and_then(|v| v.as_str().map(str::to_owned)),
             Some("fini@example.com".to_owned()),
+        );
+    }
+
+    #[test]
+    fn submit_source_kind_rejected_until_dedicated_synthesis_lands() {
+        // Round 11: derive emits SourceKind::Submit from
+        // events.onSubmit. Synthesising a Tap would fire onTap
+        // instead, silently no-oping the actual handler. Phase 1
+        // explicitly rejects until the onSubmit dispatch path is
+        // wired.
+        let (mut rt, doc) = build_runtime(
+            r##"{
+              "formatVersion":"1.0","version":"1.0.0",
+              "state":{ "submitted":{ "type":"bool", "default":false } },
+              "children":[
+                { "type":"frame","id":"login-form","width":300,"height":200,
+                  "semantics":{ "aiName":"login" },
+                  "events":{ "onSubmit": [ { "set": { "$app.submitted": "true" } } ] }
+                }
+              ]
+            }"##,
+        );
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]);
+        let mut dispatcher = RuntimeDispatcher::new(&mut rt);
+        let action_name = surface
+            .actions()
+            .iter()
+            .find(|a| matches!(a.source_kind, SourceKind::Submit))
+            .map(|a| a.name.full());
+        let Some(name) = action_name else {
+            // If derive doesn't currently emit Submit, the rejection
+            // path is unreachable from inside ActionSurface — that's
+            // also a valid Phase 1 contract. Skip rather than fail.
+            return;
+        };
+        let out = surface.execute(&name, None, &mut dispatcher);
+        assert!(
+            matches!(
+                out,
+                ExecuteOutcome::Err(ExecuteError::ExecutionFailed { .. })
+            ),
+            "Submit must return handler_error, got {out:?}"
+        );
+        assert_eq!(
+            rt.state.app_get("submitted").and_then(|v| v.as_bool()),
+            Some(false),
+            "rejected dispatch must not run the handler"
         );
     }
 

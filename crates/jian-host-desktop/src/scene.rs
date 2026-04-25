@@ -216,17 +216,17 @@ fn apply_bindings(
             // (and any future writable surfaces) repaint from
             // current state. Without this, a SetValue dispatch
             // mutates state but the input still shows the static
-            // schema `value`.
+            // schema `value`. We coerce scalars to a string form
+            // because the only consumer today (`emit_text_input`)
+            // reads `value` as text; null becomes the empty string
+            // (the input renders the placeholder instead). Non-
+            // scalar bound values (object / array) are left
+            // un-projected — there's no sensible textual form,
+            // and the eval-warning pipeline already records a
+            // diagnostic if the author tries.
             "bind:value" => {
-                if let Some(s) = value.as_str() {
-                    obj.insert("value".into(), Value::String(s.to_owned()));
-                } else if let Some(n) = number_from_runtime(&value) {
-                    if let Some(num) = serde_json::Number::from_f64(n) {
-                        obj.insert("value".into(), Value::Number(num));
-                    }
-                } else if let Some(b) = value.as_bool() {
-                    obj.insert("value".into(), Value::Bool(b));
-                }
+                let projected = bind_value_to_string(&value);
+                obj.insert("value".into(), Value::String(projected));
             }
             _ => {}
         }
@@ -239,6 +239,30 @@ fn number_from_runtime(v: &jian_core::value::RuntimeValue) -> Option<f64> {
         return Some(n);
     }
     v.as_i64().map(|i| i as f64)
+}
+
+/// Stringify a bound runtime value for an input's `value` field.
+/// Strings come through unchanged; numbers / bools take their
+/// natural display form; null collapses to empty (so the input
+/// shows its placeholder); object / array values stringify to
+/// empty so a misuse doesn't paint stale text.
+fn bind_value_to_string(v: &jian_core::value::RuntimeValue) -> String {
+    if v.is_null() {
+        return String::new();
+    }
+    if let Some(s) = v.as_str() {
+        return s.to_owned();
+    }
+    if let Some(b) = v.as_bool() {
+        return b.to_string();
+    }
+    if let Some(i) = v.as_i64() {
+        return i.to_string();
+    }
+    if let Some(f) = v.as_f64() {
+        return f.to_string();
+    }
+    String::new()
 }
 
 fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
