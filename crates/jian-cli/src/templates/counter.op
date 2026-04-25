@@ -14,26 +14,52 @@
     {
       "type": "frame",
       "id": "root",
-      "width": 400,
-      "height": 300,
-      "layout": "vertical",
-      "gap": 16,
+      "width": 480,
+      "height": 320,
+      "x": 0,
+      "y": 0,
+      "fill": [{ "type": "solid", "color": "#f5f7fa" }],
       "children": [
         {
           "type": "text",
           "id": "label",
+          "x": 40,
+          "y": 60,
+          "width": 400,
+          "height": 60,
           "content": "Count: 0",
+          "fontSize": 40,
+          "fontWeight": 700,
+          "fill": [{ "type": "solid", "color": "#102a43" }],
           "bindings": { "content": "`Count: ${$app.count}`" }
         },
         {
           "type": "rectangle",
           "id": "btn",
+          "x": 140,
+          "y": 180,
           "width": 200,
-          "height": 48,
+          "height": 64,
+          "cornerRadius": 12,
           "fill": [{ "type": "solid", "color": "#1e88e5" }],
           "events": {
             "onTap": [ { "set": { "$app.count": "$app.count + 1" } } ]
-          }
+          },
+          "children": [
+            {
+              "type": "text",
+              "id": "btn-label",
+              "x": 0,
+              "y": 20,
+              "width": 200,
+              "height": 24,
+              "content": "Click me  +1",
+              "fontSize": 18,
+              "fontWeight": 600,
+              "textAlign": "center",
+              "fill": [{ "type": "solid", "color": "#ffffff" }]
+            }
+          ]
         }
       ]
     }

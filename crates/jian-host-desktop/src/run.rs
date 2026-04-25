@@ -288,7 +288,24 @@ impl ApplicationHandler for RunApp {
                 let s = self.scale_factor as f32;
                 pe.position = jian_core::geometry::point(pe.position.x / s, pe.position.y / s);
             }
-            self.host.runtime.dispatch_pointer(pe);
+            // Trace gate — only emits when JIAN_DEBUG_POINTER=1 so the
+            // normal jian player run stays quiet. Set the env var and
+            // re-run to see every translated PointerEvent + the
+            // semantic events the dispatch fires.
+            let trace = std::env::var("JIAN_DEBUG_POINTER").is_ok();
+            if trace {
+                eprintln!(
+                    "pointer: phase={:?} kind={:?} pos=({:.1},{:.1}) buttons={:?}",
+                    pe.phase, pe.kind, pe.position.x, pe.position.y, pe.buttons
+                );
+            }
+            let emitted = self.host.runtime.dispatch_pointer(pe);
+            if trace && !emitted.is_empty() {
+                eprintln!("  emitted {} semantic events:", emitted.len());
+                for ev in &emitted {
+                    eprintln!("    {:?}", ev);
+                }
+            }
             if let Some(w) = self.window.as_ref() {
                 w.request_redraw();
             }

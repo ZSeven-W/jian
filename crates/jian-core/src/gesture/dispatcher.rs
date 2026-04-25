@@ -1,28 +1,41 @@
 //! EventDispatcher — route SemanticEvent to the node's `events.*` ActionList
 //! and run it via Plan 4's `execute_list`.
+//!
+//! **Event bubbling** (CSS-style): when the topmost hit node has no
+//! handler for the event, the dispatcher walks up the parent chain
+//! and runs the first matching ancestor's handler. Without this, a
+//! Tap on the text *inside* a button gets silently dropped because
+//! the text node has no `events.onTap` even though the button does.
+//! Bubbling fires at most one handler per event.
 
 use super::semantic::SemanticEvent;
 use crate::action::{execute_list_shared, ActionContext, ExecOutcome, SharedRegistry};
 use crate::document::RuntimeDocument;
 
-/// Resolve the JSON `events.<handler_key>` ActionList on the node corresponding
-/// to `event.node()` and execute it. Returns the outcome (result + warnings).
-/// If the node has no handler, returns Ok with empty warnings.
+/// Resolve the JSON `events.<handler_key>` ActionList for the event's
+/// target node OR any ancestor up to the root, and execute the first
+/// match. Returns the outcome (result + warnings). Empty Ok when no
+/// node in the chain declares a handler.
 pub fn dispatch_event(
     doc: &RuntimeDocument,
     event: &SemanticEvent,
     reg: &SharedRegistry,
     ctx: &ActionContext,
 ) -> ExecOutcome {
-    let node_key = event.node();
-    let schema = &doc.tree.nodes[node_key].schema;
-    if let Some(list) = extract_handler(schema, event.handler_key()) {
-        execute_list_shared(reg, &list, ctx)
-    } else {
-        ExecOutcome {
-            result: Ok(()),
-            warnings: Vec::new(),
+    let mut node_key = Some(event.node());
+    while let Some(key) = node_key {
+        let data = match doc.tree.nodes.get(key) {
+            Some(d) => d,
+            None => break,
+        };
+        if let Some(list) = extract_handler(&data.schema, event.handler_key()) {
+            return execute_list_shared(reg, &list, ctx);
         }
+        node_key = data.parent;
+    }
+    ExecOutcome {
+        result: Ok(()),
+        warnings: Vec::new(),
     }
 }
 
