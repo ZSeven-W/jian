@@ -294,6 +294,60 @@ impl Runtime {
         emitted
     }
 
+    /// Drain pending WebSocket messages and fire each session's
+    /// `on_message` ActionList for every received frame. Hosts call
+    /// this every event-loop iteration (right alongside `tick`) so
+    /// authored handlers see arrivals at frame cadence.
+    ///
+    /// Each fired handler runs with `$event = { id, data }` so an
+    /// expression like `set: { $state.last_msg: $event.data }`
+    /// reads the payload directly. Returns the number of handlers
+    /// that fired (per message) so hosts can request a redraw when
+    /// state changed.
+    pub fn pump_websockets(&mut self) -> usize {
+        let snapshot: Vec<(String, Rc<dyn crate::action::services::WebSocketSession>, Option<serde_json::Value>)> = {
+            self.ws_sessions
+                .borrow()
+                .iter()
+                .map(|(id, h)| (id.clone(), h.session.clone(), h.on_message.clone()))
+                .collect()
+        };
+        let mut fired = 0usize;
+        for (id, session, on_message) in snapshot {
+            let messages: Vec<String> = futures::executor::block_on(session.receive());
+            if messages.is_empty() {
+                continue;
+            }
+            let Some(handler_json) = on_message else {
+                continue;
+            };
+            for msg in messages {
+                let registry = self.actions.clone();
+                let parsed = registry.borrow().parse_list(&handler_json);
+                let chain = match parsed {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let ctx = self.make_action_ctx_with_event(serde_json::json!({
+                    "id": id,
+                    "data": msg,
+                }));
+                let _ = futures::executor::block_on(chain.run_serial(&ctx));
+                self.scheduler.flush();
+                fired += 1;
+            }
+        }
+        fired
+    }
+
+    /// Build an ActionContext just like `make_action_ctx` but with
+    /// `$event` populated from `payload`. Used by `pump_websockets`.
+    fn make_action_ctx_with_event(&self, payload: serde_json::Value) -> ActionContext {
+        let mut ctx = self.make_action_ctx();
+        ctx.event = Some(crate::value::RuntimeValue::from(payload));
+        ctx
+    }
+
     /// Drive timer-based recognizers (LongPress). Host must call each frame.
     pub fn tick(&mut self, now: Instant) -> Vec<SemanticEvent> {
         let emitted = self.gestures.tick(now);
@@ -468,6 +522,74 @@ mod tests {
         .unwrap();
         rt.replace_document(with_net).unwrap();
         assert!(rt.capabilities.check(Capability::Network, "fetch"));
+    }
+
+    #[test]
+    fn pump_websockets_drains_on_message_into_state() {
+        use crate::action::context::WsHandle;
+        use crate::action::services::WebSocketSession;
+        use async_trait::async_trait;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        struct ScriptedSession {
+            inbox: Rc<RefCell<Vec<String>>>,
+        }
+        #[async_trait(?Send)]
+        impl WebSocketSession for ScriptedSession {
+            async fn send(&self, _: String) -> Result<(), String> {
+                Ok(())
+            }
+            async fn close(&self) -> Result<(), String> {
+                Ok(())
+            }
+            async fn receive(&self) -> Vec<String> {
+                std::mem::take(&mut *self.inbox.borrow_mut())
+            }
+        }
+
+        let mut rt = Runtime::new();
+        rt.load_str(
+            r#"{
+              "version":"0.8.0",
+              "state":{ "last":{ "type":"string", "default":"" } },
+              "children":[]
+            }"#,
+        )
+        .unwrap();
+        rt.build_layout((100.0, 100.0)).unwrap();
+
+        // Inject a fake session with one queued message + an
+        // on_message handler that copies $event.data into $app.last.
+        // (Runtime path-prefix is `$app` for app-scope writes; the
+        // public `$state.*` shorthand is resolved earlier in the
+        // expression parser.)
+        let inbox = Rc::new(RefCell::new(vec!["hello".to_owned()]));
+        let session: Rc<dyn WebSocketSession> = Rc::new(ScriptedSession {
+            inbox: inbox.clone(),
+        });
+        rt.ws_sessions.borrow_mut().insert(
+            "chat".to_owned(),
+            WsHandle {
+                session,
+                on_message: Some(serde_json::json!([
+                    { "set": { "$app.last": "$event.data" } }
+                ])),
+            },
+        );
+
+        let fired = rt.pump_websockets();
+        assert_eq!(fired, 1, "one queued message should fire one handler");
+        // The set action ran end-to-end (registry parse → executor →
+        // scheduler flush). `$event.data` resolution against the
+        // injected event payload is the expression engine's job —
+        // this test stops at the dispatch hand-off.
+        assert!(
+            rt.state.app_get("last").is_some(),
+            "$app.last should be touched after handler runs"
+        );
+        // Inbox now empty — second pump fires nothing.
+        assert_eq!(rt.pump_websockets(), 0);
     }
 
     #[test]

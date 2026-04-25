@@ -15,10 +15,24 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-/// Live WebSocket sessions, keyed by author-provided handle. Inserted
-/// by `ws_connect`, looked up by `ws_send` / `ws_close`. Single-thread
-/// `Rc<RefCell<...>>` matches the rest of the runtime model.
-pub type WsSessionRegistry = Rc<RefCell<HashMap<String, Rc<dyn WebSocketSession>>>>;
+/// One entry in the live WebSocket registry. Pairs the session
+/// handle with the optional `on_message` ActionList that runs every
+/// time the runtime polls a received message off the wire (see
+/// `Runtime::pump_websockets`).
+#[derive(Clone)]
+pub struct WsHandle {
+    pub session: Rc<dyn WebSocketSession>,
+    /// Author-supplied handler. Stored as JSON because compiled
+    /// `ActionChain` doesn't implement `Clone` and we need to
+    /// re-execute per message; the runtime re-parses each call.
+    pub on_message: Option<serde_json::Value>,
+}
+
+/// Live WebSocket sessions, keyed by author-provided id. Inserted by
+/// `ws_connect`, looked up by `ws_send` / `ws_close`, drained by
+/// `Runtime::pump_websockets`. Single-thread `Rc<RefCell<...>>`
+/// matches the rest of the runtime model.
+pub type WsSessionRegistry = Rc<RefCell<HashMap<String, WsHandle>>>;
 
 pub struct ActionContext {
     pub state: Rc<StateGraph>,

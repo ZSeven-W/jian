@@ -36,4 +36,14 @@ pub trait NetworkClient {
 pub trait WebSocketSession {
     async fn send(&self, text: String) -> Result<(), String>;
     async fn close(&self) -> Result<(), String>;
+    /// Drain any messages received since the last call. Hosts that
+    /// don't ship a real implementation return an empty Vec; the
+    /// runtime polls this each frame from `Runtime::tick` (or on
+    /// each event loop iteration) to fire `on_message` handlers.
+    ///
+    /// Default impl returns empty so existing callers stay
+    /// backward-compatible while production hosts override.
+    async fn receive(&self) -> Vec<String> {
+        Vec::new()
+    }
 }

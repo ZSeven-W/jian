@@ -65,7 +65,10 @@ fn read_session_id(
 struct WsConnect {
     id: String,
     url_expr: Expression,
-    has_on_message: bool,
+    /// Stored verbatim so `Runtime::pump_websockets` can re-parse it
+    /// each time a message arrives. Storing JSON (rather than a
+    /// compiled chain) sidesteps ActionChain's lack of `Clone`.
+    on_message: Option<Value>,
 }
 
 #[async_trait(?Send)]
@@ -101,7 +104,7 @@ impl ActionImpl for WsConnect {
         // demoted to a warning — they shouldn't block the new connect.
         let prior = ctx.ws_sessions.borrow_mut().remove(&self.id);
         if let Some(old) = prior {
-            if let Err(e) = old.close().await {
+            if let Err(e) = old.session.close().await {
                 ctx.warn(crate::expression::Diagnostic::runtime_warning(format!(
                     "ws_connect({}): close of prior session failed: {}",
                     self.id, e
@@ -110,15 +113,13 @@ impl ActionImpl for WsConnect {
         }
         match ctx.network.connect_websocket(url.clone()).await {
             Ok(session) => {
-                if self.has_on_message {
-                    ctx.warn(crate::expression::Diagnostic::runtime_warning(format!(
-                        "ws_connect({}): on_message accepted but not yet dispatched (pending receive-channel wiring)",
-                        self.id
-                    )));
-                }
-                ctx.ws_sessions
-                    .borrow_mut()
-                    .insert(self.id.clone(), session);
+                ctx.ws_sessions.borrow_mut().insert(
+                    self.id.clone(),
+                    crate::action::context::WsHandle {
+                        session,
+                        on_message: self.on_message.clone(),
+                    },
+                );
                 Ok(())
             }
             Err(e) => Err(ActionError::Custom(format!(
@@ -137,11 +138,11 @@ pub fn factory_ws_connect(body: &Value) -> Result<BoxedAction, ActionError> {
     })?;
     let id = read_session_id(obj, "ws_connect")?;
     let url_src = read_str_field(obj, "ws_connect", "url")?;
-    let has_on_message = obj.contains_key("on_message");
+    let on_message = obj.get("on_message").cloned();
     Ok(Box::new(WsConnect {
         id,
         url_expr: Expression::compile(&url_src)?,
-        has_on_message,
+        on_message,
     }))
 }
 
@@ -175,14 +176,14 @@ impl ActionImpl for WsSend {
             ctx.warn(w);
         }
         let text = data_v.as_str().unwrap_or("").to_owned();
-        let session = ctx.ws_sessions.borrow().get(&self.id).cloned();
-        let Some(session) = session else {
+        let handle = ctx.ws_sessions.borrow().get(&self.id).cloned();
+        let Some(handle) = handle else {
             return Err(ActionError::Custom(format!(
                 "ws_send: no session named {:?}",
                 self.id
             )));
         };
-        match session.send(text).await {
+        match handle.session.send(text).await {
             Ok(()) => Ok(()),
             Err(e) => Err(ActionError::Custom(format!("ws_send: {}", e))),
         }
@@ -231,13 +232,13 @@ impl ActionImpl for WsClose {
                 needed: Capability::Network,
             });
         }
-        let session = ctx.ws_sessions.borrow_mut().remove(&self.id);
-        let Some(session) = session else {
+        let handle = ctx.ws_sessions.borrow_mut().remove(&self.id);
+        let Some(handle) = handle else {
             // Closing a missing id is a no-op — apps frequently call
             // close defensively.
             return Ok(());
         };
-        match session.close().await {
+        match handle.session.close().await {
             Ok(()) => Ok(()),
             Err(e) => Err(ActionError::Custom(format!("ws_close: {}", e))),
         }
@@ -450,7 +451,11 @@ mod tests {
     }
 
     #[test]
-    fn ws_connect_with_on_message_warns_but_succeeds() {
+    fn ws_connect_stores_on_message_handler() {
+        // Spec on_message used to surface a warning ("not yet
+        // dispatched"); now `Runtime::pump_websockets` actually fires
+        // the handler. ws_connect just needs to retain the JSON for
+        // pumping to find later.
         use futures::executor::block_on;
         let net = Rc::new(MockNet {
             sent: Rc::new(RefCell::new(vec![])),
@@ -461,15 +466,14 @@ mod tests {
         let connect = factory_ws_connect(&serde_json::json!({
             "id": "chat",
             "url": "\"wss://x\"",
-            "on_message": [{ "set": { "$state.last": "$event" } }]
+            "on_message": [{ "set": { "$state.last": "$event.data" } }]
         }))
         .unwrap();
         block_on(connect.execute(&ctx)).unwrap();
-        let warns = ctx.take_warnings();
+        let stored = ctx.ws_sessions.borrow().get("chat").cloned().unwrap();
         assert!(
-            warns.iter().any(|w| w.message.contains("on_message")),
-            "expected on_message warning: {:?}",
-            warns
+            stored.on_message.is_some(),
+            "on_message handler should be retained for runtime pump"
         );
     }
 }
