@@ -8,13 +8,15 @@
 //! - `cornerRadius` (uniform f64 **or** `[tl,tr,br,bl]`) → `RoundedRect`.
 //! - `content` on text nodes → `DrawOp::Text` with colour-from-fill.
 //!
-//! Gradient fills (`linear_gradient` / `radial_gradient`), image fills,
-//! and background blur / shadow effects still arrive via a later commit
-//! once the jian-skia `draw_canvas` path learns shaders / samplers.
+//! Gradient fills (`linear_gradient`, `radial_gradient`) and drop-shadow
+//! effects emit dedicated draw-ops (`LinearGradientRect` /
+//! `RadialGradientRect` / `ShadowedRect`). Image fills + background blur
+//! still wait on the jian-skia image cache + sampler path (Plan 12).
 
 use jian_core::geometry::{point, rect, Point};
 use jian_core::render::{
-    BorderRadii, DrawOp, GradientStop, LinearGradient, Paint, PathCommand, ShadowSpec, StrokeOp,
+    BorderRadii, DrawOp, GradientStop, LinearGradient, Paint, PathCommand, RadialGradient,
+    ShadowSpec, StrokeOp,
     TextAlign, TextRun,
 };
 use jian_core::scene::Color;
@@ -116,6 +118,16 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
         return;
     }
 
+    if let Some(grad) = first_fill.and_then(try_radial_gradient) {
+        out.push(DrawOp::RadialGradientRect {
+            rect: rect_logical,
+            radii,
+            gradient: grad,
+            stroke,
+        });
+        return;
+    }
+
     let fill = first_solid_color(json.get("fill"));
     if fill.is_none() && stroke.is_none() {
         return;
@@ -162,6 +174,39 @@ fn try_linear_gradient(fill: &Value) -> Option<LinearGradient> {
         angle_deg,
         stops,
         opacity: 1.0,
+    })
+}
+
+fn try_radial_gradient(fill: &Value) -> Option<RadialGradient> {
+    let obj = fill.as_object()?;
+    if obj.get("type").and_then(|t| t.as_str()) != Some("radial_gradient") {
+        return None;
+    }
+    let cx = obj.get("cx").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+    let cy = obj.get("cy").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+    let radius = obj
+        .get("radius")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.5) as f32;
+    let stops_arr = obj.get("stops")?.as_array()?;
+    let mut stops = Vec::with_capacity(stops_arr.len());
+    for s in stops_arr {
+        let so = s.as_object()?;
+        let offset = so.get("offset").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+        let hex = so.get("color")?.as_str()?;
+        let color = Color::from_hex(hex)?;
+        stops.push(GradientStop { offset, color });
+    }
+    if stops.len() < 2 {
+        return None;
+    }
+    let opacity = obj.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    Some(RadialGradient {
+        cx,
+        cy,
+        radius,
+        stops,
+        opacity,
     })
 }
 

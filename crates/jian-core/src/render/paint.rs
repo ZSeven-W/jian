@@ -93,8 +93,31 @@ pub struct TextRun {
     pub line_height: f32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ImageHandle(pub u64);
+/// Where the bytes of an image come from.
+///
+/// Backends decode + cache by source. `DataUrl` carries an inline
+/// `data:image/...;base64,...` URL — fast path that needs no host
+/// resolver. `Bytes` carries pre-resolved bytes (e.g. zip-extracted
+/// asset). `Url` is a host-resolved reference; backends that cannot
+/// fetch it draw a placeholder + warn.
+#[derive(Debug, Clone)]
+pub enum ImageSource {
+    DataUrl(String),
+    Bytes(std::sync::Arc<Vec<u8>>),
+    Url(String),
+}
+
+impl ImageSource {
+    /// Stable cache key. Cheap for `DataUrl`/`Url` (string clone); for
+    /// `Bytes` we hash the pointer address — backends that want
+    /// content-addressed caching wrap with their own hash on insert.
+    pub fn cache_key(&self) -> String {
+        match self {
+            Self::DataUrl(s) | Self::Url(s) => s.clone(),
+            Self::Bytes(b) => format!("bytes:{:p}:{}", std::sync::Arc::as_ptr(b), b.len()),
+        }
+    }
+}
 
 /// A single colour stop in a gradient, `offset` in `[0.0, 1.0]`.
 #[derive(Debug, Clone, Copy)]
@@ -104,11 +127,24 @@ pub struct GradientStop {
 }
 
 /// Gradient fill description — a linear sweep across the target rect
-/// at `angle_deg` (0° = left-to-right, 90° = top-to-bottom). MVP
-/// supports only linear; radial can join as a sibling variant.
+/// at `angle_deg` (0° = left-to-right, 90° = top-to-bottom).
 #[derive(Debug, Clone)]
 pub struct LinearGradient {
     pub angle_deg: f32,
+    pub stops: Vec<GradientStop>,
+    pub opacity: f32,
+}
+
+/// Radial gradient description.
+///
+/// `cx` / `cy` are normalised within the target rect ([0, 1] — 0.5 = centre).
+/// `radius` is a fraction of `max(width, height)` (matching the OpenPencil
+/// TS convention used by pen-renderer's `node-renderer.ts`).
+#[derive(Debug, Clone)]
+pub struct RadialGradient {
+    pub cx: f32,
+    pub cy: f32,
+    pub radius: f32,
     pub stops: Vec<GradientStop>,
     pub opacity: f32,
 }
@@ -130,7 +166,7 @@ pub enum DrawOp {
         paint: Paint,
     },
     Image {
-        image: ImageHandle,
+        source: ImageSource,
         dst: Rect,
         opacity: f32,
     },
@@ -143,6 +179,15 @@ pub enum DrawOp {
         rect: Rect,
         radii: BorderRadii,
         gradient: LinearGradient,
+        stroke: Option<StrokeOp>,
+    },
+    /// Rounded rect with a radial gradient fill. Sibling to
+    /// `LinearGradientRect`; emitted for nodes whose `fill[]` starts
+    /// with a `radial_gradient` entry.
+    RadialGradientRect {
+        rect: Rect,
+        radii: BorderRadii,
+        gradient: RadialGradient,
         stroke: Option<StrokeOp>,
     },
     /// A rounded rect with an outer drop shadow drawn underneath. The

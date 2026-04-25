@@ -14,10 +14,11 @@
 
 use crate::color::to_sk_color;
 use crate::convert::{to_sk_matrix, to_sk_rect};
+use crate::image::ImageCache;
 use crate::path::to_sk_path;
 use crate::surface::SkiaSurface;
 use jian_core::geometry::{Affine2, Rect, Size};
-use jian_core::render::{BorderRadii, DrawOp, Paint, RenderBackend, ShadowSpec};
+use jian_core::render::{BorderRadii, DrawOp, ImageSource, Paint, RenderBackend, ShadowSpec};
 use skia_safe::{
     canvas::SaveLayerRec, image_filters, BlurStyle, Color, Color4f, ImageFilter, MaskFilter,
     Paint as SkPaint, PaintStyle, Point as SkPoint, RRect, Rect as SkRect,
@@ -44,6 +45,9 @@ pub struct SkiaBackend {
     pending_filter: Option<ImageFilter>,
     /// Recorded commands for the current frame. Drained by `end_frame`.
     cmds: Vec<Cmd>,
+    /// Decoded `sk_Image` cache keyed by `ImageSource::cache_key`.
+    /// Reused across frames so scrolling lists don't repeat decode.
+    image_cache: ImageCache,
 }
 
 impl SkiaBackend {
@@ -51,6 +55,7 @@ impl SkiaBackend {
         Self {
             pending_filter: None,
             cmds: Vec::new(),
+            image_cache: ImageCache::new(),
         }
     }
 
@@ -113,7 +118,7 @@ impl RenderBackend for SkiaBackend {
                     canvas.restore();
                 }
                 Cmd::Draw(op) => {
-                    draw_canvas(canvas, &op);
+                    draw_canvas(canvas, &op, &mut self.image_cache);
                 }
             }
         }
@@ -175,11 +180,11 @@ impl SkiaBackend {
     /// directly. Host adapters that already have the surface in hand can
     /// use this to avoid the buffer-and-replay round-trip.
     pub fn draw_on(&mut self, surface: &mut SkiaSurface, op: &DrawOp) {
-        draw_canvas(surface.canvas(), op);
+        draw_canvas(surface.canvas(), op, &mut self.image_cache);
     }
 }
 
-fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp) {
+fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp, image_cache: &mut ImageCache) {
     match op {
         DrawOp::Rect { rect, paint } => draw_rect(canvas, *rect, paint),
         DrawOp::RoundedRect { rect, radii, paint } => draw_rrect(canvas, *rect, *radii, paint),
@@ -201,12 +206,11 @@ fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp) {
                 canvas.draw_path(&path, &p);
             }
         }
-        DrawOp::Image { dst, opacity, .. } => {
-            // MVP: grey placeholder until image cache lands (Plan 12).
-            let mut p = SkPaint::new(Color4f::new(0.5, 0.5, 0.5, *opacity), None);
-            p.set_anti_alias(true);
-            canvas.draw_rect(to_sk_rect(*dst), &p);
-        }
+        DrawOp::Image {
+            source,
+            dst,
+            opacity,
+        } => draw_image(canvas, image_cache, source, *dst, *opacity),
         DrawOp::Text(run) => draw_text(canvas, run),
         DrawOp::LinearGradientRect {
             rect,
@@ -214,6 +218,12 @@ fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp) {
             gradient,
             stroke,
         } => draw_linear_gradient_rect(canvas, *rect, *radii, gradient, stroke.as_ref()),
+        DrawOp::RadialGradientRect {
+            rect,
+            radii,
+            gradient,
+            stroke,
+        } => draw_radial_gradient_rect(canvas, *rect, *radii, gradient, stroke.as_ref()),
         DrawOp::ShadowedRect {
             rect,
             radii,
@@ -393,6 +403,105 @@ fn draw_linear_gradient_rect(
     let offsets: Vec<f32> = g.stops.iter().map(|s| s.offset.clamp(0.0, 1.0)).collect();
     let shader = gradient_shader::linear(
         (SkPoint::new(p0.0, p0.1), SkPoint::new(p1.0, p1.1)),
+        skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(&colors, None),
+        offsets.as_slice(),
+        TileMode::Clamp,
+        None,
+        None,
+    );
+    let mut paint = SkPaint::default();
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Fill);
+    paint.set_alpha_f(g.opacity);
+    if let Some(s) = shader {
+        paint.set_shader(s as Shader);
+    }
+
+    let is_rounded = radii != BorderRadii::zero();
+    if is_rounded {
+        let sk_rect = to_sk_rect(rect);
+        let radii_arr = [
+            SkPoint::new(radii.tl, radii.tl),
+            SkPoint::new(radii.tr, radii.tr),
+            SkPoint::new(radii.br, radii.br),
+            SkPoint::new(radii.bl, radii.bl),
+        ];
+        let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
+        canvas.draw_rrect(rrect, &paint);
+    } else {
+        canvas.draw_rect(to_sk_rect(rect), &paint);
+    }
+
+    if let Some(stroke) = stroke {
+        let mut p = SkPaint::new(to_sk_color(stroke.color), None);
+        p.set_style(PaintStyle::Stroke);
+        p.set_stroke_width(stroke.width);
+        p.set_anti_alias(true);
+        if is_rounded {
+            let sk_rect = to_sk_rect(rect);
+            let radii_arr = [
+                SkPoint::new(radii.tl, radii.tl),
+                SkPoint::new(radii.tr, radii.tr),
+                SkPoint::new(radii.br, radii.br),
+                SkPoint::new(radii.bl, radii.bl),
+            ];
+            let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
+            canvas.draw_rrect(rrect, &p);
+        } else {
+            canvas.draw_rect(to_sk_rect(rect), &p);
+        }
+    }
+}
+
+fn draw_image(
+    canvas: &skia_safe::Canvas,
+    cache: &mut ImageCache,
+    source: &ImageSource,
+    dst: Rect,
+    opacity: f32,
+) {
+    use skia_safe::{canvas::SrcRectConstraint, SamplingOptions};
+    let dst_rect = to_sk_rect(dst);
+    if let Some(img) = cache.get_or_decode(source) {
+        let mut p = SkPaint::default();
+        p.set_anti_alias(true);
+        p.set_alpha_f(opacity);
+        let src_rect = SkRect::from_iwh(img.width(), img.height());
+        canvas.draw_image_rect_with_sampling_options(
+            img,
+            Some((&src_rect, SrcRectConstraint::Strict)),
+            dst_rect,
+            SamplingOptions::default(),
+            &p,
+        );
+    } else {
+        // Decode failed (or remote URL with no resolver) — fall back to
+        // a grey placeholder so the slot is visible at the right size.
+        let mut p = SkPaint::new(Color4f::new(0.5, 0.5, 0.5, opacity), None);
+        p.set_anti_alias(true);
+        canvas.draw_rect(dst_rect, &p);
+    }
+}
+
+fn draw_radial_gradient_rect(
+    canvas: &skia_safe::Canvas,
+    rect: Rect,
+    radii: BorderRadii,
+    g: &jian_core::render::RadialGradient,
+    stroke: Option<&jian_core::render::StrokeOp>,
+) {
+    use skia_safe::{gradient_shader, Shader, TileMode};
+
+    // cx/cy ∈ [0,1] within the rect; radius ∈ [0,1] of max(w, h).
+    let cx = rect.min_x() + g.cx * rect.size.width;
+    let cy = rect.min_y() + g.cy * rect.size.height;
+    let r = g.radius * rect.size.width.max(rect.size.height);
+
+    let colors: Vec<Color4f> = g.stops.iter().map(|s| to_sk_color(s.color)).collect();
+    let offsets: Vec<f32> = g.stops.iter().map(|s| s.offset.clamp(0.0, 1.0)).collect();
+    let shader = gradient_shader::radial(
+        SkPoint::new(cx, cy),
+        r.max(0.0),
         skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(&colors, None),
         offsets.as_slice(),
         TileMode::Clamp,
@@ -628,6 +737,69 @@ mod tests {
         backend.pop_layer();
         backend.end_frame(&mut surface);
         assert!(surface.encode_png().is_some());
+    }
+
+    #[test]
+    fn data_url_image_draws_through_trait() {
+        // 1x1 transparent PNG (smallest valid).
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+        let url = format!("data:image/png;base64,{}", png);
+        let mut backend = SkiaBackend::new();
+        let mut surface = backend.new_surface(size(32.0, 32.0));
+        backend.begin_frame(&mut surface, 0xffffffff);
+        backend.draw(&DrawOp::Image {
+            source: ImageSource::DataUrl(url),
+            dst: rect(4.0, 4.0, 24.0, 24.0),
+            opacity: 1.0,
+        });
+        backend.end_frame(&mut surface);
+        assert!(surface.encode_png().is_some());
+    }
+
+    #[test]
+    fn missing_image_falls_back_to_grey() {
+        let mut backend = SkiaBackend::new();
+        let mut surface = backend.new_surface(size(32.0, 32.0));
+        backend.begin_frame(&mut surface, 0xffffffff);
+        backend.draw(&DrawOp::Image {
+            source: ImageSource::Url("https://nope.example/x.png".into()),
+            dst: rect(4.0, 4.0, 24.0, 24.0),
+            opacity: 1.0,
+        });
+        backend.end_frame(&mut surface);
+        assert!(surface.encode_png().is_some());
+    }
+
+    #[test]
+    fn radial_gradient_rect_draws_through_trait() {
+        use jian_core::render::{GradientStop, RadialGradient};
+        let mut backend = SkiaBackend::new();
+        let mut surface = backend.new_surface(size(64.0, 64.0));
+        backend.begin_frame(&mut surface, 0xffffffff);
+        backend.draw(&DrawOp::RadialGradientRect {
+            rect: rect(0.0, 0.0, 64.0, 64.0),
+            radii: BorderRadii::zero(),
+            gradient: RadialGradient {
+                cx: 0.5,
+                cy: 0.5,
+                radius: 0.5,
+                stops: vec![
+                    GradientStop {
+                        offset: 0.0,
+                        color: Color::rgb(0xff, 0xff, 0xff),
+                    },
+                    GradientStop {
+                        offset: 1.0,
+                        color: Color::rgb(0x00, 0x00, 0x00),
+                    },
+                ],
+                opacity: 1.0,
+            },
+            stroke: None,
+        });
+        backend.end_frame(&mut surface);
+        let png = surface.encode_png().expect("png");
+        assert!(png.len() > 100);
     }
 
     #[test]
