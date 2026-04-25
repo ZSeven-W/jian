@@ -182,8 +182,40 @@ impl Runtime {
     /// Swap the runtime's document tree for `schema`, reusing the
     /// existing StateGraph + services. Used by `jian dev` hot-reload
     /// so app state (e.g. `$state.count`) survives a `.op` edit.
+    ///
+    /// Refreshes the capability gate from the new schema's
+    /// `app.capabilities` (additions become available immediately,
+    /// removals start denying), and reuses an existing `AuditLog` so
+    /// rolling history is preserved across reloads.
+    ///
+    /// State seeding uses `SeedMode::PreserveExisting` — keys that
+    /// already hold a value keep that value; only newly-introduced
+    /// keys get their schema default.
     pub fn replace_document(&mut self, schema: PenDocument) -> CoreResult<()> {
-        let doc = loader::build(schema, &self.state)?;
+        // Rebuild the capability gate from the new schema. Reuse the
+        // existing AuditLog so the rolling history isn't truncated on
+        // every save. If the original Runtime was constructed via
+        // `Runtime::new` (no audit), allocate one now so newly
+        // declared capabilities can record entries.
+        let declared = schema
+            .app
+            .as_ref()
+            .and_then(|a| a.capabilities.as_ref())
+            .map(|list| {
+                list.iter()
+                    .copied()
+                    .map(from_schema_capability)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let audit = self
+            .audit
+            .clone()
+            .unwrap_or_else(|| Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY)));
+        self.audit = Some(audit.clone());
+        self.capabilities = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit)));
+
+        let doc = loader::build_with(schema, &self.state, loader::SeedMode::PreserveExisting)?;
         self.document = Some(doc);
         Ok(())
     }
@@ -297,6 +329,81 @@ mod tests {
         rt.build_layout((800.0, 600.0)).unwrap();
         rt.rebuild_spatial();
         assert_eq!(rt.spatial.len(), 1);
+    }
+
+    /// Hot-reload preserves app-scope state values. A user editing the
+    /// .op while `$state.count == 5` should still see `5` after save.
+    #[test]
+    fn replace_document_preserves_app_state() {
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "state":{"count":{"type":"int","default":0}},
+              "children":[]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.state.app_set("count", serde_json::json!(5));
+        assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(5));
+
+        let new_schema: PenDocument = serde_json::from_str(
+            r#"{
+          "version":"0.8.0",
+          "state":{
+            "count":{"type":"int","default":0},
+            "username":{"type":"string","default":""}
+          },
+          "children":[]
+        }"#,
+        )
+        .unwrap();
+        rt.replace_document(new_schema).unwrap();
+
+        // Pre-existing key kept its live value.
+        assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(5));
+        // Newly declared key got its schema default.
+        assert_eq!(rt.state.app_get("username").unwrap().as_str(), Some(""));
+    }
+
+    /// Capability gate rebuilds from the new schema, so adding `network`
+    /// in the .op edit becomes effective without a process restart.
+    #[test]
+    fn replace_document_refreshes_capability_gate() {
+        use crate::capability::Capability;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "id":"test",
+              "app":{
+                "name":"t","version":"0.1.0","id":"com.test.t",
+                "capabilities":[]
+              },
+              "children":[]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!rt.capabilities.check(Capability::Network, "fetch"));
+
+        let with_net: PenDocument = serde_json::from_str(
+            r#"{
+          "version":"0.8.0",
+          "id":"test",
+          "app":{
+            "name":"t","version":"0.1.0","id":"com.test.t",
+            "capabilities":["network"]
+          },
+          "children":[]
+        }"#,
+        )
+        .unwrap();
+        rt.replace_document(with_net).unwrap();
+        assert!(rt.capabilities.check(Capability::Network, "fetch"));
     }
 
     /// `replace_document` should swap in the new tree without disturbing

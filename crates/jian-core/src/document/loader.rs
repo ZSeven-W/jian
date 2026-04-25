@@ -12,10 +12,31 @@ use jian_ops_schema::state::StateEntry;
 use jian_ops_schema::variable::{VariableDefinition, VariableScalar, VariableValue};
 use serde_json::{json, Value};
 
+/// Whether `build` should overwrite already-populated state keys. The
+/// default `Initial` mode is what `Runtime::new_from_document` wants;
+/// `PreserveExisting` is used by `Runtime::replace_document` so a
+/// `jian dev` reload doesn't wipe live `$state.*` / `$vars.*` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeedMode {
+    Initial,
+    PreserveExisting,
+}
+
 pub fn build(schema: PenDocument, state: &StateGraph) -> CoreResult<RuntimeDocument> {
+    build_with(schema, state, SeedMode::Initial)
+}
+
+pub fn build_with(
+    schema: PenDocument,
+    state: &StateGraph,
+    seed: SeedMode,
+) -> CoreResult<RuntimeDocument> {
     // Seed app-scope state from the document's state schema.
     if let Some(ref sch) = schema.state {
         for (name, entry) in sch {
+            if seed == SeedMode::PreserveExisting && state.app_get(name).is_some() {
+                continue;
+            }
             let default = resolve_default(entry);
             state.app_set(name, default);
         }
@@ -24,6 +45,9 @@ pub fn build(schema: PenDocument, state: &StateGraph) -> CoreResult<RuntimeDocum
     // Seed $vars from design variables (first themed value if themed).
     if let Some(ref vars) = schema.variables {
         for (name, def) in vars {
+            if seed == SeedMode::PreserveExisting && state.vars_get(name).is_some() {
+                continue;
+            }
             state.vars_set(name, var_default(def));
         }
     }
