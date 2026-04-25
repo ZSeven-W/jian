@@ -111,7 +111,7 @@ pub struct ParamSpec {
 /// Atomic parameter types. Mirrors the subset of `state::StateType`
 /// the surface emits in Phase 1 — no `oneOf` / nested object/array
 /// expansion until Phase 2.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParamTy {
     Int,
     Float,

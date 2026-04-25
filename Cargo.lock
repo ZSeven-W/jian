@@ -1279,6 +1279,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jian-action-surface"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "jian-core",
+ "jian-ops-schema",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "jian-core"
 version = "0.1.0"
 dependencies = [

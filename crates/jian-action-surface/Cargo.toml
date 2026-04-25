@@ -1,0 +1,30 @@
+[package]
+name         = "jian-action-surface"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "AI Action Surface — production end-user AI access (list_available_actions / execute_action) over a Jian Runtime"
+
+[features]
+# Default ships the in-process Rust API (`ActionSurface::list` /
+# `ActionSurface::execute`). The MCP transport is gated behind a
+# separate feature so headless / library consumers don't pull in
+# rmcp + tokio.
+default = []
+# Future MCP server (rmcp + tokio). Not implemented yet.
+mcp = []
+
+[dependencies]
+jian-core       = { path = "../jian-core" }
+jian-ops-schema = { path = "../jian-ops-schema" }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+thiserror       = { workspace = true }
+async-trait     = "0.1"
+futures         = "0.3"
+
+[dev-dependencies]
+serde_json      = { workspace = true }
