@@ -1,18 +1,30 @@
 //! WebSocket actions: `ws_connect`, `ws_send`, `ws_close`.
 //!
-//! Sessions are addressed by an author-chosen string handle stored in
-//! `ActionContext::ws_sessions`:
+//! Sessions are addressed by author-chosen string `id` stored in
+//! `ActionContext::ws_sessions` — wire shape matches spec
+//! 02-logic-and-reactivity.md §3.2:
 //!
 //! ```jsonc
-//! { "ws_connect": { "handle": "chat", "url": "wss://example.com/chat" } }
-//! { "ws_send":    { "handle": "chat", "text": "$state.draft" } }
-//! { "ws_close":   { "handle": "chat" } }
+//! { "ws_connect": { "id": "chat", "url": "wss://example.com/chat",
+//!                    "on_message": [...] } }
+//! { "ws_send":    { "id": "chat", "data": "$state.draft" } }
+//! { "ws_close":   { "id": "chat" } }
 //! ```
 //!
 //! Capability gating: every verb checks `Capability::Network` before
 //! touching the wire — same gate that protects `fetch`. The
 //! `WebSocketSession` trait is single-threaded (`Rc<dyn ...>`) to match
 //! the rest of the runtime.
+//!
+//! `ws_connect` will close any existing session bound to the same `id`
+//! before installing the new one — reconnect-by-id is a common pattern
+//! and silently leaking the old socket would be a bug.
+//!
+//! `on_message` is accepted by the parser (so authored `.op` files
+//! validate) but not yet dispatched — the underlying `WebSocketSession`
+//! trait is send/close-only. A subsequent change adds a receiver
+//! channel + ActionList wiring; for now we record the bound chain and
+//! emit a one-shot warning so authors know the handler won't fire yet.
 
 use crate::action::action_trait::{ActionImpl, BoxedAction};
 use crate::action::capability::Capability;
@@ -33,11 +45,27 @@ fn read_str_field(
         .ok_or(ActionError::MissingField { name, field })
 }
 
+/// Resolve an authored `id` field, accepting the legacy `handle` alias
+/// from earlier drafts so existing `.op` files don't break.
+fn read_session_id(
+    obj: &serde_json::Map<String, Value>,
+    name: &'static str,
+) -> Result<String, ActionError> {
+    if let Some(s) = obj.get("id").and_then(|v| v.as_str()) {
+        return Ok(s.to_owned());
+    }
+    if let Some(s) = obj.get("handle").and_then(|v| v.as_str()) {
+        return Ok(s.to_owned());
+    }
+    Err(ActionError::MissingField { name, field: "id" })
+}
+
 // --- ws_connect -------------------------------------------------------
 
 struct WsConnect {
-    handle: String,
+    id: String,
     url_expr: Expression,
+    has_on_message: bool,
 }
 
 #[async_trait(?Send)]
@@ -53,13 +81,13 @@ impl ActionImpl for WsConnect {
             });
         }
         let locals = ctx.locals_snapshot();
-        let (url_v, ws) = self.url_expr.eval_with_locals(
+        let (url_v, warns) = self.url_expr.eval_with_locals(
             &ctx.state,
             ctx.page_id.as_deref(),
             ctx.node_id.as_deref(),
             &locals,
         );
-        for w in ws {
+        for w in warns {
             ctx.warn(w);
         }
         let url = url_v.as_str().unwrap_or("").to_owned();
@@ -68,16 +96,34 @@ impl ActionImpl for WsConnect {
                 "ws_connect: url evaluated to empty".into(),
             ));
         }
+        // Reconnect-by-id: close any existing session under the same
+        // handle before installing the new one. Errors on close are
+        // demoted to a warning — they shouldn't block the new connect.
+        let prior = ctx.ws_sessions.borrow_mut().remove(&self.id);
+        if let Some(old) = prior {
+            if let Err(e) = old.close().await {
+                ctx.warn(crate::expression::Diagnostic::runtime_warning(format!(
+                    "ws_connect({}): close of prior session failed: {}",
+                    self.id, e
+                )));
+            }
+        }
         match ctx.network.connect_websocket(url.clone()).await {
             Ok(session) => {
+                if self.has_on_message {
+                    ctx.warn(crate::expression::Diagnostic::runtime_warning(format!(
+                        "ws_connect({}): on_message accepted but not yet dispatched (pending receive-channel wiring)",
+                        self.id
+                    )));
+                }
                 ctx.ws_sessions
                     .borrow_mut()
-                    .insert(self.handle.clone(), session);
+                    .insert(self.id.clone(), session);
                 Ok(())
             }
             Err(e) => Err(ActionError::Custom(format!(
                 "ws_connect({}): {}",
-                self.handle, e
+                self.id, e
             ))),
         }
     }
@@ -87,21 +133,23 @@ pub fn factory_ws_connect(body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {
         name: "ws_connect",
         field: "body",
-        message: "must be object with `handle` and `url`".into(),
+        message: "must be object with `id` and `url` (legacy `handle` accepted)".into(),
     })?;
-    let handle = read_str_field(obj, "ws_connect", "handle")?;
+    let id = read_session_id(obj, "ws_connect")?;
     let url_src = read_str_field(obj, "ws_connect", "url")?;
+    let has_on_message = obj.contains_key("on_message");
     Ok(Box::new(WsConnect {
-        handle,
+        id,
         url_expr: Expression::compile(&url_src)?,
+        has_on_message,
     }))
 }
 
 // --- ws_send ----------------------------------------------------------
 
 struct WsSend {
-    handle: String,
-    text_expr: Expression,
+    id: String,
+    data_expr: Expression,
 }
 
 #[async_trait(?Send)]
@@ -117,21 +165,21 @@ impl ActionImpl for WsSend {
             });
         }
         let locals = ctx.locals_snapshot();
-        let (text_v, ws) = self.text_expr.eval_with_locals(
+        let (data_v, warns) = self.data_expr.eval_with_locals(
             &ctx.state,
             ctx.page_id.as_deref(),
             ctx.node_id.as_deref(),
             &locals,
         );
-        for w in ws {
+        for w in warns {
             ctx.warn(w);
         }
-        let text = text_v.as_str().unwrap_or("").to_owned();
-        let session = ctx.ws_sessions.borrow().get(&self.handle).cloned();
+        let text = data_v.as_str().unwrap_or("").to_owned();
+        let session = ctx.ws_sessions.borrow().get(&self.id).cloned();
         let Some(session) = session else {
             return Err(ActionError::Custom(format!(
                 "ws_send: no session named {:?}",
-                self.handle
+                self.id
             )));
         };
         match session.send(text).await {
@@ -145,20 +193,30 @@ pub fn factory_ws_send(body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {
         name: "ws_send",
         field: "body",
-        message: "must be object with `handle` and `text`".into(),
+        message: "must be object with `id` and `data` (legacy `handle`/`text` accepted)".into(),
     })?;
-    let handle = read_str_field(obj, "ws_send", "handle")?;
-    let text_src = read_str_field(obj, "ws_send", "text")?;
+    let id = read_session_id(obj, "ws_send")?;
+    // Spec field is `data`; legacy `text` accepted to keep older
+    // authored payloads working.
+    let data_src = obj
+        .get("data")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("text").and_then(|v| v.as_str()))
+        .ok_or(ActionError::MissingField {
+            name: "ws_send",
+            field: "data",
+        })?
+        .to_owned();
     Ok(Box::new(WsSend {
-        handle,
-        text_expr: Expression::compile(&text_src)?,
+        id,
+        data_expr: Expression::compile(&data_src)?,
     }))
 }
 
 // --- ws_close ---------------------------------------------------------
 
 struct WsClose {
-    handle: String,
+    id: String,
 }
 
 #[async_trait(?Send)]
@@ -173,10 +231,10 @@ impl ActionImpl for WsClose {
                 needed: Capability::Network,
             });
         }
-        let session = ctx.ws_sessions.borrow_mut().remove(&self.handle);
+        let session = ctx.ws_sessions.borrow_mut().remove(&self.id);
         let Some(session) = session else {
-            // Closing a missing handle is a no-op + warning, not an
-            // error — apps frequently call close defensively.
+            // Closing a missing id is a no-op — apps frequently call
+            // close defensively.
             return Ok(());
         };
         match session.close().await {
@@ -190,10 +248,10 @@ pub fn factory_ws_close(body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {
         name: "ws_close",
         field: "body",
-        message: "must be object with `handle`".into(),
+        message: "must be object with `id` (legacy `handle` accepted)".into(),
     })?;
-    let handle = read_str_field(obj, "ws_close", "handle")?;
-    Ok(Box::new(WsClose { handle }))
+    let id = read_session_id(obj, "ws_close")?;
+    Ok(Box::new(WsClose { id }))
 }
 
 #[cfg(test)]
@@ -293,33 +351,75 @@ mod tests {
         let ctx = ctx_with_mock_net(net);
 
         let connect = factory_ws_connect(&serde_json::json!({
-            "handle": "chat",
+            "id": "chat",
             "url": "\"wss://example.com/chat\""
         }))
         .unwrap();
         block_on(connect.execute(&ctx)).unwrap();
-        assert_eq!(
-            last_url.borrow().as_deref(),
-            Some("wss://example.com/chat")
-        );
+        assert_eq!(last_url.borrow().as_deref(), Some("wss://example.com/chat"));
         assert!(ctx.ws_sessions.borrow().contains_key("chat"));
 
         let send = factory_ws_send(&serde_json::json!({
-            "handle": "chat",
-            "text": "\"hi\""
+            "id": "chat",
+            "data": "\"hi\""
         }))
         .unwrap();
         block_on(send.execute(&ctx)).unwrap();
         assert_eq!(*sent.borrow(), vec!["hi"]);
 
-        let close = factory_ws_close(&serde_json::json!({ "handle": "chat" })).unwrap();
+        let close = factory_ws_close(&serde_json::json!({ "id": "chat" })).unwrap();
         block_on(close.execute(&ctx)).unwrap();
         assert!(*closed.borrow());
         assert!(!ctx.ws_sessions.borrow().contains_key("chat"));
     }
 
     #[test]
-    fn ws_send_unknown_handle_errors() {
+    fn ws_connect_legacy_handle_alias_still_works() {
+        use futures::executor::block_on;
+        let net = Rc::new(MockNet {
+            sent: Rc::new(RefCell::new(vec![])),
+            closed: Rc::new(RefCell::new(false)),
+            last_url: Rc::new(RefCell::new(None)),
+        });
+        let ctx = ctx_with_mock_net(net);
+        let connect = factory_ws_connect(&serde_json::json!({
+            "handle": "legacy",
+            "url": "\"wss://x\""
+        }))
+        .unwrap();
+        block_on(connect.execute(&ctx)).unwrap();
+        assert!(ctx.ws_sessions.borrow().contains_key("legacy"));
+    }
+
+    #[test]
+    fn ws_connect_reconnect_closes_prior_session() {
+        use futures::executor::block_on;
+        let closed = Rc::new(RefCell::new(false));
+        let net = Rc::new(MockNet {
+            sent: Rc::new(RefCell::new(vec![])),
+            closed: closed.clone(),
+            last_url: Rc::new(RefCell::new(None)),
+        });
+        let ctx = ctx_with_mock_net(net);
+        let connect = factory_ws_connect(&serde_json::json!({
+            "id": "chat",
+            "url": "\"wss://x\""
+        }))
+        .unwrap();
+        block_on(connect.execute(&ctx)).unwrap();
+        // Reconnect with the same id.
+        let connect2 = factory_ws_connect(&serde_json::json!({
+            "id": "chat",
+            "url": "\"wss://x2\""
+        }))
+        .unwrap();
+        block_on(connect2.execute(&ctx)).unwrap();
+        // Prior session was closed.
+        assert!(*closed.borrow(), "expected prior session to be closed");
+    }
+
+    #[test]
+    fn ws_send_unknown_id_errors() {
         use futures::executor::block_on;
         let net = Rc::new(MockNet {
             sent: Rc::new(RefCell::new(vec![])),
@@ -328,8 +428,8 @@ mod tests {
         });
         let ctx = ctx_with_mock_net(net);
         let send = factory_ws_send(&serde_json::json!({
-            "handle": "ghost",
-            "text": "\"hi\""
+            "id": "ghost",
+            "data": "\"hi\""
         }))
         .unwrap();
         let r = block_on(send.execute(&ctx));
@@ -345,7 +445,31 @@ mod tests {
             last_url: Rc::new(RefCell::new(None)),
         });
         let ctx = ctx_with_mock_net(net);
-        let close = factory_ws_close(&serde_json::json!({ "handle": "ghost" })).unwrap();
+        let close = factory_ws_close(&serde_json::json!({ "id": "ghost" })).unwrap();
         block_on(close.execute(&ctx)).unwrap();
+    }
+
+    #[test]
+    fn ws_connect_with_on_message_warns_but_succeeds() {
+        use futures::executor::block_on;
+        let net = Rc::new(MockNet {
+            sent: Rc::new(RefCell::new(vec![])),
+            closed: Rc::new(RefCell::new(false)),
+            last_url: Rc::new(RefCell::new(None)),
+        });
+        let ctx = ctx_with_mock_net(net);
+        let connect = factory_ws_connect(&serde_json::json!({
+            "id": "chat",
+            "url": "\"wss://x\"",
+            "on_message": [{ "set": { "$state.last": "$event" } }]
+        }))
+        .unwrap();
+        block_on(connect.execute(&ctx)).unwrap();
+        let warns = ctx.take_warnings();
+        assert!(
+            warns.iter().any(|w| w.message.contains("on_message")),
+            "expected on_message warning: {:?}",
+            warns
+        );
     }
 }

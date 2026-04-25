@@ -69,6 +69,16 @@ impl Diagnostic {
             span,
         }
     }
+    /// Build a runtime-level warning at an unknown source location.
+    /// Used by Action implementations that surface non-fatal advisory
+    /// messages through `ctx.warn`.
+    pub fn runtime_warning(msg: impl Into<String>) -> Self {
+        Self {
+            kind: DiagKind::RuntimeWarning,
+            message: msg.into(),
+            span: Span::zero(),
+        }
+    }
 }
 
 #[cfg(test)]
