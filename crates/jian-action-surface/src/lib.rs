@@ -100,6 +100,43 @@ impl ActionDispatcher for SinkDispatcher {
     }
 }
 
+/// Spec §4.2 #4 dynamic check. Hosts implement this with access to
+/// the live StateGraph + node tree: walk the source node and its
+/// ancestors, evaluate any `bindings.visible` / `bindings.disabled`
+/// expressions, and return `false` if any ancestor is currently
+/// hidden or disabled. The runtime consults the gate **after** the
+/// static gates (StaticHidden / ConfirmGated) and **before** rate
+/// limit, matching spec §4.2's gate order.
+pub trait StateGate {
+    fn allows(&self, source_node_id: &str) -> bool;
+}
+
+/// No-op gate — every action passes. Default for `ActionSurface`
+/// when the host hasn't wired a real state-gate (matches the
+/// pre-StateGated behaviour, so existing tests stay green).
+#[derive(Debug, Default)]
+pub struct AlwaysAllow;
+
+impl StateGate for AlwaysAllow {
+    fn allows(&self, _: &str) -> bool {
+        true
+    }
+}
+
+/// Closure adapter — hosts that already have access to the live
+/// runtime can wrap a one-shot lookup as a StateGate without
+/// declaring a new struct.
+pub struct ClosureGate<F>(pub F);
+
+impl<F> StateGate for ClosureGate<F>
+where
+    F: Fn(&str) -> bool,
+{
+    fn allows(&self, source_node_id: &str) -> bool {
+        (self.0)(source_node_id)
+    }
+}
+
 /// Per-session state — rate-limit bucket + in-flight action set.
 struct Session {
     bucket: TokenBucket,
@@ -189,6 +226,23 @@ impl ActionSurface {
         params: Option<&Value>,
         dispatcher: &mut D,
     ) -> ExecuteOutcome {
+        self.execute_with_gate(name, params, dispatcher, &AlwaysAllow)
+    }
+
+    /// Same as [`execute`] but consults a `StateGate` for the
+    /// dynamic visibility / disabled check (spec §4.2 #4). Hosts
+    /// that hold a live `Runtime` reference pass a `ClosureGate` or
+    /// custom `StateGate` impl that walks the node tree + state
+    /// graph; clients without that infrastructure use [`execute`]
+    /// (which uses `AlwaysAllow`) and rely on the dispatcher itself
+    /// to refuse stale calls.
+    pub fn execute_with_gate<D: ActionDispatcher, G: StateGate>(
+        &mut self,
+        name: &str,
+        params: Option<&Value>,
+        dispatcher: &mut D,
+        state_gate: &G,
+    ) -> ExecuteOutcome {
         let decision = decide(&self.actions, name, params);
         let (action, params_map) = match decision {
             Decision::Dispatch { action, params } => (action, params),
@@ -207,6 +261,23 @@ impl ActionSurface {
         let full_name = action.name.full();
         let source_id = action.source_node_id.clone();
         let is_alias = full_name != name;
+
+        // Spec §4.2 #4 — dynamic state-gate check. Runs **before**
+        // rate limit so a stale-state rejection doesn't burn a
+        // bucket token (an AI client repeatedly trying a hidden
+        // button shouldn't get throttled out).
+        if !state_gate.allows(&source_id) {
+            let e = ExecuteError::state_gated();
+            self.audit_for(
+                &full_name,
+                Some(&source_id),
+                params,
+                AuditVerdict::Denied,
+                ReasonCode::StateGated,
+                is_alias,
+            );
+            return ExecuteOutcome::Err(e);
+        }
 
         if !self.session.bucket.take() {
             let e = ExecuteError::rate_limited();
@@ -454,6 +525,51 @@ mod tests {
         let snap = log.snapshot();
         assert_eq!(snap[0].reason_code, ReasonCode::UnknownAction);
         assert_eq!(snap[0].outcome, AuditVerdict::Denied);
+    }
+
+    #[test]
+    fn state_gate_rejects_with_state_gated() {
+        let doc = fixture();
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]);
+        let mut sink = SinkDispatcher;
+        let gate = ClosureGate(|_node_id: &str| false); // every node hidden
+        let out = surface.execute_with_gate("home.plus", None, &mut sink, &gate);
+        assert!(matches!(
+            out,
+            ExecuteOutcome::Err(ExecuteError::NotAvailable {
+                reason: NotAvailableReason::StateGated
+            })
+        ));
+    }
+
+    #[test]
+    fn state_gate_pass_through_dispatches() {
+        let doc = fixture();
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]);
+        let mut sink = SinkDispatcher;
+        let gate = ClosureGate(|_: &str| true);
+        let out = surface.execute_with_gate("home.plus", None, &mut sink, &gate);
+        assert!(matches!(out, ExecuteOutcome::Ok));
+    }
+
+    #[test]
+    fn state_gate_does_not_burn_rate_limit_token() {
+        // A node that's currently hidden shouldn't drain the
+        // 10 calls/sec bucket — otherwise an AI client polling a
+        // briefly-hidden button gets throttled out for no reason.
+        let doc = fixture();
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]);
+        let mut sink = SinkDispatcher;
+        let blocking = ClosureGate(|_: &str| false);
+        // 20 rejections — well past the 10-token cap — but no token
+        // should have been consumed.
+        for _ in 0..20 {
+            surface.execute_with_gate("home.plus", None, &mut sink, &blocking);
+        }
+        // Now the same action with the gate open should still succeed.
+        let pass = ClosureGate(|_: &str| true);
+        let out = surface.execute_with_gate("home.plus", None, &mut sink, &pass);
+        assert!(matches!(out, ExecuteOutcome::Ok), "bucket should still be full");
     }
 
     #[test]
