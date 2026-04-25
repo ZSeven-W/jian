@@ -30,6 +30,9 @@ rstar           = "0.12"
 bitflags        = "2.6"
 async-trait     = "0.1"
 futures         = "0.3"
+# Transliterate Unicode strings to ASCII for slug normalisation
+# (spec §3.3 — Chinese/Japanese/Korean/etc → English-ish).
+deunicode       = "1.6"
 
 [dev-dependencies]
 insta     = { workspace = true }

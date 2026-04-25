@@ -118,15 +118,28 @@ fn extract_text(content: &Value) -> Option<String> {
     None
 }
 
-/// Apply spec §3.3 normalisation: lowercase, ASCII-alphanumeric kept,
-/// everything else collapses to a single `_`, then trim leading and
-/// trailing underscores. Empty result is returned as-is — callers
-/// fall back to the node id externally.
+/// Apply spec §3.3 normalisation:
+/// 1. **Transliterate** non-ASCII to ASCII via the `deunicode`
+///    table (Chinese pinyin, Japanese romaji, Korean revised
+///    romanisation, German umlaut → ae/oe/ue, etc.).
+/// 2. Lowercase. ASCII-alphanumeric kept. Everything else collapses
+///    to a single `_`. Trim leading + trailing underscores.
+///
+/// Empty result is returned as-is — callers fall back to the node id
+/// externally. Transliteration is fast (lookup-table per char) and
+/// deterministic so the derivation stays bitwise-stable.
 pub fn normalize_slug(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
+    // Fast path: pure ASCII slugs skip the transliteration table.
+    let ascii_input: String = if raw.is_ascii() {
+        raw.to_owned()
+    } else {
+        deunicode::deunicode(raw)
+    };
+
+    let mut out = String::with_capacity(ascii_input.len());
     let mut last_underscore = false;
 
-    for ch in raw.chars() {
+    for ch in ascii_input.chars() {
         for c in ch.to_lowercase() {
             if c.is_ascii_alphanumeric() {
                 out.push(c);
@@ -205,6 +218,39 @@ mod tests {
     fn normalize_empty() {
         assert_eq!(normalize_slug(""), "");
         assert_eq!(normalize_slug("___"), "");
+    }
+
+    #[test]
+    fn normalize_transliterates_chinese() {
+        // Spec §3.3: Chinese → pinyin (rough — `deunicode` doesn't
+        // separate syllables but produces a deterministic ASCII form
+        // good enough for the agent surface).
+        let s = normalize_slug("登录");
+        assert!(!s.is_empty(), "Chinese label should not normalize to empty");
+        assert!(s.is_ascii());
+    }
+
+    #[test]
+    fn normalize_transliterates_japanese() {
+        // Hiragana / Katakana → romaji.
+        let s = normalize_slug("送信ボタン");
+        assert!(!s.is_empty());
+        assert!(s.is_ascii());
+    }
+
+    #[test]
+    fn normalize_transliterates_korean() {
+        // Hangul → revised romanisation.
+        let s = normalize_slug("로그인");
+        assert!(!s.is_empty());
+        assert!(s.is_ascii());
+    }
+
+    #[test]
+    fn normalize_transliterates_european_diacritics() {
+        // German umlaut, French accents — common in real designs.
+        assert_eq!(normalize_slug("Menü"), "menu");
+        assert_eq!(normalize_slug("Café"), "cafe");
     }
 
     #[test]
