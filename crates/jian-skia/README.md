@@ -48,8 +48,23 @@ opt into the per-platform GPU feature they need.
 
 `skia-bindings` 0.78's bundled `depot_tools` invokes
 `gclient_utils.py`, which `import pipes` — a stdlib module Python
-3.13 removed. On macOS with Homebrew, the easy fix is to point the
-build at Python 3.11's `python3` shim:
+3.13 removed. The depot_tools `ninja` wrapper (`ninja` on
+POSIX, `ninja.bat` on Windows) `exec`s `python3 ninja.py`, so
+whichever `python3` is first on PATH decides the outcome:
+Python 3.10 / 3.11 / 3.12 still expose `pipes`; 3.13+ doesn't.
+
+Easiest path is the helper script in `scripts/build-textlayout.sh`,
+which auto-discovers a working interpreter (Homebrew keg first,
+then `python3.{11,12,10}` on PATH) and prepends it for the cargo
+invocation:
+
+```bash
+scripts/build-textlayout.sh build -p jian-skia
+scripts/build-textlayout.sh test  -p jian-skia
+```
+
+The script always appends `--features textlayout`; pass any other
+cargo args verbatim. Manual override works the same way:
 
 ```bash
 PATH="/opt/homebrew/opt/python@3.11/libexec/bin:$PATH" \
@@ -57,17 +72,16 @@ PATH="/opt/homebrew/opt/python@3.11/libexec/bin:$PATH" \
 ```
 
 The `libexec/bin` directory exposes a generic `python3` symlink
-(not just `python3.11`), which is what depot_tools' `ninja`
-wrapper looks for via `#!/usr/bin/env python3`. Any Python
-3.10–3.12 works; only 3.13+ trips the missing-`pipes` error.
-
-Linux: install python 3.11 via your package manager and prepend
-it likewise. Windows: install via the MS Store / python.org
-3.11 release; PATH ordering in the build shell matters.
+(not just `python3.11`); on a Linux box install 3.11 via your
+package manager (`apt install python3.11`) and either rely on the
+helper's PATH-lookup path or prepend manually. Windows: same
+principle — `setup-python` action in CI handles it; locally the
+`py -3.11 -m` launcher or a 3.11 install in `%PATH%` works.
 
 A future skia-bindings bump should drop the `pipes` dependency
-upstream — track <https://github.com/rust-skia/rust-skia/issues> if
-you hit a refreshed error after a version bump.
+upstream — track <https://github.com/rust-skia/rust-skia/issues>.
+When that lands, delete `scripts/build-textlayout.sh` and the
+`textlayout` CI matrix in `.github/workflows/ci.yml`.
 
 ## Status
 

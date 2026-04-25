@@ -125,13 +125,19 @@ jobs:
 
   # `textlayout` exercises the skia-paragraph path (ICU + HarfBuzz)
   # that real-font-metric backends (jian-skia's SkiaMeasure) ride on.
-  # The depot_tools `ninja` wrapper bundled in skia-bindings 0.78
-  # imports the stdlib `pipes` module, which Python 3.13 removed —
-  # default GitHub runners ship 3.13.x as `python3` on macOS and
-  # 3.12.x on Ubuntu. Pin Python 3.11 via `setup-python` so the
-  # wrapper resolves to a Python that still has `pipes`. Windows is
-  # skipped: depot_tools' POSIX shell wrapper isn't usable there
-  # without extra MSys plumbing the rest of CI doesn't depend on.
+  # skia-bindings 0.78 vendors a depot_tools snapshot whose
+  # `ninja` (bash) and `ninja.bat` (cmd) wrappers both `exec
+  # python3 ninja.py`, which `import pipes` — a stdlib module
+  # Python 3.13 removed. Default GitHub runners ship 3.13.x on
+  # macOS and 3.12.x on Ubuntu / Windows. `setup-python@v5`
+  # prepends 3.11 onto PATH on every OS via `core.addPath`, so
+  # the wrappers resolve `python3` to a working interpreter.
+  #
+  # Maintenance note: this matrix can be deleted once skia-bindings
+  # ships a depot_tools snapshot that drops the `pipes` import
+  # (track <https://github.com/rust-skia/rust-skia/issues>). At
+  # that point fold the textlayout build into the regular `test`
+  # job's command.
   textlayout:
     name: textlayout ${{ matrix.name }}
     strategy:
@@ -144,9 +150,23 @@ jobs:
           - name: macos-aarch64
             os: macos-latest
             target: aarch64-apple-darwin
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
+      # Windows: same long-paths fix as the default test job —
+      # skia-bindings extracts harfbuzz vendor tree under textlayout.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
       - uses: actions/checkout@v4
+      # Linux: skia-safe links system fontconfig + freetype regardless
+      # of textlayout. ICU + HarfBuzz are *vendored* by the rust-skia
+      # bundle, no extra apt packages needed.
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
