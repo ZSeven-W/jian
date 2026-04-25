@@ -10,14 +10,16 @@
 //!
 //! Gradient fills (`linear_gradient`, `radial_gradient`) and drop-shadow
 //! effects emit dedicated draw-ops (`LinearGradientRect` /
-//! `RadialGradientRect` / `ShadowedRect`). Image fills + background blur
-//! still wait on the jian-skia image cache + sampler path (Plan 12).
+//! `RadialGradientRect` / `ShadowedRect`). Image nodes + image fills
+//! emit `DrawOp::Image` carrying an `ImageSource` (data: URLs decode
+//! inline in the skia backend; remote URLs need a host resolver and
+//! currently fall back to a grey placeholder). Background blur still
+//! waits on the jian-skia sampler path (Plan 12).
 
 use jian_core::geometry::{point, rect, Point};
 use jian_core::render::{
-    BorderRadii, DrawOp, GradientStop, LinearGradient, Paint, PathCommand, RadialGradient,
-    ShadowSpec, StrokeOp,
-    TextAlign, TextRun,
+    BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, Paint, PathCommand,
+    RadialGradient, ShadowSpec, StrokeOp, TextAlign, TextRun,
 };
 use jian_core::scene::Color;
 use jian_ops_schema::node::PenNode;
@@ -63,6 +65,40 @@ fn walk(
 
 fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawOp>) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
+
+    // --- Image nodes emit a `DrawOp::Image` directly. The decoder
+    // lives in jian-skia's image cache, keyed by URL string; data:
+    // URLs decode inline, http(s) URLs need a host resolver (Plan 12)
+    // and currently fall back to a grey placeholder in the backend.
+    if json.get("type").and_then(|t| t.as_str()) == Some("image") {
+        if let Some(src) = json.get("src").and_then(|v| v.as_str()) {
+            let opacity = json
+                .get("opacity")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(1.0) as f32;
+            out.push(DrawOp::Image {
+                source: classify_source(src),
+                dst: rect_logical,
+                opacity,
+            });
+            return;
+        }
+    }
+
+    // --- Image fills (PenFill::Image) — paint the underlying rect via
+    // an Image op so the fill resolves through the same cache path.
+    let first_fill_for_image = json
+        .get("fill")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first());
+    if let Some(image_fill) = first_fill_for_image.and_then(try_image_fill) {
+        out.push(DrawOp::Image {
+            source: classify_source(&image_fill.url),
+            dst: rect_logical,
+            opacity: image_fill.opacity,
+        });
+        return;
+    }
 
     // --- Icon font nodes emit a vector-glyph op.
     if json.get("type").and_then(|t| t.as_str()) == Some("icon_font") {
@@ -150,6 +186,32 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
             paint,
         });
     }
+}
+
+/// Treat `data:` strings as inline base64 payloads; everything else is
+/// a host-resolved URL (the skia backend's image cache draws a grey
+/// placeholder if no resolver is wired up).
+fn classify_source(src: &str) -> ImageSource {
+    if src.starts_with("data:") {
+        ImageSource::DataUrl(src.to_owned())
+    } else {
+        ImageSource::Url(src.to_owned())
+    }
+}
+
+struct ImageFill {
+    url: String,
+    opacity: f32,
+}
+
+fn try_image_fill(fill: &Value) -> Option<ImageFill> {
+    let obj = fill.as_object()?;
+    if obj.get("type").and_then(|t| t.as_str()) != Some("image") {
+        return None;
+    }
+    let url = obj.get("url").and_then(|v| v.as_str())?.to_owned();
+    let opacity = obj.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    Some(ImageFill { url, opacity })
 }
 
 fn try_linear_gradient(fill: &Value) -> Option<LinearGradient> {
