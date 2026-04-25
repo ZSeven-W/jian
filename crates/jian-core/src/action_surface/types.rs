@@ -81,6 +81,9 @@ pub enum SourceKind {
     SwipeUp,
     SwipeDown,
     Scroll,
+    /// `events.onScroll` / `onReachEnd` on a list/feed container —
+    /// agent's "fetch the next page" intent. Spec §3.2.
+    LoadMore,
     Confirm,
     Dismiss,
 }

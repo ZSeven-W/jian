@@ -138,6 +138,31 @@ fn emit_for_node(
         }
     }
 
+    // --- onScroll / onReachEnd → load_more_<slug>
+    // Spec §3.2 maps either event on a list / feed container to the
+    // agent's "load the next page" intent. We pick whichever is
+    // present (with onReachEnd preferred since it explicitly fires on
+    // pagination boundaries). Empty handlers are skipped to match the
+    // 非空 rule shared by every other derivation.
+    if let Some(handler) = events
+        .and_then(|e| e.get("onReachEnd"))
+        .filter(|h| is_non_empty_action_list(h))
+        .or_else(|| events.and_then(|e| e.get("onScroll")).filter(|h| is_non_empty_action_list(h)))
+    {
+        let slug_v = format!("load_more_{}", suffixed);
+        out.push(make_action(
+            scope,
+            &slug_v,
+            id,
+            SourceKind::LoadMore,
+            description.clone(),
+            &aliases,
+            node,
+            Some(handler),
+            Vec::new(),
+        ));
+    }
+
     // --- bindings["bind:value"] → set_<slug>(value: typeof($state.X))
     if let Some(target) = bind_target(node) {
         let ty = state_type_for_path(doc_json, &target).unwrap_or(ParamTy::Unknown);
@@ -177,6 +202,51 @@ fn emit_for_node(
             None,
             params,
         ));
+    }
+}
+
+/// Parse an `aiAliases` entry. When the entry contains a scope
+/// separator (e.g. `"home.sign_in_a3f7"`), interpret it as a fully
+/// qualified `<scope>.<slug>`; otherwise treat it as a slug in the
+/// owning node's scope. Without this distinction `aiAliases:
+/// ["home.old"]` resolves as `home.home.old` and never matches a
+/// real action — which was the previous bug.
+fn parse_alias(raw: &str, default_scope: &Scope) -> ActionName {
+    if let Some((scope_part, slug_part)) = split_qualified(raw) {
+        ActionName {
+            scope: Scope(scope_part.to_owned()),
+            slug: slug_part.to_owned(),
+        }
+    } else {
+        ActionName {
+            scope: default_scope.clone(),
+            slug: raw.to_owned(),
+        }
+    }
+}
+
+/// Split a candidate full name into `(scope, slug)`. We accept the
+/// three scope shapes the derivation produces:
+/// - `modal.<dialog_id>.<slug>` (3+ segments, modal prefix)
+/// - `global.<slug>`
+/// - `<page_id>.<slug>`
+/// The caller distinguishes via the dotted form. We require the
+/// remainder after the first `.` to be a non-empty slug.
+fn split_qualified(raw: &str) -> Option<(&str, &str)> {
+    if let Some(rest) = raw.strip_prefix("modal.") {
+        // modal.<dialog>.<slug>
+        let (dialog, slug) = rest.split_once('.')?;
+        if dialog.is_empty() || slug.is_empty() {
+            return None;
+        }
+        let scope_end = "modal.".len() + dialog.len();
+        Some((&raw[..scope_end], slug))
+    } else {
+        let (scope, slug) = raw.split_once('.')?;
+        if scope.is_empty() || slug.is_empty() {
+            return None;
+        }
+        Some((scope, slug))
     }
 }
 
@@ -358,13 +428,7 @@ fn make_action(
         scope: scope.clone(),
         slug: slug.to_owned(),
     };
-    let alias_names = aliases
-        .iter()
-        .map(|a| ActionName {
-            scope: scope.clone(),
-            slug: a.clone(),
-        })
-        .collect();
+    let alias_names = aliases.iter().map(|a| parse_alias(a, scope)).collect();
     let status = super::availability::classify(node, handler);
     let auto_desc = description
         .or_else(|| auto_describe(source_kind, slug))
@@ -393,6 +457,7 @@ fn auto_describe(kind: SourceKind, slug: &str) -> Option<String> {
         SourceKind::SwipeUp => format!("Swipe up on {}", slug),
         SourceKind::SwipeDown => format!("Swipe down on {}", slug),
         SourceKind::Scroll => format!("Scroll {}", slug),
+        SourceKind::LoadMore => format!("Load more {}", slug),
         SourceKind::Confirm => format!("Confirm {}", slug),
         SourceKind::Dismiss => format!("Dismiss {}", slug),
     })
@@ -676,6 +741,68 @@ mod tests {
         assert_eq!(acts[0].params.len(), 1);
         assert_eq!(acts[0].params[0].name, "id");
         assert_eq!(acts[0].params[0].ty, ParamTy::Int);
+    }
+
+    #[test]
+    fn on_reach_end_emits_load_more() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"feed","name":"Feed","children":[
+                { "type":"frame","id":"list","semantics":{ "aiName":"posts" },
+                  "events":{ "onReachEnd": [ { "fetch": { "url":"/api","method":"GET" } } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 1);
+        assert_eq!(acts[0].source_kind, SourceKind::LoadMore);
+        assert_eq!(acts[0].name.slug, "load_more_posts");
+    }
+
+    #[test]
+    fn on_scroll_emits_load_more_when_no_reach_end() {
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"feed","name":"Feed","children":[
+                { "type":"frame","id":"list","semantics":{ "aiName":"posts" },
+                  "events":{ "onScroll": [ { "set": { "$state.scrolled": "true" } } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 1);
+        assert_eq!(acts[0].source_kind, SourceKind::LoadMore);
+    }
+
+    #[test]
+    fn ai_alias_full_name_round_trips() {
+        // Spec example: rename `home.sign_in_a3f7` → `home.sign_in`
+        // with the old full name kept as an alias. The alias must
+        // resolve to the same scope, NOT to `home.home.sign_in_a3f7`.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"x",
+                  "semantics":{ "aiName":"sign_in", "aiAliases":["home.sign_in_a3f7","legacy_slug"] },
+                  "events":{ "onTap": [ { "pop": null } ] } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        let aliases = &acts[0].aliases;
+        assert_eq!(aliases.len(), 2);
+        // Fully qualified alias keeps its scope.
+        assert_eq!(aliases[0].scope.as_str(), "home");
+        assert_eq!(aliases[0].slug, "sign_in_a3f7");
+        // Bare alias falls back to the owning scope.
+        assert_eq!(aliases[1].scope.as_str(), "home");
+        assert_eq!(aliases[1].slug, "legacy_slug");
     }
 
     #[test]
