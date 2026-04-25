@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
@@ -21,6 +22,14 @@ pub struct HttpResponse {
 #[async_trait(?Send)]
 pub trait NetworkClient {
     async fn request(&self, req: HttpRequest) -> Result<HttpResponse, String>;
+    /// Open a WebSocket session. Hosts that don't ship a websocket
+    /// implementation return an error and the `ws_*` actions surface a
+    /// warning. The returned session is single-threaded — `Rc<...>` not
+    /// `Arc<...>` — to match the rest of the runtime.
+    async fn connect_websocket(&self, url: String) -> Result<Rc<dyn WebSocketSession>, String> {
+        let _ = url;
+        Err("WebSocket not implemented for this NetworkClient".into())
+    }
 }
 
 #[async_trait(?Send)]

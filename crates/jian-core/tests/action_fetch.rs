@@ -50,6 +50,7 @@ fn setup_with_net(
         page_id: None,
         node_id: None,
         network: net,
+        ws_sessions: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         storage: Rc::new(NullStorageBackend),
         router: Rc::new(NullRouter),
         feedback: Rc::new(NullFeedback),

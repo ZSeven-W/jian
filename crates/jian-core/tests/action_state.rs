@@ -23,6 +23,7 @@ fn setup_ctx() -> (Rc<Scheduler>, Rc<StateGraph>, ActionContext) {
         page_id: None,
         node_id: None,
         network: Rc::new(NullNetworkClient),
+        ws_sessions: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         storage: Rc::new(NullStorageBackend),
         router: Rc::new(NullRouter),
         feedback: Rc::new(NullFeedback),

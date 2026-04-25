@@ -93,6 +93,7 @@ fn setup(
         page_id: None,
         node_id: None,
         network: net,
+        ws_sessions: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         storage: store,
         router: Rc::new(NullRouter),
         feedback: fb_sink,

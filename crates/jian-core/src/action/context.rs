@@ -4,6 +4,7 @@ use super::cancel::CancellationToken;
 use super::capability::CapabilityGate;
 use super::services::{
     AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, Router, StorageBackend,
+    WebSocketSession,
 };
 use crate::expression::{Diagnostic, ExpressionCache};
 use crate::logic::LogicProvider;
@@ -11,8 +12,13 @@ use crate::signal::scheduler::Scheduler;
 use crate::state::StateGraph;
 use crate::value::RuntimeValue;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
+
+/// Live WebSocket sessions, keyed by author-provided handle. Inserted
+/// by `ws_connect`, looked up by `ws_send` / `ws_close`. Single-thread
+/// `Rc<RefCell<...>>` matches the rest of the runtime model.
+pub type WsSessionRegistry = Rc<RefCell<HashMap<String, Rc<dyn WebSocketSession>>>>;
 
 pub struct ActionContext {
     pub state: Rc<StateGraph>,
@@ -28,6 +34,7 @@ pub struct ActionContext {
     pub node_id: Option<String>,
 
     pub network: Rc<dyn NetworkClient>,
+    pub ws_sessions: WsSessionRegistry,
     pub storage: Rc<dyn StorageBackend>,
     pub router: Rc<dyn Router>,
     pub feedback: Rc<dyn FeedbackSink>,
@@ -86,6 +93,7 @@ mod tests {
             page_id: None,
             node_id: None,
             network: Rc::new(NullNetworkClient),
+            ws_sessions: Rc::new(RefCell::new(HashMap::new())),
             storage: Rc::new(NullStorageBackend),
             router: Rc::new(NullRouter),
             feedback: Rc::new(NullFeedback),

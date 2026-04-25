@@ -50,6 +50,7 @@ fn setup(router: Rc<dyn Router>) -> (Rc<StateGraph>, ActionContext) {
         page_id: None,
         node_id: None,
         network: Rc::new(NullNetworkClient),
+        ws_sessions: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         storage: Rc::new(NullStorageBackend),
         router,
         feedback: Rc::new(NullFeedback),

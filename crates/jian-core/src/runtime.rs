@@ -59,6 +59,9 @@ pub struct Runtime {
     pub actions: SharedRegistry,
     pub expr_cache: Rc<ExpressionCache>,
     pub network: Rc<dyn NetworkClient>,
+    /// Live WebSocket sessions, populated by `ws_connect` / drained by
+    /// `ws_close`. Shared with every `ActionContext` the runtime makes.
+    pub ws_sessions: crate::action::context::WsSessionRegistry,
     pub storage: Rc<dyn StorageBackend>,
     pub nav: Rc<dyn RouterSvc>,
     pub feedback: Rc<dyn FeedbackSink>,
@@ -94,6 +97,7 @@ impl Runtime {
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
             network: Rc::new(NullNetworkClient),
+            ws_sessions: Rc::new(RefCell::new(std::collections::HashMap::new())),
             storage: Rc::new(NullStorageBackend),
             nav: Rc::new(NullRouter),
             feedback: Rc::new(NullFeedback),
@@ -157,6 +161,7 @@ impl Runtime {
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
             network: Rc::new(NullNetworkClient),
+            ws_sessions: Rc::new(RefCell::new(std::collections::HashMap::new())),
             storage: Rc::new(NullStorageBackend),
             nav: Rc::new(NullRouter),
             feedback: Rc::new(NullFeedback),
@@ -247,6 +252,7 @@ impl Runtime {
             page_id: None,
             node_id: None,
             network: self.network.clone(),
+            ws_sessions: self.ws_sessions.clone(),
             storage: self.storage.clone(),
             router: self.nav.clone(),
             feedback: self.feedback.clone(),

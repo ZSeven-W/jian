@@ -15,6 +15,7 @@ pub mod network;
 pub mod platform;
 pub mod state;
 pub mod storage_ops;
+pub mod websocket;
 
 /// Register all MVP actions into a shared registry.
 pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
@@ -59,6 +60,11 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     // UI feedback (non-nested)
     r.register("toast", Box::new(feedback::factory_toast));
     r.register("alert", Box::new(feedback::factory_alert));
+
+    // WebSocket
+    r.register("ws_connect", Box::new(websocket::factory_ws_connect));
+    r.register("ws_send", Box::new(websocket::factory_ws_send));
+    r.register("ws_close", Box::new(websocket::factory_ws_close));
 
     // L4 platform stubs
     r.register("vibrate", Box::new(platform::factory_vibrate));
