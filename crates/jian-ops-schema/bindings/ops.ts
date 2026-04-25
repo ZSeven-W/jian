@@ -39,14 +39,6 @@ export type BoolOrExpression = boolean | string;
 
 export type Capability = "storage" | "network" | "camera" | "microphone" | "location" | "notifications" | "clipboard" | "biometric" | "file_system" | "haptic";
 
-/**
- * Container props — shared by Frame/Group/Rectangle.
- * `children` is NOT included here because PenNode children are recursively
- * defined in node/mod.rs to avoid circular module dependency. Each concrete
- * node type that has children declares it explicitly via `children: Option<Vec<PenNode>>`.
- */
-export type ContainerProps = { width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null, cornerRadius: CornerRadius | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, };
-
 export type CornerRadius = number | [number, number, number, number];
 
 export type EllipseNode = { width: SizingBehavior | null, height: SizingBehavior | null, cornerRadius: number | null, innerRadius: number | null, startAngle: number | null, sweepAngle: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
@@ -176,12 +168,6 @@ export type PenFill = { "type": "solid" } & SolidFillBody | { "type": "linear_gr
  */
 export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "ref" } & RefNode;
 
-/**
- * Shared fields across all node types.
- * Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.
- */
-export type PenNodeBase = { id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
-
 export type PenPage = { id: string, name: string, children: Array<PenNode>, state: { [key in string]?: StateEntry } | null, lifecycle: PageLifecycleHooks | null, };
 
 export type PenPathAnchor = { x: number, y: number, handleIn: PenPathHandle | null, handleOut: PenPathHandle | null, pointType: PenPathPointType | null, };
@@ -202,7 +188,16 @@ export type RectangleNode = { children: Array<PenNode> | null, state: { [key in 
 
 export type RefNode = { ref: string, descendants: { [key in string]?: JsonValue } | null, children: Array<PenNode> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
-export type RouteSpec = { pageId: string, preload: boolean | null, guards: Array<Action> | null, };
+export type RouteSpec = { pageId: string, preload: boolean | null, guards: Array<Action> | null, 
+/**
+ * Path-parameter type declarations (v1.0 additive — 2026-04-24).
+ * Keys correspond to `:param` placeholders in the route path
+ * (e.g. path `/detail/:id` → key `id`). The AI Action Surface
+ * uses these types when synthesising the JsonSchema for the
+ * derived `open_*(p)` action; runtime does strict type-checking
+ * on incoming values rather than silent coercion.
+ */
+params: { [key in string]?: StateType } | null, };
 
 export type RoutesConfig = { entry: string, routes: { [key in string]?: RouteSpec }, transitions: { [key in string]?: Transition } | null, };
 
@@ -212,7 +207,34 @@ export type SemanticAction = { name: string, label: string, handler: Array<Actio
 
 export type SemanticRole = "button" | "link" | "image" | "text" | "heading" | "input" | "list" | "list_item" | "header" | "nav" | "main" | "dialog" | "alert";
 
-export type SemanticsMeta = { role: SemanticRole | null, label: string | null, hint: string | null, liveRegion: LiveRegion | null, disabled: Expression | null, actions: Array<SemanticAction> | null, };
+export type SemanticsMeta = { role: SemanticRole | null, label: string | null, hint: string | null, liveRegion: LiveRegion | null, disabled: Expression | null, actions: Array<SemanticAction> | null, 
+/**
+ * Author-stable override for the auto-derived AI action name.
+ * When set, the resulting action name is `<scope>.<aiName>`
+ * without the auto `_<hash4>` suffix and survives slug recomputes
+ * across builds. See `2026-04-24-ai-action-surface.md` §3.3-3.4.
+ */
+aiName: string | null, 
+/**
+ * Tool description shown to external AI agents. Overrides the
+ * auto-generated default; lets authors steer what a model "sees"
+ * without changing visible UI text.
+ */
+aiDescription: string | null, 
+/**
+ * `true` permanently hides the node's derived action from the AI
+ * surface (StaticHidden). Defaults to `false`. ConfirmGated /
+ * StateGated availability are decided dynamically and do **not**
+ * require this flag — see ai-action-surface.md §4.
+ */
+aiHidden: boolean | null, 
+/**
+ * Historical `aiName` values still accepted by `execute_action`
+ * for transparent migration after a rename. Aliases are honoured
+ * at execute time (with `audit reason_code: "alias_used"`) but
+ * not surfaced by `list_available_actions`. See §9.
+ */
+aiAliases: Array<string> | null, };
 
 export type ShadowBody = { inner: boolean | null, offsetX: number, offsetY: number, blur: number, spread: number, color: string, };
 

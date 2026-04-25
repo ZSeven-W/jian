@@ -3491,6 +3491,37 @@
           "items": {
             "$ref": "#/definitions/SemanticAction"
           }
+        },
+        "aiName": {
+          "description": "Author-stable override for the auto-derived AI action name. When set, the resulting action name is `<scope>.<aiName>` without the auto `_<hash4>` suffix and survives slug recomputes across builds. See `2026-04-24-ai-action-surface.md` §3.3-3.4.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aiDescription": {
+          "description": "Tool description shown to external AI agents. Overrides the auto-generated default; lets authors steer what a model \"sees\" without changing visible UI text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "aiHidden": {
+          "description": "`true` permanently hides the node's derived action from the AI surface (StaticHidden). Defaults to `false`. ConfirmGated / StateGated availability are decided dynamically and do **not** require this flag — see ai-action-surface.md §4.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "aiAliases": {
+          "description": "Historical `aiName` values still accepted by `execute_action` for transparent migration after a rename. Aliases are honoured at execute time (with `audit reason_code: \"alias_used\"`) but not surfaced by `list_available_actions`. See §9.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
       }
     },
@@ -4794,6 +4825,16 @@
           "items": {
             "type": "object",
             "additionalProperties": true
+          }
+        },
+        "params": {
+          "description": "Path-parameter type declarations (v1.0 additive — 2026-04-24). Keys correspond to `:param` placeholders in the route path (e.g. path `/detail/:id` → key `id`). The AI Action Surface uses these types when synthesising the JsonSchema for the derived `open_*(p)` action; runtime does strict type-checking on incoming values rather than silent coercion.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/definitions/StateType"
           }
         }
       }
