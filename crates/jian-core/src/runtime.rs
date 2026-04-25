@@ -229,6 +229,22 @@ impl Runtime {
         Ok(())
     }
 
+    /// Variant of [`Self::build_layout`] that swaps the layout
+    /// engine's measure backend before laying out. Hosts that wire
+    /// real shaping (e.g. jian-skia's `SkiaMeasure` under
+    /// `textlayout`) install their backend once via this entry point;
+    /// subsequent `build_layout` calls reuse the same backend until
+    /// it's swapped again. Default-feature builds and unit tests
+    /// stay on the in-core `EstimateBackend`.
+    pub fn build_layout_with(
+        &mut self,
+        measure: Rc<dyn crate::layout::measure::MeasureBackend>,
+        available: (f32, f32),
+    ) -> CoreResult<()> {
+        self.layout = crate::layout::LayoutEngine::with_backend(measure);
+        self.build_layout(available)
+    }
+
     pub fn rebuild_spatial(&mut self) {
         let doc = self.document.as_ref().expect("no document loaded");
         let items: Vec<NodeBBox> = doc
