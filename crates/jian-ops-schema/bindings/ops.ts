@@ -166,7 +166,7 @@ export type PenFill = { "type": "solid" } & SolidFillBody | { "type": "linear_gr
  * Union of all concrete node types.
  * Tag is the JSON `"type"` field.
  */
-export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "ref" } & RefNode;
+export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "text_input" } & TextInputNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "ref" } & RefNode;
 
 export type PenPage = { id: string, name: string, children: Array<PenNode>, state: { [key in string]?: StateEntry } | null, lifecycle: PageLifecycleHooks | null, };
 
@@ -275,6 +275,26 @@ export type TextAlignVertical = "top" | "middle" | "bottom";
 export type TextContent = string | Array<StyledTextSegment>;
 
 export type TextGrowth = "auto" | "fixed-width" | "fixed-width-height";
+
+/**
+ * Single-line text input. Forms / counters need a writable input
+ * surface that two-way binds via `bindings.bind:value`. The walker
+ * renders a styled rectangle + caret placeholder; full IME and
+ * selection-painter wiring lands in the desktop host (Plan 8) once
+ * the gesture arena gains `Focus` recognizers.
+ */
+export type TextInputNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+/**
+ * Placeholder shown when `value` is empty. Static text — author
+ * `bindings.placeholder` if it needs to react to state.
+ */
+placeholder: string | null, 
+/**
+ * Initial value. Two-way binding lives on `bindings.bind:value`,
+ * which derive lifts into a `set_*` action and the runtime keeps
+ * in sync with the state graph.
+ */
+value: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type TextNode = { width: SizingBehavior | null, height: SizingBehavior | null, content: TextContent, fontFamily: string | null, fontSize: number | null, fontWeight: FontWeight | null, fontStyle: FontStyleKind | null, letterSpacing: number | null, lineHeight: number | null, textAlign: TextAlign | null, textAlignVertical: TextAlignVertical | null, textGrowth: TextGrowth | null, underline: boolean | null, strikethrough: boolean | null, fill: Array<PenFill> | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 

@@ -26,7 +26,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub fn run(args: DevArgs) -> Result<ExitCode> {
     let path = args
@@ -106,11 +106,16 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
                         }
                         // Drain pending events before re-reading.
                         while let Ok(_) = raw_rx.recv_timeout(Duration::from_millis(50)) {}
+                        let started = Instant::now();
                         match reparse(&watch_path) {
                             Ok(doc) => {
                                 if tx.send(doc).is_err() {
                                     return; // host gone
                                 }
+                                eprintln!(
+                                    "jian dev: reloaded in {} ms",
+                                    started.elapsed().as_millis()
+                                );
                             }
                             Err(e) => eprintln!("jian dev: parse failed: {:#}", e),
                         }

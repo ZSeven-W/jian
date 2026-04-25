@@ -10,6 +10,7 @@ pub mod path;
 pub mod polygon;
 pub mod ref_node;
 pub mod text;
+pub mod text_input;
 
 pub use base::{BoolOrExpression, NumberOrExpression, PenNodeBase};
 pub use container::{
@@ -28,6 +29,7 @@ pub use text::{
     FontStyleKind as TextFontStyle, FontWeight, TextAlign, TextAlignVertical, TextContent,
     TextGrowth, TextNode,
 };
+pub use text_input::TextInputNode;
 
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +48,7 @@ pub enum PenNode {
     Polygon(PolygonNode),
     Path(PathNode),
     Text(TextNode),
+    TextInput(TextInputNode),
     Image(ImageNode),
     IconFont(IconFontNode),
     Ref(RefNode),
@@ -99,6 +102,20 @@ mod tests {
         let json = r#"{"type":"image","id":"i","src":"https://example.com/x.png","exposure":10.0}"#;
         let n: PenNode = serde_json::from_str(json).unwrap();
         assert!(matches!(n, PenNode::Image(_)));
+    }
+
+    #[test]
+    fn text_input_roundtrip() {
+        let json = r#"{"type":"text_input","id":"email","width":200,"height":40,"placeholder":"you@example.com","value":""}"#;
+        let n: PenNode = serde_json::from_str(json).unwrap();
+        match n {
+            PenNode::TextInput(ti) => {
+                assert_eq!(ti.base.id, "email");
+                assert_eq!(ti.placeholder.as_deref(), Some("you@example.com"));
+                assert_eq!(ti.value.as_deref(), Some(""));
+            }
+            other => panic!("expected TextInput, got {:?}", other),
+        }
     }
 
     #[test]

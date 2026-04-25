@@ -88,6 +88,7 @@ pub fn node_schema_id(n: &PenNode) -> &str {
         PenNode::Polygon(x) => &x.base.id,
         PenNode::Path(x) => &x.base.id,
         PenNode::Text(x) => &x.base.id,
+        PenNode::TextInput(x) => &x.base.id,
         PenNode::Image(x) => &x.base.id,
         PenNode::IconFont(x) => &x.base.id,
         PenNode::Ref(x) => &x.base.id,

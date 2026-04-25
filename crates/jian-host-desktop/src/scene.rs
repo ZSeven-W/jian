@@ -75,11 +75,22 @@ fn walk(
     let r = layout.node_rect(key);
     let mut json = serde_json::to_value(&node.schema).ok();
 
+    let mut overrides = BindingOverrides::default();
     if let (Some(_), Some(j), Some(state)) = (r, json.as_mut(), state) {
-        apply_bindings(j, state);
+        overrides = apply_bindings(j, state);
+    }
+
+    if let Some(json) = json.as_ref() {
+        let visible = json.get("visible").and_then(|v| v.as_bool()).unwrap_or(true);
+        if !visible {
+            // `visible: false` (whether static or via bindings) drops
+            // the subtree — children of an invisible parent never paint.
+            return;
+        }
     }
 
     if let (Some(r), Some(json)) = (r, &json) {
+        let r = overrides.apply_to_rect(r);
         emit_for_node(r, json, out);
     }
 
@@ -88,20 +99,58 @@ fn walk(
     }
 }
 
+/// Records which `bindings.<rect-prop>` fired this frame so the walker
+/// can override the laid-out rect *only* where a binding is authoritative.
+/// Without this, the walker would mis-read the static `x` / `y` from
+/// nested children's schema (parent-relative coords) and clobber the
+/// layout engine's already-resolved absolute coords.
+#[derive(Default, Clone, Copy)]
+struct BindingOverrides {
+    x: Option<f32>,
+    y: Option<f32>,
+    w: Option<f32>,
+    h: Option<f32>,
+}
+
+impl BindingOverrides {
+    fn apply_to_rect(self, r: jian_core::geometry::Rect) -> jian_core::geometry::Rect {
+        rect(
+            self.x.unwrap_or(r.origin.x),
+            self.y.unwrap_or(r.origin.y),
+            self.w.unwrap_or(r.size.width),
+            self.h.unwrap_or(r.size.height),
+        )
+    }
+}
+
 /// Walk a node's `bindings` map and overwrite any matching field on
-/// the JSON view with the binding's evaluated string/value. Phase 1
-/// supports the common cases: `content` (string), `visible` (bool —
-/// dropped from output if false), `disabled` (bool — pure metadata).
-/// Other props (`fill` / `opacity` / etc.) follow the same shape but
-/// need typed coercion; left as a follow-on once the binding system
-/// has a proper effect-driven scene cache.
-fn apply_bindings(node: &mut Value, state: &jian_core::state::StateGraph) {
+/// the JSON view with the binding's evaluated value. Recompiles every
+/// expression on every frame — the perf-driven effect-driven scene
+/// cache lands once the corpus shows real cost.
+///
+/// Supported binding keys:
+/// - `content` (string projection on text nodes)
+/// - `visible` (bool — emit_for_node drops the node if false)
+/// - `disabled` (bool — written through; consumed by the action-surface
+///   state-gate, not the renderer)
+/// - `opacity` (number — multiplied into Paint.opacity)
+/// - `x` / `y` / `width` / `height` (numbers — override the layout-engine
+///   rect at emit time. Children of a width/height-bound parent do *not*
+///   relayout; that needs the effect cache. For absolute-positioned
+///   leaves this is enough to move them around.)
+/// - `fill[0].color` (hex string — written into the first fill's color
+///   field, defaulting `type` to `"solid"`)
+fn apply_bindings(
+    node: &mut Value,
+    state: &jian_core::state::StateGraph,
+) -> BindingOverrides {
+    let mut overrides = BindingOverrides::default();
     let Some(obj) = node.as_object_mut() else {
-        return;
+        return overrides;
     };
     let bindings = match obj.get("bindings") {
         Some(Value::Object(b)) => b.clone(),
-        _ => return,
+        _ => return overrides,
     };
     let node_id = obj
         .get("id")
@@ -114,22 +163,84 @@ fn apply_bindings(node: &mut Value, state: &jian_core::state::StateGraph) {
             Err(_) => continue,
         };
         let (value, _warns) = compiled.eval(state, None, node_id.as_deref());
-        // Accept either string output or any JSON-serialisable runtime
-        // value. For `content` we want a string projection; for
-        // booleans we want the literal `true`/`false`.
-        if prop == "content" {
-            if let Some(s) = value.as_str() {
-                obj.insert("content".into(), Value::String(s.to_owned()));
+        match prop.as_str() {
+            "content" => {
+                if let Some(s) = value.as_str() {
+                    obj.insert("content".into(), Value::String(s.to_owned()));
+                }
             }
-        } else if prop == "visible" {
-            if let Some(b) = value.as_bool() {
-                obj.insert("visible".into(), Value::Bool(b));
+            "visible" => {
+                if let Some(b) = value.as_bool() {
+                    obj.insert("visible".into(), Value::Bool(b));
+                }
             }
+            "disabled" => {
+                if let Some(b) = value.as_bool() {
+                    obj.insert("disabled".into(), Value::Bool(b));
+                }
+            }
+            "opacity" => {
+                if let Some(n) = number_from_runtime(&value) {
+                    if let Some(num) = serde_json::Number::from_f64(n) {
+                        obj.insert("opacity".into(), Value::Number(num));
+                    }
+                }
+            }
+            "x" => {
+                if let Some(n) = number_from_runtime(&value) {
+                    overrides.x = Some(n as f32);
+                }
+            }
+            "y" => {
+                if let Some(n) = number_from_runtime(&value) {
+                    overrides.y = Some(n as f32);
+                }
+            }
+            "width" => {
+                if let Some(n) = number_from_runtime(&value) {
+                    overrides.w = Some(n as f32);
+                }
+            }
+            "height" => {
+                if let Some(n) = number_from_runtime(&value) {
+                    overrides.h = Some(n as f32);
+                }
+            }
+            "fill[0].color" => {
+                if let Some(s) = value.as_str() {
+                    set_first_fill_color(obj, s);
+                }
+            }
+            _ => {}
         }
-        // Other bindings (fill / opacity / x / y / width / height /
-        // disabled) tracked in a follow-on commit alongside an
-        // effect-driven scene cache so we don't recompile every
-        // expression every frame.
+    }
+    overrides
+}
+
+fn number_from_runtime(v: &jian_core::value::RuntimeValue) -> Option<f64> {
+    if let Some(n) = v.as_f64() {
+        return Some(n);
+    }
+    v.as_i64().map(|i| i as f64)
+}
+
+fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
+    let entry = obj
+        .entry("fill".to_owned())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let arr = match entry.as_array_mut() {
+        Some(a) => a,
+        None => return,
+    };
+    if arr.is_empty() {
+        arr.push(serde_json::json!({ "type": "solid", "color": color }));
+        return;
+    }
+    if let Some(first) = arr[0].as_object_mut() {
+        first
+            .entry("type".to_owned())
+            .or_insert_with(|| Value::String("solid".into()));
+        first.insert("color".to_owned(), Value::String(color.to_owned()));
     }
 }
 
@@ -202,6 +313,12 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
         return;
     }
 
+    // --- Text-input: styled rectangle + value-or-placeholder text + caret.
+    if json.get("type").and_then(|t| t.as_str()) == Some("text_input") {
+        emit_text_input(rect_logical, r, json, out);
+        return;
+    }
+
     // --- Text first: draw_rect isn't the right primitive for text.
     if let Some(text_op) = try_text(json, r) {
         out.push(text_op);
@@ -253,7 +370,7 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
     let paint = Paint {
         fill,
         stroke,
-        opacity: 1.0,
+        opacity: node_opacity(json),
     };
     if radii != BorderRadii::zero() {
         out.push(DrawOp::RoundedRect {
@@ -267,6 +384,113 @@ fn emit_for_node(r: jian_core::geometry::Rect, json: &Value, out: &mut Vec<DrawO
             paint,
         });
     }
+}
+
+/// Render a `text_input` node: background rect (using its fill /
+/// stroke / cornerRadius) → text run for `value` (or placeholder when
+/// value is empty) → 1px caret line at the run's end. Full IME and
+/// focus painting live in the host once the gesture arena gains a
+/// Focus recognizer; this is the static-frame approximation.
+fn emit_text_input(
+    rect_logical: jian_core::geometry::Rect,
+    r: jian_core::geometry::Rect,
+    json: &Value,
+    out: &mut Vec<DrawOp>,
+) {
+    let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
+    let stroke = stroke_op(json);
+    let fill = first_solid_color(json.get("fill"));
+    if fill.is_some() || stroke.is_some() {
+        let paint = Paint {
+            fill,
+            stroke,
+            opacity: node_opacity(json),
+        };
+        if radii != BorderRadii::zero() {
+            out.push(DrawOp::RoundedRect {
+                rect: rect_logical,
+                radii,
+                paint,
+            });
+        } else {
+            out.push(DrawOp::Rect {
+                rect: rect_logical,
+                paint,
+            });
+        }
+    }
+
+    let value = json.get("value").and_then(|v| v.as_str()).unwrap_or("");
+    let placeholder = json
+        .get("placeholder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let (text, is_placeholder) = if value.is_empty() {
+        (placeholder, true)
+    } else {
+        (value, false)
+    };
+
+    let font_size = json
+        .get("fontSize")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(14.0) as f32;
+    let font_family = json
+        .get("fontFamily")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let font_weight = json
+        .get("fontWeight")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u16)
+        .unwrap_or(400);
+    // Placeholder text gets dimmed; resolved value uses the input's
+    // own foreground colour (defaulting to near-black when unset).
+    let text_color = if is_placeholder {
+        Color::rgba(0x66, 0x66, 0x66, 0xff)
+    } else {
+        Color::rgb(0x11, 0x11, 0x11)
+    };
+
+    if !text.is_empty() {
+        out.push(DrawOp::Text(TextRun {
+            content: text.to_owned(),
+            font_family,
+            font_size,
+            font_weight,
+            color: text_color,
+            origin: point(r.min_x() + 6.0, r.min_y() + (r.size.height - font_size) / 2.0),
+            max_width: (r.size.width - 12.0).max(0.0),
+            align: TextAlign::Start,
+            line_height: 0.0,
+        }));
+    }
+
+    // Caret approximation: 1px-wide vertical line near the end of the
+    // value text, or at the left padding when the field is empty.
+    let caret_x = r.min_x() + 6.0 + (value.len() as f32) * font_size * 0.55;
+    let caret_top = r.min_y() + (r.size.height - font_size) / 2.0;
+    let caret_height = font_size;
+    out.push(DrawOp::Rect {
+        rect: rect(caret_x, caret_top, 1.0, caret_height),
+        paint: Paint {
+            fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xa0)),
+            stroke: None,
+            opacity: node_opacity(json),
+        },
+    });
+}
+
+/// Resolve the node's effective opacity. `bindings.opacity` writes the
+/// value in via `apply_bindings`; the schema's static `opacity` field
+/// is the fallback. Defaults to 1.0 when neither is set or the value
+/// isn't numeric.
+fn node_opacity(json: &Value) -> f32 {
+    json.get("opacity")
+        .and_then(|v| v.as_f64())
+        .map(|n| n.clamp(0.0, 1.0) as f32)
+        .unwrap_or(1.0)
 }
 
 /// Treat `data:` strings as inline base64 payloads; everything else is

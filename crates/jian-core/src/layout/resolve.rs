@@ -161,6 +161,7 @@ fn node_base(
         PenNode::Group(g) => &g.base,
         PenNode::Rectangle(r) => &r.base,
         PenNode::Text(t) => &t.base,
+        PenNode::TextInput(t) => &t.base,
         PenNode::IconFont(i) => &i.base,
         PenNode::Image(i) => &i.base,
         PenNode::Ellipse(e) => &e.base,
@@ -177,6 +178,7 @@ fn leaf_size(
     use jian_ops_schema::node::PenNode;
     match n {
         PenNode::Text(t) => (t.width.as_ref(), t.height.as_ref()),
+        PenNode::TextInput(t) => (t.width.as_ref(), t.height.as_ref()),
         PenNode::IconFont(i) => (i.width.as_ref(), i.height.as_ref()),
         PenNode::Image(i) => (i.width.as_ref(), i.height.as_ref()),
         _ => (None, None),

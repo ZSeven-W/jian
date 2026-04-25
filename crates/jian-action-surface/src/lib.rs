@@ -27,6 +27,7 @@ pub mod error;
 pub mod execute;
 pub mod list;
 pub mod rate_limit;
+pub mod runtime_dispatch;
 pub mod swipe_throttle;
 pub mod transport;
 
@@ -37,12 +38,9 @@ pub use error::{
     BusyReason, ExecuteError, ExecutionReason, NotAvailableReason, ValidationReason,
 };
 pub use list::{list_actions, ListOptions, ListResponse, ListedAction, PageScope};
+pub use runtime_dispatch::RuntimeDispatcher;
 
 use crate::concurrency::ConcurrencyTracker;
-// `decide` / `Decision` only used by the public sync `execute()`
-// shim that calls `execute_with_gate(... AlwaysAllow)`.
-#[allow(unused_imports)]
-use crate::execute::{decide, Decision};
 use crate::rate_limit::TokenBucket;
 use jian_core::action_surface::{derive_actions, ActionDefinition};
 use jian_ops_schema::document::PenDocument;

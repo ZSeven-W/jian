@@ -2426,6 +2426,247 @@
           }
         },
         {
+          "description": "Single-line text input. Forms / counters need a writable input surface that two-way binds via `bindings.bind:value`. The walker renders a styled rectangle + caret placeholder; full IME and selection-painter wiring lands in the desktop host (Plan 8) once the gesture arena gains `Focus` recognizers.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "text_input"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "placeholder": {
+              "description": "Placeholder shown when `value` is empty. Static text — author `bindings.placeholder` if it needs to react to state.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "value": {
+              "description": "Initial value. Two-way binding lives on `bindings.bind:value`, which derive lifts into a `set_*` action and the runtime keeps in sync with the state graph.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
           "description": "Shared fields across all node types. Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.",
           "type": "object",
           "required": [
