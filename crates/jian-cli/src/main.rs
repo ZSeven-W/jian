@@ -42,6 +42,10 @@ enum Command {
     /// pointer / scene pipeline (built with the `player` feature).
     #[cfg(feature = "player")]
     Player(PlayerArgs),
+    /// Open a .op file like `player`, then watch the file and reload
+    /// it on every save. Runtime state survives the reload.
+    #[cfg(feature = "player")]
+    Dev(DevArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -77,6 +81,16 @@ pub struct PlayerArgs {
     pub title: Option<String>,
 }
 
+#[cfg(feature = "player")]
+#[derive(Parser, Debug)]
+pub struct DevArgs {
+    pub path: PathBuf,
+    #[arg(long)]
+    pub size: Option<String>,
+    #[arg(long)]
+    pub title: Option<String>,
+}
+
 #[derive(Parser, Debug)]
 pub struct NewArgs {
     /// Project name — also used as the app id and directory name.
@@ -98,6 +112,8 @@ fn main() -> ExitCode {
         Command::New(args) => commands::new::run(args),
         #[cfg(feature = "player")]
         Command::Player(args) => commands::player::run(args),
+        #[cfg(feature = "player")]
+        Command::Dev(args) => commands::dev::run(args),
     };
 
     match result {

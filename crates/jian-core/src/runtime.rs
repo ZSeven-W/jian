@@ -176,6 +176,13 @@ impl Runtime {
 
     pub fn load_str(&mut self, src: &str) -> CoreResult<()> {
         let schema = load_str(src)?.value;
+        self.replace_document(schema)
+    }
+
+    /// Swap the runtime's document tree for `schema`, reusing the
+    /// existing StateGraph + services. Used by `jian dev` hot-reload
+    /// so app state (e.g. `$state.count`) survives a `.op` edit.
+    pub fn replace_document(&mut self, schema: PenDocument) -> CoreResult<()> {
         let doc = loader::build(schema, &self.state)?;
         self.document = Some(doc);
         Ok(())
@@ -290,5 +297,42 @@ mod tests {
         rt.build_layout((800.0, 600.0)).unwrap();
         rt.rebuild_spatial();
         assert_eq!(rt.spatial.len(), 1);
+    }
+
+    /// `replace_document` should swap in the new tree without disturbing
+    /// the existing StateGraph or service Rcs — Plan 9 hot-reload relies
+    /// on this so `$state.*` survives `.op` edits.
+    #[test]
+    fn replace_document_swaps_tree_keeps_state() {
+        let mut rt = Runtime::new();
+        rt.load_str(
+            r#"{
+          "version":"0.8.0",
+          "children":[{"type":"rectangle","id":"r1","width":100,"height":50}]
+        }"#,
+        )
+        .unwrap();
+        rt.build_layout((800.0, 600.0)).unwrap();
+        rt.rebuild_spatial();
+        let original_state = Rc::as_ptr(&rt.state);
+
+        let new_schema: PenDocument = serde_json::from_str(
+            r#"{
+          "version":"0.8.0",
+          "children":[
+            {"type":"rectangle","id":"a","width":40,"height":30},
+            {"type":"rectangle","id":"b","width":40,"height":30}
+          ]
+        }"#,
+        )
+        .unwrap();
+        rt.replace_document(new_schema).unwrap();
+        rt.build_layout((800.0, 600.0)).unwrap();
+        rt.rebuild_spatial();
+
+        // Same StateGraph instance — Rc didn't get rebuilt.
+        assert_eq!(Rc::as_ptr(&rt.state), original_state);
+        // Tree contents reflect the new schema.
+        assert_eq!(rt.spatial.len(), 2);
     }
 }

@@ -23,10 +23,16 @@ use jian_skia::surface::SkiaSurface;
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
+use std::time::Duration;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
+
+/// Dev-mode poll interval. Short enough to feel "instant" (≤ frame
+/// time at common refresh rates), long enough to keep idle CPU near
+/// zero when no file changes arrive.
+const RELOAD_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Convert a winit physical-pixel `PhysicalSize<u32>` into an `(f32, f32)`
 /// logical-pixel tuple suitable for `Runtime::build_layout`.
@@ -41,7 +47,14 @@ impl DesktopHost {
     /// Blocks the calling thread; returns `Ok(())` on clean shutdown.
     pub fn run(self) -> Result<(), winit::error::EventLoopError> {
         let event_loop = EventLoop::new()?;
-        event_loop.set_control_flow(ControlFlow::Wait);
+        // Dev mode (reload_rx attached) polls ~5×/sec; otherwise sleep
+        // until winit gets a real event so idle CPU stays at zero.
+        let initial_flow = if self.reload_rx.is_some() {
+            ControlFlow::WaitUntil(Instant::now() + RELOAD_POLL_INTERVAL)
+        } else {
+            ControlFlow::Wait
+        };
+        event_loop.set_control_flow(initial_flow);
         let mut app = RunApp::new(self);
         event_loop.run_app(&mut app)
     }
@@ -244,15 +257,70 @@ impl ApplicationHandler for RunApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // Drive LongPress + other timer-based recognisers each iteration
         // of the event loop; only request a redraw if the tick fired a
         // semantic event.
         let emitted = self.host.runtime.tick(Instant::now());
-        if !emitted.is_empty() {
+        let mut needs_redraw = !emitted.is_empty();
+
+        // Dev-mode reload: drain the channel; the latest pending doc
+        // wins. Re-build layout + spatial against the current logical
+        // size so the canvas reflects the new schema immediately.
+        if self.host.reload_rx.is_some() {
+            let mut latest: Option<jian_ops_schema::document::PenDocument> = None;
+            if let Some(ref rx) = self.host.reload_rx {
+                while let Ok(doc) = rx.try_recv() {
+                    latest = Some(doc);
+                }
+            }
+            if let Some(schema) = latest {
+                if let Err(e) = self.apply_reload(schema) {
+                    eprintln!("jian dev: reload failed: {}", e);
+                } else {
+                    needs_redraw = true;
+                }
+            }
+            // Re-arm the polling timer so we wake again even when no
+            // user input arrived.
+            event_loop.set_control_flow(ControlFlow::WaitUntil(
+                Instant::now() + RELOAD_POLL_INTERVAL,
+            ));
+        }
+
+        if needs_redraw {
             if let Some(w) = self.window.as_ref() {
                 w.request_redraw();
             }
         }
+    }
+}
+
+impl RunApp {
+    /// Swap the runtime's document for `schema` and rebuild the layout
+    /// + spatial index against the current logical surface size.
+    fn apply_reload(
+        &mut self,
+        schema: jian_ops_schema::document::PenDocument,
+    ) -> Result<(), String> {
+        let logical = logical_size_f32(
+            winit::dpi::PhysicalSize::new(self.last_size.0, self.last_size.1),
+            self.scale_factor,
+        );
+        // The runtime keeps the same StateGraph, services, and gates —
+        // we only rebuild the document tree + layout. Existing app
+        // state survives the reload (matches user expectations of
+        // "edit + save" iteration).
+        self.host
+            .runtime
+            .replace_document(schema)
+            .map_err(|e| format!("{:?}", e))?;
+        self.host
+            .runtime
+            .build_layout(logical)
+            .map_err(|e| format!("layout: {:?}", e))?;
+        self.host.runtime.viewport.size = make_size(logical.0, logical.1);
+        self.host.runtime.rebuild_spatial();
+        Ok(())
     }
 }

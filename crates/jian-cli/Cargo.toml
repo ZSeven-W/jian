@@ -9,11 +9,12 @@ authors      = { workspace = true }
 description  = "Command-line toolchain for the Jian runtime (.op files)"
 
 [features]
-# Default enables the `player` subcommand, which pulls in the winit
-# event loop + softbuffer via jian-host-desktop's `run` feature.
+# Default enables the `player` + `dev` subcommands, which pull in the
+# winit event loop + softbuffer via jian-host-desktop's `run` feature.
+# `dev` additionally pulls in `notify` for filesystem watching.
 # Disable for a headless-only build (`cargo build --no-default-features`).
 default = ["player"]
-player  = ["dep:jian-host-desktop"]
+player  = ["dep:jian-host-desktop", "dep:notify"]
 
 [dependencies]
 jian-core        = { path = "../jian-core" }
@@ -24,6 +25,7 @@ anyhow           = "1"
 serde            = { workspace = true }
 serde_json       = { workspace = true }
 zip              = { version = "2.2", default-features = false, features = ["deflate"] }
+notify           = { version = "6", optional = true }
 
 [dev-dependencies]
 assert_cmd      = "2"

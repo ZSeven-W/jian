@@ -7,12 +7,24 @@
 
 use jian_core::geometry::{size, Size};
 use jian_core::Runtime;
+use jian_ops_schema::document::PenDocument;
 use jian_skia::SkiaBackend;
+use std::sync::mpsc::Receiver;
+
+/// Channel that delivers new `.op` schemas to a running host. Used by
+/// `jian dev` to swap the document on file change without tearing down
+/// the window. The receiver lives on the event-loop thread; the
+/// matching `Sender` is held by the watcher thread.
+pub type ReloadRx = Receiver<PenDocument>;
 
 pub struct DesktopHost {
     pub runtime: Runtime,
     pub backend: SkiaBackend,
     pub config: HostConfig,
+    /// When `Some`, the run loop wakes every ~200ms to drain new
+    /// documents and rebuild layout. `None` keeps the original
+    /// `ControlFlow::Wait` behaviour (zero CPU when idle).
+    pub reload_rx: Option<ReloadRx>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +51,7 @@ impl DesktopHost {
                 title: title.into(),
                 ..HostConfig::default()
             },
+            reload_rx: None,
         }
     }
 
@@ -47,7 +60,16 @@ impl DesktopHost {
             runtime,
             backend: SkiaBackend::new(),
             config,
+            reload_rx: None,
         }
+    }
+
+    /// Attach a `Receiver` that delivers fresh `.op` schemas. Activates
+    /// dev-mode polling — the run loop wakes every ~200ms to drain
+    /// pending reloads instead of sleeping on `ControlFlow::Wait`.
+    pub fn with_reloader(mut self, rx: ReloadRx) -> Self {
+        self.reload_rx = Some(rx);
+        self
     }
 
     pub fn title(&self) -> &str {
