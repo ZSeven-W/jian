@@ -212,13 +212,26 @@ impl ApplicationHandler for RunApp {
                     eprintln!("jian-host-desktop: menu warning: {}", w);
                 }
                 if let Some(window) = self.window.as_ref() {
-                    if let Err(e) =
-                        crate::menus::init_menu_for_window(&built.menu, window.as_ref())
-                    {
-                        eprintln!("jian-host-desktop: menu init failed: {}", e);
+                    match crate::menus::init_menu_for_window(&built.menu, window.as_ref()) {
+                        Ok(()) => {
+                            // Hold the menu for the program lifetime;
+                            // muda keeps raw pointers internally so
+                            // dropping it would invalidate the menu bar.
+                            self.menu = Some(built.menu);
+                        }
+                        Err(e) => {
+                            // Don't latch the failure: leaving
+                            // `self.menu = None` lets the next window
+                            // (e.g. after a crash-recovery rebuild)
+                            // retry. The Menu instance built here is
+                            // dropped — its append() calls registered
+                            // child items into a global registry but
+                            // the bar binding never landed, so dropping
+                            // is safe.
+                            eprintln!("jian-host-desktop: menu init failed: {}", e);
+                        }
                     }
                 }
-                self.menu = Some(built.menu);
             }
         }
         // Layout + viewport live in *logical* coordinates; only the

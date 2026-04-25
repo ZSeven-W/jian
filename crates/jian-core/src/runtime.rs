@@ -465,9 +465,11 @@ impl Default for Runtime {
 ///
 /// `KeyDown` exposes `{ key, modifiers }` so authors can branch on
 /// `$event.key` (e.g. `"Enter"` vs `"Escape"`) — without this the
-/// handler runs but can't tell *which* key fired. Modifiers
-/// stringify to a comma-separated list of "shift" / "ctrl" / "alt"
-/// / "cmd" so simple equality / contains checks work in expressions.
+/// handler runs but can't tell *which* key fired. `modifiers` is a
+/// JSON array of pressed modifier names (`["shift"]`, `["ctrl",
+/// "alt"]`, …) drawn from the set `shift` / `ctrl` / `alt` / `cmd`.
+/// Authors test membership with the Tier 1 builtin
+/// `includes($event.modifiers, "shift")`.
 fn event_payload(event: &SemanticEvent) -> Option<serde_json::Value> {
     match event {
         SemanticEvent::KeyDown { key, modifiers, .. } => {

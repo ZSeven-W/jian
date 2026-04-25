@@ -87,12 +87,14 @@ impl ActionContext {
     pub fn locals_snapshot(&self) -> BTreeMap<String, RuntimeValue> {
         let mut snap = self.locals.borrow().clone();
         // Project the active event (if any) into the locals map under
-        // both `event` and `$event` keys, so an action expression can
-        // read `$event.key` / `$event.data` for keyboard / WebSocket
-        // dispatches. Without this the expression VM sees no `$event`
-        // scope and silently resolves to null.
+        // the literal `$event` key. The expression VM's `lookup_scope`
+        // tries `$event` (literal) first, then strips the leading
+        // `$` and tries `event` against the locals — so an author's
+        // `for_each` loop variable named `event` (legitimate use)
+        // wins the bare-name slot while `$event.<field>` still
+        // routes here. Inserting an `event` alias would invert that
+        // precedence and let a loop variable shadow `$event.key`.
         if let Some(ev) = &self.event {
-            snap.entry("event".into()).or_insert_with(|| ev.clone());
             snap.entry("$event".into()).or_insert_with(|| ev.clone());
         }
         snap

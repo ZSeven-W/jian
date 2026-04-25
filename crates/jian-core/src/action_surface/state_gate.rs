@@ -323,25 +323,37 @@ mod tests {
     }
 
     #[test]
-    fn visible_template_literal_falls_back_to_default() {
+    fn disabled_template_literal_falls_back_to_default() {
         // Backtick templates produce *strings*, never bools, so the
-        // strict-bool §4.2 rule rejects them — gate falls back to the
-        // visible:true default. Authors who want bool-valued template
-        // strings should compose the comparison directly:
-        //   "visible": "$state.x > 5"
-        // not
-        //   "visible": "`${$state.x > 5}`".
+        // strict-bool §4.2 rule rejects them — gate falls back to
+        // the default. We pin `disabled` (default `false` → allowed)
+        // because it makes the fallback observable: a real bool
+        // evaluator would flip with the value of `x`, but the
+        // string-typed projection always reads the default.
         let (doc, state) = build(
             r#"{ "version":"0.8.0",
                  "state":{ "x":{ "type":"int","default":10 } },
                  "children":[
                    { "type":"frame","id":"root",
-                     "bindings":{ "visible":"`${$state.x > 5}`" } }
+                     "bindings":{ "disabled":"`${$state.x > 5}`" } }
                  ]}"#,
         );
         let cache = Rc::new(ExpressionCache::new());
         let gate = RuntimeStateGate::new(&doc, &state, cache);
-        // template returns "true" string, not bool → default visible.
+        // x = 10 > 5 → template renders "true" → not a bool → default
+        // disabled:false → allowed. (A real bool eval would block.)
         assert!(gate.allows("root"));
+
+        // Flip x so a bool-typed projection would *unblock* — fallback
+        // semantics keep us at default-allowed regardless.
+        state.app_set("x", serde_json::json!(0));
+        assert!(
+            gate.allows("root"),
+            "fallback ignores template content; allowed in both states"
+        );
+
+        // Authors who want bool-valued shortcuts compose the comparison
+        // directly, no backticks:
+        //   "disabled": "$state.x > 5"
     }
 }
