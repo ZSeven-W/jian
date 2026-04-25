@@ -12,8 +12,15 @@
 //! - **`Url`** — host-resolution path; without an injected resolver
 //!   we return `None` and the backend draws a placeholder.
 //!
-//! The cache is unbounded for now — Plan 12 will add LRU eviction with
-//! a 128 MB cap once a real-world corpus exists.
+//! Bounded LRU + soft byte cap. The cache evicts the least-recently
+//! used entry once `decoded_byte_total > BYTE_CAP`. The cap defaults
+//! to 128 MB (matching the Plan 7 / Plan 12 budget); hosts with
+//! tighter memory targets construct a custom-sized cache via
+//! `ImageCache::with_byte_cap`.
+//!
+//! Decoding failures are cached too (as `None`) so the same broken
+//! data: URL doesn't burn CPU on every redraw — but `None` entries
+//! count as zero bytes for the eviction calculation.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -21,14 +28,47 @@ use jian_core::render::ImageSource;
 use skia_safe::Image as SkImage;
 use std::collections::HashMap;
 
-#[derive(Default)]
+/// Default soft byte cap — 128 MB. Plan 7 §C.1 budget.
+pub(crate) const DEFAULT_BYTE_CAP: usize = 128 * 1024 * 1024;
+
+struct CacheEntry {
+    image: Option<SkImage>,
+    /// Decoded RGBA byte estimate (0 on decode failure). Used by the
+    /// eviction loop; doesn't have to be exact, just monotonic.
+    bytes: usize,
+    /// Monotonically increasing access timestamp — incremented on
+    /// each `get_or_decode` hit to drive LRU.
+    last_used: u64,
+}
+
 pub(crate) struct ImageCache {
-    decoded: HashMap<String, Option<SkImage>>,
+    decoded: HashMap<String, CacheEntry>,
+    byte_total: usize,
+    byte_cap: usize,
+    tick: u64,
+}
+
+impl Default for ImageCache {
+    fn default() -> Self {
+        Self::with_byte_cap(DEFAULT_BYTE_CAP)
+    }
 }
 
 impl ImageCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Construct with a custom soft byte cap. Capacity is interpreted
+    /// as decoded RGBA bytes; backing native objects (skia raster
+    /// surfaces, mipmaps) typically add 10-20% on top.
+    pub fn with_byte_cap(cap: usize) -> Self {
+        Self {
+            decoded: HashMap::new(),
+            byte_total: 0,
+            byte_cap: cap,
+            tick: 0,
+        }
     }
 
     /// Look up the source's cached image, decoding on first miss.
@@ -38,10 +78,71 @@ impl ImageCache {
         let key = source.cache_key();
         if !self.decoded.contains_key(&key) {
             let decoded = decode(source);
-            self.decoded.insert(key.clone(), decoded);
+            let bytes = estimate_bytes(&decoded);
+            self.byte_total = self.byte_total.saturating_add(bytes);
+            let tick = self.next_tick();
+            self.decoded.insert(
+                key.clone(),
+                CacheEntry {
+                    image: decoded,
+                    bytes,
+                    last_used: tick,
+                },
+            );
+            self.evict_if_over_budget(&key);
         }
-        self.decoded.get(&key).and_then(|opt| opt.as_ref())
+        let tick = self.next_tick();
+        let entry = self.decoded.get_mut(&key)?;
+        entry.last_used = tick;
+        entry.image.as_ref()
     }
+
+    /// Number of cached entries (decoded *and* failed). Test surface.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.decoded.len()
+    }
+
+    /// Total cached bytes — `0` for entries whose decode failed.
+    #[cfg(test)]
+    pub fn byte_total(&self) -> usize {
+        self.byte_total
+    }
+
+    fn next_tick(&mut self) -> u64 {
+        self.tick = self.tick.wrapping_add(1);
+        self.tick
+    }
+
+    /// Drop least-recently-used entries until `byte_total <= byte_cap`.
+    /// `protect` is the just-inserted key — never evicted on the same
+    /// call that created it (tiny entries shouldn't immediately
+    /// evict themselves under contention).
+    fn evict_if_over_budget(&mut self, protect: &str) {
+        while self.byte_total > self.byte_cap {
+            let victim = self
+                .decoded
+                .iter()
+                .filter(|(k, _)| *k != protect)
+                .min_by_key(|(_, e)| e.last_used)
+                .map(|(k, _)| k.clone());
+            let Some(key) = victim else {
+                break; // Only the protected entry left.
+            };
+            if let Some(removed) = self.decoded.remove(&key) {
+                self.byte_total = self.byte_total.saturating_sub(removed.bytes);
+            }
+        }
+    }
+}
+
+/// Conservative RGBA-byte estimate. `width * height * 4` matches the
+/// uncompressed cost of decoded image data in Skia.
+fn estimate_bytes(image: &Option<SkImage>) -> usize {
+    image
+        .as_ref()
+        .map(|img| (img.width() as usize) * (img.height() as usize) * 4)
+        .unwrap_or(0)
 }
 
 fn decode(source: &ImageSource) -> Option<SkImage> {
@@ -133,5 +234,48 @@ mod tests {
         let mut cache = ImageCache::new();
         let img = cache.get_or_decode(&ImageSource::Bytes(Arc::new(bytes)));
         assert!(img.is_some());
+    }
+
+    #[test]
+    fn lru_evicts_oldest_on_overflow() {
+        // Two distinct decode-able sources whose cache_keys are stable
+        // string literals (DataUrl) so eviction is testable without
+        // worrying about Arc-pointer reuse. Each decodes to a 1×1
+        // PNG = 4 RGBA bytes; cap = 4 → second insert tips over and
+        // evicts the older entry.
+        //
+        // We synthesise the second payload by using a distinct
+        // (still-valid) base64 PNG. `TINY_PNG_B64` is a 1×1 transparent
+        // PNG; `TINY_PNG_B64_RED` is a 1×1 red PNG. Both decode fine.
+        let mut cache = ImageCache::with_byte_cap(4);
+        let src_a = ImageSource::DataUrl(format!("data:image/png;base64,{}", TINY_PNG_B64));
+        let src_b = ImageSource::DataUrl(format!("data:image/png;base64,{}", TINY_PNG_B64_RED));
+        assert!(cache.get_or_decode(&src_a).is_some());
+        assert_eq!(cache.len(), 1);
+        // Second insert tips the cap → older entry evicts.
+        assert!(cache.get_or_decode(&src_b).is_some());
+        assert_eq!(cache.len(), 1, "LRU should have evicted the oldest");
+        // Re-insert the first — second now becomes the older entry
+        // and gets evicted in turn.
+        assert!(cache.get_or_decode(&src_a).is_some());
+        assert_eq!(cache.len(), 1);
+    }
+
+    /// 1×1 red PNG, distinct from `TINY_PNG_B64`.
+    const TINY_PNG_B64_RED: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+    #[test]
+    fn under_budget_keeps_all_entries() {
+        let mut cache = ImageCache::with_byte_cap(1024 * 1024);
+        // Three distinct cache keys via three different Url strings;
+        // they all decode to None but each takes its own cache slot.
+        // Url decode-failure entries count as 0 bytes, so all three
+        // sit comfortably under any cap.
+        for n in 0..3 {
+            cache.get_or_decode(&ImageSource::Url(format!("u-{}", n)));
+        }
+        assert_eq!(cache.len(), 3);
+        assert!(cache.byte_total() <= 1024 * 1024);
     }
 }
