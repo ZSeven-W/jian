@@ -87,9 +87,10 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
             // often save via `rename(tmp, target)` which does NOT fire
             // a Modify event on `target`. The directory-level Create
             // event picks it up.
-            let watch_dir = watch_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(
-                || std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            );
+            let watch_dir = watch_path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
             if let Err(e) = watcher.watch(&watch_dir, RecursiveMode::NonRecursive) {
                 eprintln!("jian dev: cannot watch {}: {}", watch_dir.display(), e);
                 return;
@@ -105,7 +106,7 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
                             continue;
                         }
                         // Drain pending events before re-reading.
-                        while let Ok(_) = raw_rx.recv_timeout(Duration::from_millis(50)) {}
+                        while raw_rx.recv_timeout(Duration::from_millis(50)).is_ok() {}
                         let started = Instant::now();
                         match reparse(&watch_path) {
                             Ok(doc) => {

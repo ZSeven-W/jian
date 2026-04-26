@@ -31,9 +31,7 @@
 //! plugs straight in.
 
 use crate::list::{ListOptions, PageScope};
-use crate::{
-    ActionDispatcher, ActionSurface, AlwaysAllow, ExecuteOutcome, StateGate,
-};
+use crate::{ActionDispatcher, ActionSurface, AlwaysAllow, ExecuteOutcome, StateGate};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -122,11 +120,7 @@ pub fn handle_request_with_gate<D: ActionDispatcher, G: StateGate>(
     // shapes (e.g. arrays) up-front.
     if let Some(p) = req.params.as_ref() {
         if !p.is_object() && !p.is_null() {
-            return reply_err(
-                req.id,
-                codes::INVALID_PARAMS,
-                "params must be an object",
-            );
+            return reply_err(req.id, codes::INVALID_PARAMS, "params must be an object");
         }
     }
     let result = match req.method.as_str() {
@@ -279,7 +273,8 @@ mod tests {
         let doc = fixture();
         let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]);
         let mut sink = SinkDispatcher;
-        let req = r#"{"jsonrpc":"2.0","id":2,"method":"execute_action","params":{"name":"home.plus"}}"#;
+        let req =
+            r#"{"jsonrpc":"2.0","id":2,"method":"execute_action","params":{"name":"home.plus"}}"#;
         let resp = handle_request(&mut surface, &mut sink, req);
         let parsed: serde_json::Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(parsed["result"]["ok"], true);

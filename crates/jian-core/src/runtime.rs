@@ -351,7 +351,11 @@ impl Runtime {
     /// that fired (per message) so hosts can request a redraw when
     /// state changed.
     pub fn pump_websockets(&mut self) -> usize {
-        let snapshot: Vec<(String, Rc<dyn crate::action::services::WebSocketSession>, Option<serde_json::Value>)> = {
+        let snapshot: Vec<(
+            String,
+            Rc<dyn crate::action::services::WebSocketSession>,
+            Option<serde_json::Value>,
+        )> = {
             self.ws_sessions
                 .borrow()
                 .iter()
@@ -721,10 +725,7 @@ mod tests {
         .unwrap();
         rt.build_layout((400.0, 300.0)).unwrap();
         rt.rebuild_spatial();
-        let emitted = rt.dispatch_wheel(WheelEvent::simple(
-            point(100.0, 100.0),
-            point(0.0, -10.0),
-        ));
+        let emitted = rt.dispatch_wheel(WheelEvent::simple(point(100.0, 100.0), point(0.0, -10.0)));
         assert_eq!(emitted.len(), 1);
         assert!(matches!(
             emitted[0],
@@ -748,8 +749,7 @@ mod tests {
         .unwrap();
         rt.build_layout((400.0, 300.0)).unwrap();
         rt.rebuild_spatial();
-        let emitted =
-            rt.dispatch_wheel(WheelEvent::simple(point(100.0, 100.0), point(0.0, -10.0)));
+        let emitted = rt.dispatch_wheel(WheelEvent::simple(point(100.0, 100.0), point(0.0, -10.0)));
         assert!(emitted.is_empty());
     }
 

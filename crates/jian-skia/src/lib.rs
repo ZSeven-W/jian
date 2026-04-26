@@ -42,6 +42,6 @@ pub mod path;
 pub mod surface;
 
 pub use backend::SkiaBackend;
-pub use surface::SkiaSurface;
 #[cfg(feature = "textlayout")]
 pub use measure::SkiaMeasure;
+pub use surface::SkiaSurface;

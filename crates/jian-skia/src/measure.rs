@@ -16,9 +16,7 @@
 //! Gated behind `cfg(feature = "textlayout")`. Default-feature
 //! builds rely on `EstimateBackend` from `jian-core`.
 
-use jian_core::layout::measure::{
-    FontStyleKind, MeasureBackend, MeasureRequest, MeasureResult,
-};
+use jian_core::layout::measure::{FontStyleKind, MeasureBackend, MeasureRequest, MeasureResult};
 use skia_safe::{
     font_style::{Slant, Weight, Width},
     textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle},
@@ -88,8 +86,7 @@ impl MeasureBackend for SkiaMeasure {
         // line_height is applied per TextStyle below so individual
         // runs can opt in/out independently.
         let style = ParagraphStyle::new();
-        let mut builder =
-            ParagraphBuilder::new(&style, (*self.font_collection).clone());
+        let mut builder = ParagraphBuilder::new(&style, (*self.font_collection).clone());
 
         for run in req.runs {
             let mut ts = TextStyle::new();
@@ -253,9 +250,20 @@ mod tests {
             line_height: 0.0,
             max_width: Some(80.0),
         });
-        assert!(res.width <= 80.0 + 0.5, "wrap budget exceeded: {}", res.width);
-        assert!(res.line_count >= 2, "expected ≥2 lines, got {}", res.line_count);
-        assert!(res.height > 16.0, "wrapped text should be taller than one line");
+        assert!(
+            res.width <= 80.0 + 0.5,
+            "wrap budget exceeded: {}",
+            res.width
+        );
+        assert!(
+            res.line_count >= 2,
+            "expected ≥2 lines, got {}",
+            res.line_count
+        );
+        assert!(
+            res.height > 16.0,
+            "wrapped text should be taller than one line"
+        );
     }
 
     #[test]

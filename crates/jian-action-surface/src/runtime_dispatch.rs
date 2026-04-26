@@ -116,7 +116,10 @@ fn dispatch_key(
     Ok(())
 }
 
-fn dispatch_pointer_tap(runtime: &mut Runtime, action: &ActionDefinition) -> Result<(), ExecuteError> {
+fn dispatch_pointer_tap(
+    runtime: &mut Runtime,
+    action: &ActionDefinition,
+) -> Result<(), ExecuteError> {
     let key = runtime
         .document
         .as_ref()
@@ -273,11 +276,8 @@ fn percent_encode_segment(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for byte in s.as_bytes() {
         let b = *byte;
-        let unreserved = b.is_ascii_alphanumeric()
-            || b == b'-'
-            || b == b'_'
-            || b == b'.'
-            || b == b'~';
+        let unreserved =
+            b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.' || b == b'~';
         if unreserved {
             out.push(b as char);
         } else {
@@ -305,7 +305,10 @@ mod path_tests {
     fn substitute_replaces_named_param() {
         let mut params = Map::new();
         params.insert("id".into(), Value::String("42".into()));
-        assert_eq!(substitute_route_params("/detail/:id", &params), "/detail/42");
+        assert_eq!(
+            substitute_route_params("/detail/:id", &params),
+            "/detail/42"
+        );
     }
 
     #[test]
@@ -413,7 +416,9 @@ mod tests {
         );
         assert!(matches!(out, ExecuteOutcome::Ok), "outcome={out:?}");
         assert_eq!(
-            rt.state.app_get("email").and_then(|v| v.as_str().map(str::to_owned)),
+            rt.state
+                .app_get("email")
+                .and_then(|v| v.as_str().map(str::to_owned)),
             Some("fini@example.com".to_owned()),
         );
     }
@@ -462,7 +467,9 @@ mod tests {
             assert!(matches!(out, ExecuteOutcome::Ok), "confirm outcome={out:?}");
         }
         assert_eq!(
-            state.app_get("last_key").and_then(|v| v.as_str().map(str::to_owned)),
+            state
+                .app_get("last_key")
+                .and_then(|v| v.as_str().map(str::to_owned)),
             Some("Enter".to_owned()),
         );
 
@@ -472,7 +479,9 @@ mod tests {
             assert!(matches!(out, ExecuteOutcome::Ok), "dismiss outcome={out:?}");
         }
         assert_eq!(
-            state.app_get("last_key").and_then(|v| v.as_str().map(str::to_owned)),
+            state
+                .app_get("last_key")
+                .and_then(|v| v.as_str().map(str::to_owned)),
             Some("Escape".to_owned()),
         );
     }

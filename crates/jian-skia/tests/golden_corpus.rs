@@ -127,9 +127,10 @@ fn corpus_renders_match_golden_bytes() {
 }
 
 fn render_to_png(source: &str) -> Result<Vec<u8>, String> {
-    let schema = load_str(source).map_err(|e| format!("parse: {:?}", e))?.value;
-    let mut rt =
-        Runtime::new_from_document(schema).map_err(|e| format!("runtime: {:?}", e))?;
+    let schema = load_str(source)
+        .map_err(|e| format!("parse: {:?}", e))?
+        .value;
+    let mut rt = Runtime::new_from_document(schema).map_err(|e| format!("runtime: {:?}", e))?;
     rt.build_layout((SURFACE_W, SURFACE_H))
         .map_err(|e| format!("layout: {:?}", e))?;
     rt.rebuild_spatial();
@@ -137,8 +138,7 @@ fn render_to_png(source: &str) -> Result<Vec<u8>, String> {
     let mut surface = backend.new_surface(size(SURFACE_W, SURFACE_H));
     backend.begin_frame(&mut surface, 0xffffffff);
     if let Some(doc) = rt.document.as_ref() {
-        let ops =
-            jian_host_desktop::scene::collect_draws(doc, &rt.layout);
+        let ops = jian_host_desktop::scene::collect_draws(doc, &rt.layout);
         for op in ops {
             backend.draw(&op);
         }

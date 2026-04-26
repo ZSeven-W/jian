@@ -16,9 +16,7 @@
 
 #![cfg(feature = "textlayout")]
 
-use jian_core::layout::measure::{
-    EstimateBackend, MeasureBackend, MeasureRequest, StyledRun,
-};
+use jian_core::layout::measure::{EstimateBackend, MeasureBackend, MeasureRequest, StyledRun};
 use jian_core::Runtime;
 use jian_ops_schema::load_str;
 use jian_skia::SkiaMeasure;

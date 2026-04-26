@@ -294,10 +294,7 @@ mod tests {
         ) -> Result<crate::action::services::HttpResponse, String> {
             Err("not used in ws tests".into())
         }
-        async fn connect_websocket(
-            &self,
-            url: String,
-        ) -> Result<Rc<dyn WebSocketSession>, String> {
+        async fn connect_websocket(&self, url: String) -> Result<Rc<dyn WebSocketSession>, String> {
             *self.last_url.borrow_mut() = Some(url);
             Ok(Rc::new(MockSession {
                 sent: self.sent.clone(),

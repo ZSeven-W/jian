@@ -54,7 +54,10 @@ impl SwipeThrottle {
 fn is_swipe(kind: SourceKind) -> bool {
     matches!(
         kind,
-        SourceKind::SwipeLeft | SourceKind::SwipeRight | SourceKind::SwipeUp | SourceKind::SwipeDown
+        SourceKind::SwipeLeft
+            | SourceKind::SwipeRight
+            | SourceKind::SwipeUp
+            | SourceKind::SwipeDown
     )
 }
 

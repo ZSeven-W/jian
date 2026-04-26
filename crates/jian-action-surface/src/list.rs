@@ -68,7 +68,7 @@ pub fn list_actions(actions: &[ActionDefinition], opts: ListOptions) -> ListResp
         };
         if opts.page_scope == PageScope::Current {
             if let Some(ref p) = opts.current_page {
-                if !is_in_scope(&a.name.scope.as_str().to_owned(), p) {
+                if !is_in_scope(a.name.scope.as_str(), p) {
                     continue;
                 }
             }

@@ -21,9 +21,9 @@ pub mod map;
 
 pub use audit::{AuditEntry, AuditLog, Verdict};
 pub use broker::{NullPermissionBroker, PermissionBroker, PermissionStatus};
+#[cfg(feature = "dev-asp")]
+pub use gate::AutomationLevel;
 pub use gate::{
     from_schema_capability, Capability, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate,
 };
-#[cfg(feature = "dev-asp")]
-pub use gate::AutomationLevel;
 pub use map::required_capabilities;

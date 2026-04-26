@@ -39,10 +39,8 @@ const COUNTER_OP: &str = r##"{
 
 #[test]
 fn winit_click_increments_count_through_full_pipeline() {
-    let mut rt = Runtime::new_from_document(
-        jian_ops_schema::load_str(COUNTER_OP).unwrap().value,
-    )
-    .unwrap();
+    let mut rt =
+        Runtime::new_from_document(jian_ops_schema::load_str(COUNTER_OP).unwrap().value).unwrap();
     rt.build_layout((480.0, 320.0)).unwrap();
     rt.rebuild_spatial();
 
@@ -56,12 +54,10 @@ fn winit_click_increments_count_through_full_pipeline() {
     let click_phys = PhysicalPosition::new(240.0, 212.0);
 
     // 1) cursor moves to button (winit fires CursorMoved before press).
-    if let Some(mut pe) =
-        translator.translate(&WindowEvent::CursorMoved {
-            device_id: device,
-            position: click_phys,
-        })
-    {
+    if let Some(mut pe) = translator.translate(&WindowEvent::CursorMoved {
+        device_id: device,
+        position: click_phys,
+    }) {
         pe.position = jian_core::geometry::point(pe.position.x / scale, pe.position.y / scale);
         rt.dispatch_pointer(pe);
     }

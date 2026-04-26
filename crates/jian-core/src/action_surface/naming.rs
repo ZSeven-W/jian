@@ -43,7 +43,7 @@ pub fn slug_source(node: &Value) -> String {
     // Text nodes carry their author-visible content under `content`.
     // It can be a plain string or a styled-segment object — prefer the
     // string form, otherwise accept the first segment's `text`.
-    if let Some(text) = node.get("content").and_then(|c| extract_text(c)) {
+    if let Some(text) = node.get("content").and_then(extract_text) {
         if !text.is_empty() {
             return text;
         }

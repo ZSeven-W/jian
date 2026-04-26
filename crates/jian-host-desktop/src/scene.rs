@@ -81,7 +81,10 @@ fn walk(
     }
 
     if let Some(json) = json.as_ref() {
-        let visible = json.get("visible").and_then(|v| v.as_bool()).unwrap_or(true);
+        let visible = json
+            .get("visible")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
         if !visible {
             // `visible: false` (whether static or via bindings) drops
             // the subtree — children of an invisible parent never paint.
@@ -140,10 +143,7 @@ impl BindingOverrides {
 ///   leaves this is enough to move them around.)
 /// - `fill[0].color` (hex string — written into the first fill's color
 ///   field, defaulting `type` to `"solid"`)
-fn apply_bindings(
-    node: &mut Value,
-    state: &jian_core::state::StateGraph,
-) -> BindingOverrides {
+fn apply_bindings(node: &mut Value, state: &jian_core::state::StateGraph) -> BindingOverrides {
     let mut overrides = BindingOverrides::default();
     let Some(obj) = node.as_object_mut() else {
         return overrides;
@@ -152,10 +152,7 @@ fn apply_bindings(
         Some(Value::Object(b)) => b.clone(),
         _ => return overrides,
     };
-    let node_id = obj
-        .get("id")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    let node_id = obj.get("id").and_then(|v| v.as_str()).map(str::to_owned);
     for (prop, expr_v) in &bindings {
         let Some(src) = expr_v.as_str() else { continue };
         let compiled = match jian_core::expression::Expression::compile(src) {
@@ -285,7 +282,9 @@ fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
     // bogus mixed shape. The binding name itself — `fill[0].color`
     // — implies a solid fill, so restricting to that contract keeps
     // the binding honest.
-    let Some(first) = arr[0].as_object_mut() else { return };
+    let Some(first) = arr[0].as_object_mut() else {
+        return;
+    };
     let kind = first
         .get("type")
         .and_then(|v| v.as_str())
@@ -521,7 +520,10 @@ fn emit_text_input(
             font_size,
             font_weight,
             color: text_color,
-            origin: point(r.min_x() + 6.0, r.min_y() + (r.size.height - font_size) / 2.0),
+            origin: point(
+                r.min_x() + 6.0,
+                r.min_y() + (r.size.height - font_size) / 2.0,
+            ),
             max_width: (r.size.width - 12.0).max(0.0),
             align: TextAlign::Start,
             line_height: 0.0,
@@ -571,10 +573,7 @@ fn classify_source(src: &str) -> ImageSource {
 fn image_source_for(json: &Value) -> Option<(ImageSource, f32)> {
     if json.get("type").and_then(|t| t.as_str()) == Some("image") {
         let src = json.get("src").and_then(|v| v.as_str())?;
-        let opacity = json
-            .get("opacity")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
+        let opacity = json.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
         return Some((classify_source(src), opacity));
     }
     let first_fill = json
@@ -622,10 +621,7 @@ fn try_radial_gradient(fill: &Value) -> Option<RadialGradient> {
     }
     let cx = obj.get("cx").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
     let cy = obj.get("cy").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-    let radius = obj
-        .get("radius")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.5) as f32;
+    let radius = obj.get("radius").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
     let stops_arr = obj.get("stops")?.as_array()?;
     let mut stops = Vec::with_capacity(stops_arr.len());
     for s in stops_arr {

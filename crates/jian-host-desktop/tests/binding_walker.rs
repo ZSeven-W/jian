@@ -20,16 +20,14 @@ fn rt(src: &str) -> Runtime {
 
 #[test]
 fn opacity_binding_flows_into_paint() {
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": { "alpha": { "type":"float", "default":0.25 } },
               "children": [
                 { "type":"rectangle", "id":"a", "width":100, "height":50,
                   "fill":[{ "type":"solid", "color":"#1e88e5" }],
                   "bindings": { "opacity": "$state.alpha" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     let opacity = ops
         .iter()
@@ -43,16 +41,14 @@ fn opacity_binding_flows_into_paint() {
 
 #[test]
 fn fill_color_binding_writes_first_solid_color() {
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": { "tint": { "type":"string", "default":"#ff0000" } },
               "children": [
                 { "type":"rectangle", "id":"a", "width":100, "height":50,
                   "fill":[{ "type":"solid", "color":"#ffffff" }],
                   "bindings": { "fill[0].color": "$state.tint" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     let fill = ops
         .iter()
@@ -66,8 +62,7 @@ fn fill_color_binding_writes_first_solid_color() {
 
 #[test]
 fn visible_false_drops_node_and_subtree() {
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": { "show": { "type":"bool", "default":true } },
               "children": [
@@ -78,8 +73,7 @@ fn visible_false_drops_node_and_subtree() {
                     { "type":"rectangle", "id":"inner", "width":50, "height":50,
                       "fill":[{ "type":"solid", "color":"#1e88e5" }] }
                   ]}
-              ]}"##,
-    );
+              ]}"##);
 
     // Initially visible: parent + child both render.
     let on = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
@@ -97,8 +91,7 @@ fn visible_false_drops_node_and_subtree() {
 
 #[test]
 fn position_bindings_override_layout_rect() {
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": {
                 "tx": { "type":"float", "default":42 },
@@ -108,8 +101,7 @@ fn position_bindings_override_layout_rect() {
                 { "type":"rectangle", "id":"a", "width":80, "height":40,
                   "fill":[{ "type":"solid", "color":"#1e88e5" }],
                   "bindings": { "x": "$state.tx", "y": "$state.ty" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     let bbox = ops
         .iter()
@@ -128,8 +120,7 @@ fn bind_value_projects_state_into_text_input_render() {
     // surfaces. After a SetValue dispatch updates state, the next
     // render must read the new value — without this projection,
     // the input keeps painting the static schema `value`.
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": { "email": { "type":"string", "default":"fini@example.com" } },
               "children": [
@@ -138,8 +129,7 @@ fn bind_value_projects_state_into_text_input_render() {
                   "placeholder":"you@example.com",
                   "value":"",
                   "bindings": { "bind:value": "$state.email" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     let painted = ops
         .iter()
@@ -169,8 +159,7 @@ fn bind_value_null_keeps_static_value_seed() {
     // walker must NOT blank out the schema's static `value`;
     // that would silently wipe author-set seeds whenever a state
     // key is undeclared or hasn't been initialised yet.
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "children": [
                 { "type":"text_input", "id":"missing-input",
@@ -178,8 +167,7 @@ fn bind_value_null_keeps_static_value_seed() {
                   "placeholder":"never-shown",
                   "value":"seeded-from-schema",
                   "bindings": { "bind:value": "$state.unset" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     let painted = ops
         .iter()
@@ -198,8 +186,7 @@ fn bind_value_null_keeps_static_value_seed() {
 fn bind_value_coerces_non_string_state_for_text_input() {
     // text_input.value is a string field; numeric / bool state
     // bound through bind:value must coerce, not silently drop.
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": { "qty": { "type":"int", "default":7 } },
               "children": [
@@ -208,8 +195,7 @@ fn bind_value_coerces_non_string_state_for_text_input() {
                   "placeholder":"qty",
                   "value":"",
                   "bindings": { "bind:value": "$state.qty" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     let painted = ops
         .iter()
@@ -226,8 +212,7 @@ fn fill_color_binding_skips_gradient_first_fill() {
     // `fill[0].color` is a solid-fill contract. When the first
     // fill is a gradient, the binding must leave it alone rather
     // than writing a stray `color` field that the renderer ignores.
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": { "tint": { "type":"string", "default":"#ff0000" } },
               "children": [
@@ -241,8 +226,7 @@ fn fill_color_binding_skips_gradient_first_fill() {
                     ]
                   }],
                   "bindings": { "fill[0].color": "$state.tint" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     // Gradient renders unchanged — no Rect/RoundedRect with the
     // bound colour leaks through.
@@ -259,16 +243,14 @@ fn disabled_binding_writes_through_without_breaking_render() {
     // scene walker just propagates it through. This test confirms the
     // binding doesn't trip the walker even though no DrawOp is gated
     // on the flag.
-    let rt = rt(
-        r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+    let rt = rt(r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
               "app": { "name":"x","version":"1","id":"x" },
               "state": { "off": { "type":"bool", "default":true } },
               "children": [
                 { "type":"rectangle", "id":"a", "width":80, "height":40,
                   "fill":[{ "type":"solid", "color":"#1e88e5" }],
                   "bindings": { "disabled": "$state.off" } }
-              ]}"##,
-    );
+              ]}"##);
     let ops = collect_draws_with_state(rt.document.as_ref().unwrap(), &rt.layout, &rt.state);
     assert_eq!(ops.len(), 1, "rect still renders when disabled=true");
 }

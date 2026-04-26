@@ -47,8 +47,8 @@ fn future_minor_accepted_with_warning_absent() {
 fn pencil_demo_v2_export_rejected() {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/forward-compat/pencil-demo.op");
-    let src = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+    let src =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
     match load_str(&src) {
         Err(OpsSchemaError::UnsupportedFormatVersion { found, .. }) => {
             assert!(

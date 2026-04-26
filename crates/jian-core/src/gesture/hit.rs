@@ -81,12 +81,7 @@ fn paint_index_table(doc: &RuntimeDocument) -> HashMap<NodeKey, u32> {
     out
 }
 
-fn walk_paint(
-    doc: &RuntimeDocument,
-    key: NodeKey,
-    idx: &mut u32,
-    out: &mut HashMap<NodeKey, u32>,
-) {
+fn walk_paint(doc: &RuntimeDocument, key: NodeKey, idx: &mut u32, out: &mut HashMap<NodeKey, u32>) {
     out.insert(key, *idx);
     *idx += 1;
     for &child in &doc.tree.nodes[key].children {

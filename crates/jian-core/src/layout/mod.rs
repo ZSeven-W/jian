@@ -19,9 +19,7 @@ pub mod resolve;
 use crate::document::{NodeKey, NodeTree};
 use crate::error::{CoreError, CoreResult};
 use crate::geometry::{rect, Rect};
-use measure::{
-    default_backend, FontStyleKind, MeasureBackend, MeasureRequest, StyledRun,
-};
+use measure::{default_backend, FontStyleKind, MeasureBackend, MeasureRequest, StyledRun};
 use slotmap::SecondaryMap;
 use std::rc::Rc;
 use taffy::prelude::*;
@@ -110,8 +108,8 @@ impl LayoutEngine {
     /// pass. The taffy tree + node-id map + parent map are *not*
     /// preserved across `Self::build()` (which always rebuilds
     /// from scratch); this method only matters between a `build()`
-    /// + `compute()` pair. Hosts typically call `set_backend` once
-    /// at startup, then drive layout via the regular
+    /// and `compute()` pair. Hosts typically call `set_backend`
+    /// once at startup, then drive layout via the regular
     /// `build_layout` path.
     pub fn set_backend(&mut self, measure: Rc<dyn MeasureBackend>) {
         self.measure = measure;
@@ -245,7 +243,7 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
                 .map(|s| OwnedRun {
                     text: s.text.clone(),
                     font_family: s.font_family.clone().or_else(|| node_family.clone()),
-                    font_size: s.font_size.map(|v| v).unwrap_or(node_size),
+                    font_size: s.font_size.unwrap_or(node_size),
                     font_weight: s.font_weight.map(|n| n as u16).unwrap_or(node_weight),
                     font_style: match s.font_style {
                         Some(jian_ops_schema::style::FontStyleKind::Italic) => {
@@ -269,9 +267,7 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
     let line_height = t.line_height.map(|v| v as f32).unwrap_or(0.0);
     let growth = match t.text_growth {
         Some(jian_ops_schema::node::TextGrowth::FixedWidth) => TextGrowth::FixedWidth,
-        Some(jian_ops_schema::node::TextGrowth::FixedWidthHeight) => {
-            TextGrowth::FixedWidthHeight
-        }
+        Some(jian_ops_schema::node::TextGrowth::FixedWidthHeight) => TextGrowth::FixedWidthHeight,
         Some(jian_ops_schema::node::TextGrowth::Auto) | None => TextGrowth::Auto,
     };
     Some(TextMeasure {

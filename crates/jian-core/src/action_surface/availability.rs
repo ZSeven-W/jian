@@ -24,9 +24,7 @@ pub fn classify(node: &Value, handler_chain: Option<&Value>) -> AvailabilityStat
         return AvailabilityStatic::StaticHidden;
     }
 
-    let destructive = handler_chain
-        .map(|h| chain_is_destructive(h))
-        .unwrap_or(false);
+    let destructive = handler_chain.map(chain_is_destructive).unwrap_or(false);
 
     match (destructive, ai_hidden) {
         // Handler is destructive AND author hasn't deliberately opened
@@ -154,10 +152,7 @@ mod tests {
     fn safe_handler_is_available() {
         let node = json!({});
         let chain = json!([{ "set": { "$state.x": "1" } }]);
-        assert_eq!(
-            classify(&node, Some(&chain)),
-            AvailabilityStatic::Available
-        );
+        assert_eq!(classify(&node, Some(&chain)), AvailabilityStatic::Available);
     }
 
     #[test]
@@ -174,10 +169,7 @@ mod tests {
     fn ai_hidden_false_unlocks_destructive_handler() {
         let node = json!({ "semantics": { "aiHidden": false } });
         let chain = json!([{ "fetch": { "url": "/", "method": "DELETE" } }]);
-        assert_eq!(
-            classify(&node, Some(&chain)),
-            AvailabilityStatic::Available
-        );
+        assert_eq!(classify(&node, Some(&chain)), AvailabilityStatic::Available);
     }
 
     #[test]

@@ -75,4 +75,9 @@ fi
 
 echo "build-textlayout.sh: using $PY_BIN/python3 ($("$PY_BIN/python3" --version 2>&1))"
 
-PATH="$PY_BIN:$PATH" exec cargo "$@" --features textlayout
+# Insert `--features textlayout` *right after* the subcommand
+# (e.g. `build` / `test` / `clippy`) so it lands before any
+# subcommand-specific `--` separator. Trailing-append worked for
+# build / test but tripped clippy because `--features` after `--`
+# routes to clippy-driver instead of cargo.
+PATH="$PY_BIN:$PATH" exec cargo "$1" --features textlayout "${@:2}"

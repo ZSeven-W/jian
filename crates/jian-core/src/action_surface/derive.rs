@@ -38,10 +38,16 @@ pub enum DeriveWarning {
     /// downgraded to `StaticHidden` and the author is expected to
     /// rename one. Surfaced through the OpenPencil editor's AI
     /// Actions Panel as a red banner.
-    AiNameCollision { full_name: String, source_node_ids: Vec<String> },
+    AiNameCollision {
+        full_name: String,
+        source_node_ids: Vec<String>,
+    },
     /// A bare or fully-qualified alias claimed a name another action
     /// already owned (or shared). Same StaticHidden treatment.
-    AliasCollision { full_name: String, source_node_ids: Vec<String> },
+    AliasCollision {
+        full_name: String,
+        source_node_ids: Vec<String>,
+    },
     /// Auto-derived slugs (no `aiName`) collided after the hash4
     /// suffix. Each colliding action got a numeric suffix `_1` /
     /// `_2` / … rather than being hidden — they remain callable, the
@@ -332,11 +338,11 @@ fn emit_for_node(
     // own action so the AI surface lists them as discrete tools).
     let has_pan_start = events
         .and_then(|e| e.get("onPanStart"))
-        .map(|h| is_non_empty_action_list(h))
+        .map(is_non_empty_action_list)
         .unwrap_or(false);
     let has_pan_end = events
         .and_then(|e| e.get("onPanEnd"))
-        .map(|h| is_non_empty_action_list(h))
+        .map(is_non_empty_action_list)
         .unwrap_or(false);
     if has_pan_start && has_pan_end {
         let pan_handler = events.and_then(|e| e.get("onPanEnd"));
@@ -401,7 +407,11 @@ fn emit_for_node(
     if let Some(handler) = events
         .and_then(|e| e.get("onReachEnd"))
         .filter(|h| is_non_empty_action_list(h))
-        .or_else(|| events.and_then(|e| e.get("onScroll")).filter(|h| is_non_empty_action_list(h)))
+        .or_else(|| {
+            events
+                .and_then(|e| e.get("onScroll"))
+                .filter(|h| is_non_empty_action_list(h))
+        })
     {
         let slug_v = format!("load_more_{}", suffixed);
         out.push(make_action(
@@ -481,9 +491,11 @@ fn parse_alias(raw: &str, default_scope: &Scope) -> ActionName {
 
 /// Split a candidate full name into `(scope, slug)`. We accept the
 /// three scope shapes the derivation produces:
+///
 /// - `modal.<dialog_id>.<slug>` (3+ segments, modal prefix)
 /// - `global.<slug>`
 /// - `<page_id>.<slug>`
+///
 /// The caller distinguishes via the dotted form. We require the
 /// remainder after the first `.` to be a non-empty slug.
 fn split_qualified(raw: &str) -> Option<(&str, &str)> {
@@ -544,7 +556,11 @@ fn state_type_for_path(doc_json: &Value, path: &str) -> Option<ParamTy> {
         PathSegment::Key(k) => k,
         PathSegment::Index => return None, // `$state.[0]` is invalid
     };
-    let entry = doc_json.get("state")?.as_object()?.get(&head_key)?.get("type")?;
+    let entry = doc_json
+        .get("state")?
+        .as_object()?
+        .get(&head_key)?
+        .get("type")?;
     let mut current = entry.clone();
     for seg in iter {
         current = traverse_type(&current, &seg)?;

@@ -172,7 +172,9 @@ mod tests {
         }
         let snap = log.snapshot();
         assert_eq!(
-            snap.iter().map(|e| e.action_name.clone()).collect::<Vec<_>>(),
+            snap.iter()
+                .map(|e| e.action_name.clone())
+                .collect::<Vec<_>>(),
             vec!["a2".to_owned(), "a3".into(), "a4".into()]
         );
     }

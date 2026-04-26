@@ -237,9 +237,7 @@ mod tests {
             .get_or_decode(&ImageSource::DataUrl("not a data url".into()))
             .is_none());
         assert!(cache
-            .get_or_decode(&ImageSource::DataUrl(
-                "data:image/png,not-base64".into()
-            ))
+            .get_or_decode(&ImageSource::DataUrl("data:image/png,not-base64".into()))
             .is_none());
     }
 

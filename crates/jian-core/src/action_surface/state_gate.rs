@@ -316,10 +316,16 @@ mod tests {
         );
         let cache = Rc::new(ExpressionCache::new());
         let gate = RuntimeStateGate::new(&doc, &state, cache);
-        assert!(!gate.allows("submit"), "ready=false → !ready=true → disabled → blocked");
+        assert!(
+            !gate.allows("submit"),
+            "ready=false → !ready=true → disabled → blocked"
+        );
 
         state.app_set("ready", serde_json::json!(true));
-        assert!(gate.allows("submit"), "ready=true → !ready=false → enabled → allowed");
+        assert!(
+            gate.allows("submit"),
+            "ready=true → !ready=false → enabled → allowed"
+        );
     }
 
     #[test]

@@ -122,7 +122,7 @@ mod tests {
     fn execute_error_serialises_to_spec_shape() {
         // `{ kind: "NotAvailable", reason: "state_gated" }` per §5.3.
         let err = ExecuteError::state_gated();
-        let v = serde_json::to_value(&err).unwrap();
+        let v = serde_json::to_value(err).unwrap();
         assert_eq!(v["kind"], "NotAvailable");
         assert_eq!(v["reason"], "state_gated");
     }

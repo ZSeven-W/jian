@@ -22,8 +22,8 @@ use jian_core::render::RenderBackend;
 use jian_skia::surface::SkiaSurface;
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::time::Instant;
 use std::time::Duration;
+use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -137,11 +137,7 @@ impl RunApp {
         // 1. Collect draw ops and rasterize via SkiaBackend. The canvas
         // is scaled by DPR so logical-unit rects fill physical pixels.
         let ops = if let Some(doc) = self.host.runtime.document.as_ref() {
-            collect_draws_with_state(
-                doc,
-                &self.host.runtime.layout,
-                &self.host.runtime.state,
-            )
+            collect_draws_with_state(doc, &self.host.runtime.layout, &self.host.runtime.state)
         } else {
             Vec::new()
         };

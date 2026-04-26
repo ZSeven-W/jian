@@ -351,10 +351,7 @@ fn wrap_to_lines(
 /// when shaping ran successfully; the single-line fallback runs
 /// when this path returns `false` (e.g. font manager unavailable).
 #[cfg(feature = "textlayout")]
-fn draw_text_paragraph(
-    canvas: &skia_safe::Canvas,
-    run: &jian_core::render::TextRun,
-) -> bool {
+fn draw_text_paragraph(canvas: &skia_safe::Canvas, run: &jian_core::render::TextRun) -> bool {
     use jian_core::render::TextAlign;
     use skia_safe::textlayout::{
         FontCollection, ParagraphBuilder, ParagraphStyle, TextAlign as SkTextAlign, TextStyle,

@@ -120,11 +120,7 @@ impl MeasureBackend for EstimateBackend {
             Some(budget) => {
                 if natural_w > budget + 0.5 && budget > 0.0 {
                     let lines = (natural_w / budget).ceil().max(1.0);
-                    (
-                        budget,
-                        max_size * line_mult * lines,
-                        lines as u16,
-                    )
+                    (budget, max_size * line_mult * lines, lines as u16)
                 } else {
                     let lines = content.lines().count().max(1) as u16;
                     (natural_w, max_size * line_mult * lines as f32, lines)

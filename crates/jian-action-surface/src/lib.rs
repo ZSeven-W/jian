@@ -42,9 +42,7 @@ pub mod transport;
 pub use audit::{
     hash_params, ActionAuditLog, ActionSurfaceAuditEntry, AuditVerdict, ReasonCode, SessionId,
 };
-pub use error::{
-    BusyReason, ExecuteError, ExecutionReason, NotAvailableReason, ValidationReason,
-};
+pub use error::{BusyReason, ExecuteError, ExecutionReason, NotAvailableReason, ValidationReason};
 pub use list::{list_actions, ListOptions, ListResponse, ListedAction, PageScope};
 pub use runtime_dispatch::RuntimeDispatcher;
 
@@ -579,8 +577,7 @@ mod tests {
     fn audit_records_unknown_action() {
         let doc = fixture();
         let log = Rc::new(ActionAuditLog::new(10));
-        let mut surface =
-            ActionSurface::from_document(&doc, &[0u8; 16]).with_audit(log.clone());
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]).with_audit(log.clone());
         let mut sink = SinkDispatcher;
         surface.execute("home.does_not_exist", None, &mut sink);
         let snap = log.snapshot();
@@ -630,7 +627,10 @@ mod tests {
         // Now the same action with the gate open should still succeed.
         let pass = ClosureGate(|_: &str| true);
         let out = surface.execute_with_gate("home.plus", None, &mut sink, &pass);
-        assert!(matches!(out, ExecuteOutcome::Ok), "bucket should still be full");
+        assert!(
+            matches!(out, ExecuteOutcome::Ok),
+            "bucket should still be full"
+        );
     }
 
     #[test]
@@ -652,8 +652,7 @@ mod tests {
         )
         .unwrap();
         let log = Rc::new(ActionAuditLog::new(10));
-        let mut surface =
-            ActionSurface::from_document(&doc, &[0u8; 16]).with_audit(log.clone());
+        let mut surface = ActionSurface::from_document(&doc, &[0u8; 16]).with_audit(log.clone());
         let mut sink = SinkDispatcher;
         surface.execute("home.plus", None, &mut sink);
         let snap = log.snapshot();
