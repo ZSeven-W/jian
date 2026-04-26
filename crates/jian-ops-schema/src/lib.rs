@@ -6,6 +6,7 @@ pub mod document;
 pub mod error;
 pub mod events;
 pub mod expression;
+pub mod font_plan;
 pub mod gestures;
 pub mod lifecycle;
 pub mod logic_module;
