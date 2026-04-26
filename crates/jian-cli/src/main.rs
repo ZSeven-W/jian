@@ -94,6 +94,13 @@ pub struct DevArgs {
     pub size: Option<String>,
     #[arg(long)]
     pub title: Option<String>,
+    /// Open a stdio MCP server on this process's stdin/stdout while
+    /// the window is running. AI clients can drive `tools/list` /
+    /// `tools/call` against the live, hot-reloading document.
+    /// Requires the `mcp` cargo feature.
+    #[cfg(feature = "mcp")]
+    #[arg(long, default_value_t = false)]
+    pub mcp: bool,
 }
 
 #[derive(Parser, Debug)]

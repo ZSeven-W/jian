@@ -47,9 +47,11 @@ impl DesktopHost {
     /// Blocks the calling thread; returns `Ok(())` on clean shutdown.
     pub fn run(self) -> Result<(), winit::error::EventLoopError> {
         let event_loop = EventLoop::new()?;
-        // Dev mode (reload_rx attached) polls ~5×/sec; otherwise sleep
-        // until winit gets a real event so idle CPU stays at zero.
-        let initial_flow = if self.reload_rx.is_some() {
+        // Dev / MCP modes poll ~5×/sec so the run loop stays warm for
+        // file events + bridge drains; default keeps the original
+        // `Wait` so idle CPU is zero.
+        let needs_polling = self.reload_rx.is_some() || self.has_mcp_drain();
+        let initial_flow = if needs_polling {
             ControlFlow::WaitUntil(Instant::now() + RELOAD_POLL_INTERVAL)
         } else {
             ControlFlow::Wait
@@ -57,6 +59,16 @@ impl DesktopHost {
         event_loop.set_control_flow(initial_flow);
         let mut app = RunApp::new(self);
         event_loop.run_app(&mut app)
+    }
+
+    #[cfg(feature = "mcp")]
+    fn has_mcp_drain(&self) -> bool {
+        self.mcp_drain.is_some()
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    fn has_mcp_drain(&self) -> bool {
+        false
     }
 }
 
@@ -421,8 +433,22 @@ impl ApplicationHandler for RunApp {
                     needs_redraw = true;
                 }
             }
-            // Re-arm the polling timer so we wake again even when no
-            // user input arrived.
+        }
+
+        // MCP bridge drain (cfg-gated). Each pending Request maps to a
+        // one-shot reply; failures to send back surface as the bridge
+        // worker dropping its receiver, which is fine — we just skip.
+        // Bridge dispatch can mutate state, so request a redraw if we
+        // actually executed an action.
+        #[cfg(feature = "mcp")]
+        if self.drain_mcp_requests() {
+            needs_redraw = true;
+        }
+
+        // Re-arm the polling timer when either reload or mcp wired the
+        // host into poll-mode; default Wait stays untouched.
+        let needs_polling = self.host.reload_rx.is_some() || self.has_mcp_drain();
+        if needs_polling {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + RELOAD_POLL_INTERVAL,
             ));
@@ -461,6 +487,77 @@ impl RunApp {
             .map_err(|e| format!("layout: {:?}", e))?;
         self.host.runtime.viewport.size = make_size(logical.0, logical.1);
         self.host.runtime.rebuild_spatial();
+        // Refresh the MCP action set so AI clients see the new
+        // aiNames immediately after save (no `tools/list` cache to
+        // invalidate — rmcp re-queries on demand).
+        #[cfg(feature = "mcp")]
+        if let Some(surface) = self.host.mcp_surface.as_mut() {
+            if let Some(doc) = self.host.runtime.document.as_ref() {
+                surface.refresh(&doc.schema, &self.host.mcp_salt);
+            }
+        }
         Ok(())
+    }
+
+    fn has_mcp_drain(&self) -> bool {
+        #[cfg(feature = "mcp")]
+        {
+            self.host.mcp_drain.is_some()
+        }
+        #[cfg(not(feature = "mcp"))]
+        {
+            false
+        }
+    }
+
+    /// Drain the MCP bridge once per `about_to_wait`. Returns `true`
+    /// iff we executed at least one action (caller redraws).
+    /// `list_available_actions` doesn't mutate state and doesn't
+    /// trigger a redraw.
+    #[cfg(feature = "mcp")]
+    fn drain_mcp_requests(&mut self) -> bool {
+        use jian_action_surface::mcp::Request;
+        use jian_action_surface::{AlwaysAllow, RuntimeDispatcher};
+        let mut executed = false;
+        let Some(drain) = self.host.mcp_drain.as_mut() else {
+            return false;
+        };
+        let pending: Vec<Request> = drain.drain();
+        for req in pending {
+            if !req.worker_listening() {
+                // Client disconnected mid-call — spec §10 wants the
+                // surface untouched in that case.
+                continue;
+            }
+            match req {
+                Request::List { opts, reply } => {
+                    let Some(surface) = self.host.mcp_surface.as_ref() else {
+                        continue;
+                    };
+                    let _ = reply.send(surface.list(opts));
+                }
+                Request::Execute {
+                    name,
+                    params,
+                    reply,
+                } => {
+                    let Some(surface) = self.host.mcp_surface.as_mut() else {
+                        continue;
+                    };
+                    let mut dispatcher = RuntimeDispatcher::new(&mut self.host.runtime);
+                    let outcome = surface.execute_with_gate(
+                        &name,
+                        params.as_ref(),
+                        &mut dispatcher,
+                        &AlwaysAllow,
+                    );
+                    if matches!(outcome, jian_action_surface::ExecuteOutcome::Ok) {
+                        executed = true;
+                    }
+                    let _ = reply.send(outcome);
+                }
+            }
+        }
+        executed
     }
 }

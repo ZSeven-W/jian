@@ -24,10 +24,24 @@
 //! own synthesis path. Tests that only care about gating use
 //! `SinkDispatcher`.
 //!
-//! No MCP transport here yet — that's gated behind the future `mcp`
-//! cargo feature with rmcp + tokio. The Rust API is enough for
-//! in-process use (jian-host-desktop dev panel, OpenPencil editor
-//! preview).
+//! # MCP transport (`mcp` feature)
+//!
+//! Enable the `mcp` cargo feature to expose the surface over rmcp's
+//! stdio transport. The module split is intentional: the in-process
+//! API in this crate stays free of tokio + rmcp, and a tiny worker-
+//! thread bridge ([`mcp::Bridge`] + [`mcp::Drain`]) hands queued
+//! requests to the host's main loop one frame at a time. Hosts call
+//! [`mcp::spawn_stdio_server`] once at startup and pass the returned
+//! `Drain` to their integration (`jian-host-desktop`'s
+//! `DesktopHost::with_mcp` is the reference shape; `jian dev --mcp`
+//! exposes the same wiring on the CLI).
+//!
+//! Wire-level shape: `tools/list_available_actions` / `tools/execute_action`
+//! reply with `{ ok: true } | { ok: false, error: { kind, reason } }` —
+//! locked down by `mcp::tools::tests::execute_outcome_wire_form_does_not_leak_internal_state`.
+//! Audit rows ride the same `ActionAuditLog` as the in-process API,
+//! tagged with `session_id = "mcp"` by default. Without the feature
+//! flag, none of this code compiles into the crate.
 
 pub mod audit;
 pub mod concurrency;

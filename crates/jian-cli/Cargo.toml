@@ -15,11 +15,16 @@ description  = "Command-line toolchain for the Jian runtime (.op files)"
 # Disable for a headless-only build (`cargo build --no-default-features`).
 default = ["player"]
 player  = ["dep:jian-host-desktop", "dep:notify"]
+# `jian dev --mcp` flag. Pulls the MCP server from
+# `jian-action-surface` + the host's mcp drain integration. Off by
+# default so the headless / no-rmcp build path stays tight.
+mcp     = ["player", "jian-host-desktop/mcp", "dep:jian-action-surface"]
 
 [dependencies]
 jian-core        = { path = "../jian-core" }
 jian-ops-schema  = { path = "../jian-ops-schema" }
 jian-host-desktop = { path = "../jian-host-desktop", optional = true, features = ["run"] }
+jian-action-surface = { path = "../jian-action-surface", optional = true, features = ["mcp"] }
 clap             = { version = "4", features = ["derive"] }
 anyhow           = "1"
 serde            = { workspace = true }

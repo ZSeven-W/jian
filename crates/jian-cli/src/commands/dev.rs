@@ -133,9 +133,29 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
         initial_size: size(w, h),
         menu: None,
     };
-    let host = DesktopHost::with_config(rt, cfg)
+    // `mut` is only needed when the `mcp` feature reassigns `host`
+    // to wire the bridge — silence the warning on default builds.
+    #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
+    let mut host = DesktopHost::with_config(rt, cfg)
         .with_default_menu()
         .with_reloader(rx);
+
+    // `--mcp`: spawn an rmcp stdio server on a worker thread, hand
+    // its `Drain` to the host so `about_to_wait` services bridge
+    // requests against the live runtime. The `ServerHandle` is held
+    // until the run loop returns; dropping it cancels the worker +
+    // joins the thread.
+    #[cfg(feature = "mcp")]
+    let _mcp_handle = if args.mcp {
+        let (drain, handle) = jian_action_surface::mcp::spawn_stdio_server()
+            .map_err(|e| anyhow!("spawn MCP stdio server: {}", e))?;
+        host = host.with_mcp(drain, [0u8; 16]);
+        eprintln!("jian dev: MCP stdio server attached on stdin/stdout");
+        Some(handle)
+    } else {
+        None
+    };
+
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)
 }

@@ -11,6 +11,11 @@ use jian_ops_schema::document::PenDocument;
 use jian_skia::SkiaBackend;
 use std::sync::mpsc::Receiver;
 
+#[cfg(feature = "mcp")]
+use jian_action_surface::mcp::Drain as McpDrain;
+#[cfg(feature = "mcp")]
+use jian_action_surface::{ActionSurface, BuildSalt};
+
 /// Channel that delivers new `.op` schemas to a running host. Used by
 /// `jian dev` to swap the document on file change without tearing down
 /// the window. The receiver lives on the event-loop thread; the
@@ -25,6 +30,20 @@ pub struct DesktopHost {
     /// documents and rebuild layout. `None` keeps the original
     /// `ControlFlow::Wait` behaviour (zero CPU when idle).
     pub reload_rx: Option<ReloadRx>,
+    /// Main-thread end of an MCP `Bridge`. The run loop drains it
+    /// once per `about_to_wait` and dispatches each request through
+    /// the `mcp_surface` / `RuntimeDispatcher` chain.
+    #[cfg(feature = "mcp")]
+    pub mcp_drain: Option<McpDrain>,
+    /// Live `ActionSurface` rebuilt on every hot-reload. Stays
+    /// `None` until `with_mcp` wires the bridge.
+    #[cfg(feature = "mcp")]
+    pub mcp_surface: Option<ActionSurface>,
+    /// Build salt used for action-name derivation. Held so the
+    /// reload path can `surface.refresh(doc, &salt)` without the
+    /// host author re-supplying it on every save.
+    #[cfg(feature = "mcp")]
+    pub mcp_salt: BuildSalt,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +78,12 @@ impl DesktopHost {
                 ..HostConfig::default()
             },
             reload_rx: None,
+            #[cfg(feature = "mcp")]
+            mcp_drain: None,
+            #[cfg(feature = "mcp")]
+            mcp_surface: None,
+            #[cfg(feature = "mcp")]
+            mcp_salt: [0u8; 16],
         }
     }
 
@@ -68,6 +93,12 @@ impl DesktopHost {
             backend: SkiaBackend::new(),
             config,
             reload_rx: None,
+            #[cfg(feature = "mcp")]
+            mcp_drain: None,
+            #[cfg(feature = "mcp")]
+            mcp_surface: None,
+            #[cfg(feature = "mcp")]
+            mcp_salt: [0u8; 16],
         }
     }
 
@@ -76,6 +107,30 @@ impl DesktopHost {
     /// pending reloads instead of sleeping on `ControlFlow::Wait`.
     pub fn with_reloader(mut self, rx: ReloadRx) -> Self {
         self.reload_rx = Some(rx);
+        self
+    }
+
+    /// Wire an MCP `Bridge::Drain` into the run loop. The host
+    /// builds an `ActionSurface` from the runtime's current document,
+    /// stores `salt` so each reload re-derives action names with the
+    /// same key, and drains queued requests once per `about_to_wait`.
+    /// Each request is dispatched against the live `Runtime` through
+    /// `RuntimeDispatcher`, exactly like the in-process API.
+    ///
+    /// Activating MCP also forces the run loop into the same
+    /// ~200ms-poll mode `with_reloader` uses so a quiet client still
+    /// gets serviced when no UI events arrive — `about_to_wait` runs
+    /// once per tick, drains the bridge, replies via the oneshot.
+    #[cfg(feature = "mcp")]
+    pub fn with_mcp(mut self, drain: McpDrain, salt: BuildSalt) -> Self {
+        let surface = self
+            .runtime
+            .document
+            .as_ref()
+            .map(|doc| ActionSurface::from_document(&doc.schema, &salt).with_session_id("mcp"));
+        self.mcp_drain = Some(drain);
+        self.mcp_surface = surface;
+        self.mcp_salt = salt;
         self
     }
 
@@ -136,5 +191,33 @@ mod tests {
             }
             other => panic!("expected app submenu first, got {other:?}"),
         }
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn with_mcp_builds_action_surface_when_runtime_has_document() {
+        // Sanity: the builder should derive an ActionSurface from the
+        // runtime's loaded document. A runtime without a document
+        // shouldn't crash; it just leaves `mcp_surface` None until the
+        // first hot-reload (which the run loop's `apply_reload` path
+        // re-derives from anyway).
+        let schema: jian_ops_schema::document::PenDocument = serde_json::from_str(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"plus", "semantics":{ "aiName":"plus" },
+                  "events":{ "onTap": [] }
+                }
+              ]}],
+              "children":[]
+            }"#,
+        )
+        .expect("fixture parses");
+        let rt = Runtime::new_from_document(schema).expect("runtime");
+        let (_bridge, drain) = jian_action_surface::mcp::Bridge::new();
+        let host = DesktopHost::new(rt, "Mcp").with_mcp(drain, [9u8; 16]);
+        assert!(host.mcp_drain.is_some(), "drain stored");
+        assert!(host.mcp_surface.is_some(), "surface derived from doc");
+        assert_eq!(host.mcp_salt, [9u8; 16], "salt held for reload re-derive");
     }
 }

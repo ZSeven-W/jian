@@ -117,10 +117,7 @@ fn full_protocol_round_trip_against_in_process_duplex() {
 
         // Client side: rmcp does the initialize handshake when
         // `().serve(...)` resolves.
-        let client = ()
-            .serve(client_io)
-            .await
-            .expect("client initialise");
+        let client = ().serve(client_io).await.expect("client initialise");
 
         // tools/list — should advertise both list_available_actions
         // and execute_action.
@@ -144,13 +141,8 @@ fn full_protocol_round_trip_against_in_process_duplex() {
             .await
             .expect("call list_available_actions");
         let list_payload = first_json(&listed);
-        let actions = list_payload["actions"]
-            .as_array()
-            .expect("actions array");
-        let names: Vec<&str> = actions
-            .iter()
-            .filter_map(|a| a["name"].as_str())
-            .collect();
+        let actions = list_payload["actions"].as_array().expect("actions array");
+        let names: Vec<&str> = actions.iter().filter_map(|a| a["name"].as_str()).collect();
         assert!(names.contains(&"home.plus"), "plus missing: {names:?}");
         assert!(
             names.contains(&"home.set_counter"),
@@ -229,10 +221,7 @@ fn full_protocol_round_trip_against_in_process_duplex() {
 
         // Tear down: cancel the client (drops its end of the duplex,
         // server `waiting()` resolves), then abort the drain.
-        client
-            .cancel()
-            .await
-            .expect("client cancel");
+        client.cancel().await.expect("client cancel");
         let _ = server_task.await;
         drain_task.abort();
     });
@@ -284,10 +273,7 @@ fn execute_action_handler_error_round_trips_per_spec_5_3() {
             }
         });
 
-        let client = ()
-            .serve(client_io)
-            .await
-            .expect("client init");
+        let client = ().serve(client_io).await.expect("client init");
 
         let body = call_execute(&client, "home.plus", None).await;
         assert_eq!(

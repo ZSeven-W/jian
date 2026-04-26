@@ -30,10 +30,19 @@ clipboard = ["dep:arboard"]
 # needed for headless / CI builds.
 menus = ["dep:muda"]
 
+# AI Action Surface integration. Wires `jian-action-surface`'s
+# `Bridge::Drain` into the run-loop's per-frame `about_to_wait` tick:
+# each pending MCP request is serviced against an `ActionSurface`
+# refreshed on every hot-reload. Off by default — only `jian dev
+# --mcp` (or a host author who explicitly opts in) pulls in the
+# rmcp/tokio shared libs.
+mcp = ["dep:jian-action-surface"]
+
 [dependencies]
 jian-core       = { path = "../jian-core" }
 jian-ops-schema = { path = "../jian-ops-schema" }
 jian-skia       = { path = "../jian-skia" }
+jian-action-surface = { path = "../jian-action-surface", optional = true, features = ["mcp"] }
 winit           = "0.30"
 async-trait     = "0.1"
 serde           = { workspace = true }
