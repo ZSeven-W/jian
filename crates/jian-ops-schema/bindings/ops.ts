@@ -48,7 +48,7 @@ export type EllipseNode = { width: SizingBehavior | null, height: SizingBehavior
  * `onBlur`) apply only to input-kind nodes. `on_key` is keyboard, `on_reach_end`
  * is list-scroll-end, etc.
  */
-export type EventHandlers = { onTap: Array<Action> | null, onDoubleTap: Array<Action> | null, onLongPress: Array<Action> | null, onPanStart: Array<Action> | null, onPanUpdate: Array<Action> | null, onPanEnd: Array<Action> | null, onScaleStart: Array<Action> | null, onScaleUpdate: Array<Action> | null, onScaleEnd: Array<Action> | null, onHoverEnter: Array<Action> | null, onHoverLeave: Array<Action> | null, onChange: Array<Action> | null, onSubmit: Array<Action> | null, onFocus: Array<Action> | null, onBlur: Array<Action> | null, onKey: Array<Action> | null, onScroll: Array<Action> | null, onReachEnd: Array<Action> | null, };
+export type EventHandlers = { onTap: Array<Action> | null, onDoubleTap: Array<Action> | null, onLongPress: Array<Action> | null, onPanStart: Array<Action> | null, onPanUpdate: Array<Action> | null, onPanEnd: Array<Action> | null, onScaleStart: Array<Action> | null, onScaleUpdate: Array<Action> | null, onScaleEnd: Array<Action> | null, onRotateStart: Array<Action> | null, onRotateUpdate: Array<Action> | null, onRotateEnd: Array<Action> | null, onHoverEnter: Array<Action> | null, onHoverLeave: Array<Action> | null, onChange: Array<Action> | null, onSubmit: Array<Action> | null, onFocus: Array<Action> | null, onBlur: Array<Action> | null, onKey: Array<Action> | null, onScroll: Array<Action> | null, onReachEnd: Array<Action> | null, };
 
 /**
  * A Tier 1 expression source — represented as a raw string.

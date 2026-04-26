@@ -213,23 +213,31 @@ impl PointerRouter {
             if matches!(recog.state(), RecognizerState::Rejected) {
                 continue;
             }
+            // Snapshot the pre-state so we can detect the
+            // Possible→Claimed transition (vs. already-Claimed
+            // sending Update events). Without this, the too_late
+            // arbitration would re-fire on every Update, where it
+            // *always* sees per-pointer arenas as resolved (they
+            // were cancelled at the original claim) and would reject
+            // a perfectly-valid in-flight gesture.
+            let prev_state = recog.state();
             let mut pending = None;
             let mut handle = ArenaHandle {
                 pending_semantic: &mut pending,
             };
             let new_state = recog.handle_pointer(event, &mut handle);
-            if let Some(ev) = pending {
-                out.push(ev);
-            }
             // Re-borrow-free: clone the participant list before we
             // mutate per-pointer arenas.
             let participants: Vec<u32> = self.shared.get(&rid).cloned().unwrap_or_default();
-            if matches!(new_state, RecognizerState::Claimed) {
+            let claim_transition = matches!(new_state, RecognizerState::Claimed)
+                && !matches!(prev_state, RecognizerState::Claimed);
+            if claim_transition {
                 // Plan 5 §B.2: any already-resolved arena means the
-                // multi claim is too late. Reject the recognizer; no
-                // event emitted (the Start payload above is followed
-                // by a quiet Reject — recognizer impls only emit
-                // Start once, so no orphan End).
+                // multi claim is too late. Reject the recognizer and
+                // SUPPRESS the pending Start event — without this, an
+                // observer would see ScaleStart / RotateStart for a
+                // gesture that immediately rejected, with no matching
+                // End. Codex round 26 Q1.
                 let too_late = participants
                     .iter()
                     .any(|p| self.arenas.get(p).map(Arena::is_resolved).unwrap_or(false));
@@ -247,6 +255,11 @@ impl PointerRouter {
                         }
                     }
                 }
+            }
+            // Emit AFTER the too_late check so a rejected claim
+            // doesn't leak its Start payload onto the wire.
+            if let Some(ev) = pending {
+                out.push(ev);
             }
         }
     }
