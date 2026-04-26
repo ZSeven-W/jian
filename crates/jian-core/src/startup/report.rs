@@ -38,8 +38,10 @@ impl PhaseTiming {
 pub struct StartupReport {
     pub phases: Vec<PhaseTiming>,
     /// Time from driver entry to `EventPumpReady` end, in milliseconds.
-    /// Filled in by [`StartupDriver::run`] once the terminal phase completes;
-    /// stays `0.0` if the run aborted before reaching `EventPumpReady`.
+    /// Filled in by `StartupDriver::run` (in the sibling
+    /// [`crate::startup::driver`] module) once the terminal phase
+    /// completes; stays `0.0` if the run aborted before reaching
+    /// `EventPumpReady`.
     pub first_interactive_ms: f64,
 }
 

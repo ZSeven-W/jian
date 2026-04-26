@@ -11,7 +11,9 @@
 mod driver;
 mod phase;
 mod report;
+mod spawn;
 
 pub use driver::{PhaseResult, StartupConfig, StartupDriver, StartupError};
 pub use phase::StartupPhase;
 pub use report::{PhaseTiming, StartupReport};
+pub use spawn::{CooperativeSpawn, SpawnHandle};
