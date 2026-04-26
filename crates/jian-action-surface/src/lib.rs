@@ -29,9 +29,9 @@
 //! Enable the `mcp` cargo feature to expose the surface over rmcp's
 //! stdio transport. The module split is intentional: the in-process
 //! API in this crate stays free of tokio + rmcp, and a tiny worker-
-//! thread bridge ([`mcp::Bridge`] + [`mcp::Drain`]) hands queued
+//! thread bridge (`mcp::Bridge` + `mcp::Drain`) hands queued
 //! requests to the host's main loop one frame at a time. Hosts call
-//! [`mcp::spawn_stdio_server`] once at startup and pass the returned
+//! `mcp::spawn_stdio_server` once at startup and pass the returned
 //! `Drain` to their integration (`jian-host-desktop`'s
 //! `DesktopHost::with_mcp` is the reference shape; `jian dev --mcp`
 //! exposes the same wiring on the CLI).
