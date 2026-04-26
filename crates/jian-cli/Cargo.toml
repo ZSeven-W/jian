@@ -31,6 +31,8 @@ serde            = { workspace = true }
 serde_json       = { workspace = true }
 zip              = { version = "2.2", default-features = false, features = ["deflate"] }
 notify           = { version = "6", optional = true }
+# `jian perf startup` drives the StartupDriver via futures::executor::block_on.
+futures          = "0.3"
 
 [dev-dependencies]
 assert_cmd      = "2"

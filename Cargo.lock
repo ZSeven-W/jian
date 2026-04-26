@@ -1703,6 +1703,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "clap",
+ "futures",
  "jian-action-surface",
  "jian-core",
  "jian-host-desktop",
@@ -1790,6 +1791,7 @@ name = "jian-skia"
 version = "0.0.1"
 dependencies = [
  "base64",
+ "futures",
  "jian-core",
  "jian-host-desktop",
  "jian-ops-schema",

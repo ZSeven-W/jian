@@ -14,7 +14,7 @@
 //! `--no-default-features` builds a headless toolchain (check / pack /
 //! unpack / new) suitable for CI containers without a display.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -51,6 +51,43 @@ enum Command {
     /// it on every save. Runtime state survives the reload.
     #[cfg(feature = "player")]
     Dev(DevArgs),
+    /// Cold-start performance measurements. Subcommand `startup`
+    /// runs the StartupDriver phase graph N times and prints a
+    /// per-phase aggregated table (or JSON via `--format json`).
+    Perf(PerfArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct PerfArgs {
+    #[command(subcommand)]
+    pub cmd: PerfCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PerfCommand {
+    /// Measure cold-start phase timings (Plan 19 Task 8).
+    Startup(PerfStartupArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct PerfStartupArgs {
+    pub path: PathBuf,
+    /// Number of independent driver runs to aggregate. Min/median/p95
+    /// are reported across all runs.
+    #[arg(long, default_value_t = 10)]
+    pub runs: usize,
+    /// Output format: `table` (default, human-readable) or `json`.
+    /// Validated at parse time — a typo fails before the run loop
+    /// rather than silently defaulting and producing the wrong shape
+    /// for a CI consumer.
+    #[arg(long, value_enum, default_value_t = PerfFormat::Table)]
+    pub format: PerfFormat,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum PerfFormat {
+    Table,
+    Json,
 }
 
 #[derive(Parser, Debug)]
@@ -126,6 +163,9 @@ fn main() -> ExitCode {
         Command::Player(args) => commands::player::run(args),
         #[cfg(feature = "player")]
         Command::Dev(args) => commands::dev::run(args),
+        Command::Perf(args) => match args.cmd {
+            PerfCommand::Startup(a) => commands::perf::run(a),
+        },
     };
 
     match result {
