@@ -26,6 +26,20 @@ use skia_safe::{
 };
 use std::rc::Rc;
 
+/// Wrap budget passed to `paragraph.layout()` when the caller wants
+/// the natural single-line extent. Skia requires a finite width
+/// (NaN / infinity panic), so we use a value far larger than any
+/// realistic UI surface — 1 million logical pixels — to guarantee
+/// no wrap happens. `paragraph.max_intrinsic_width()` then reports
+/// the unwrapped shaped width regardless of the budget.
+const NATURAL_LAYOUT_BUDGET: f32 = 1.0e6;
+
+/// Phase 1 hardcoded font width axis. `StyledRun` doesn't currently
+/// carry a width (compressed / extended) — when it does, swap this
+/// for `run.font_width` and bump the schema. Until then every shaped
+/// run uses the typeface's `Normal` width.
+const FONT_WIDTH: Width = Width::NORMAL;
+
 /// Measure backend that defers to skia's paragraph shaper.
 ///
 /// Construct once at host startup, share the same `Rc` across the
@@ -88,7 +102,7 @@ impl MeasureBackend for SkiaMeasure {
                 FontStyleKind::Italic => Slant::Italic,
                 FontStyleKind::Normal => Slant::Upright,
             };
-            ts.set_font_style(FontStyle::new(weight, Width::NORMAL, slant));
+            ts.set_font_style(FontStyle::new(weight, FONT_WIDTH, slant));
             if run.letter_spacing != 0.0 {
                 ts.set_letter_spacing(run.letter_spacing);
             }
@@ -102,11 +116,10 @@ impl MeasureBackend for SkiaMeasure {
         }
 
         let mut paragraph = builder.build();
-        // Skia's `layout` requires a finite width. When the caller
-        // wants the natural extent we use a very large budget so no
-        // wrapping happens; `max_intrinsic_width` then reports the
-        // shaped single-line width.
-        let layout_width = req.max_width.unwrap_or(1.0e6);
+        // `NATURAL_LAYOUT_BUDGET` keeps the wrap budget finite per
+        // Skia's contract; `max_intrinsic_width` then reports the
+        // shaped single-line width regardless of the budget value.
+        let layout_width = req.max_width.unwrap_or(NATURAL_LAYOUT_BUDGET);
         paragraph.layout(layout_width);
 
         let width = match req.max_width {

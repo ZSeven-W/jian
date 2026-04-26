@@ -39,8 +39,8 @@ const TEXT_DOC: &str = r##"{
 }"##;
 
 fn rt() -> Runtime {
-    let schema = load_str(TEXT_DOC).unwrap().value;
-    Runtime::new_from_document(schema).unwrap()
+    let schema = load_str(TEXT_DOC).expect("TEXT_DOC parses").value;
+    Runtime::new_from_document(schema).expect("runtime builds from TEXT_DOC")
 }
 
 #[test]
@@ -49,10 +49,16 @@ fn skia_measure_layout_agrees_with_paragraph_intrinsic_width() {
     let mut runtime = rt();
     runtime
         .build_layout_with(measure.clone(), (600.0, 80.0))
-        .unwrap();
+        .expect("build_layout_with(SkiaMeasure) succeeds");
     runtime.rebuild_spatial();
 
-    let key = runtime.document.as_ref().unwrap().tree.get("label").unwrap();
+    let key = runtime
+        .document
+        .as_ref()
+        .expect("document loaded")
+        .tree
+        .get("label")
+        .expect("'label' node id resolves");
     let laid_out = runtime.layout.node_rect(key).expect("text rect");
 
     // Independently ask the same backend for the same paragraph's
