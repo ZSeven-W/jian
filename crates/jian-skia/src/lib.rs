@@ -39,6 +39,7 @@ pub(crate) mod image;
 #[cfg(feature = "textlayout")]
 pub mod measure;
 pub mod path;
+pub mod startup;
 pub mod surface;
 
 pub use backend::SkiaBackend;

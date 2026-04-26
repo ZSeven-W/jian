@@ -27,6 +27,11 @@ jian-core       = { path = "../jian-core" }
 jian-ops-schema = { path = "../jian-ops-schema" }
 skia-safe       = "0.78"
 base64          = "0.22"
+# Used by `startup::spawn_blocking_init` for the worker → main async
+# bridge (`futures::channel::oneshot`). The receiver is awaited inside
+# `jian-core::startup::StartupDriver` phase impls, which already use
+# futures-rs primitives.
+futures         = "0.3"
 
 [dev-dependencies]
 serde_json        = { workspace = true }
