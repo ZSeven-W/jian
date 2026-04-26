@@ -12,6 +12,7 @@ pub mod lifecycle;
 pub mod logic_module;
 pub mod navigation;
 pub mod node;
+pub mod pack;
 pub mod page;
 pub mod routes;
 pub mod semantics;
