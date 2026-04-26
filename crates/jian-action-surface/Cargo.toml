@@ -24,7 +24,7 @@ agent-surface = []
 # `ActionSurface` via a typed mpsc bridge. No-op when off — the
 # in-process API stays the same. See plan
 # `2026-04-25-jian-action-surface-mcp.md`.
-mcp = ["dep:rmcp", "dep:tokio"]
+mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
 
 [dependencies]
 jian-core       = { path = "../jian-core" }
@@ -38,7 +38,12 @@ blake3          = "1.5"
 
 # rmcp transports + tokio runtime are gated behind `mcp`; default
 # builds drop them.
-rmcp            = { version = "0.8", optional = true, features = ["server", "transport-io"] }
+rmcp            = { version = "0.8", optional = true, features = ["server", "transport-io", "macros"] }
+# rmcp-macros generate `schemars::...` paths; we re-import via rmcp at
+# runtime but the proc-macro needs `schemars` as a direct dep to match
+# rmcp 0.8's bundled v1.x version (workspace `schemars` is 0.8 — the
+# different API the schemars-1 macros expect would mismatch).
+schemars        = { version = "1.2", optional = true }
 tokio           = { version = "1", optional = true, features = ["rt", "macros", "io-std", "sync"] }
 
 [dev-dependencies]

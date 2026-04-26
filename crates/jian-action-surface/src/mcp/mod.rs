@@ -6,3 +6,7 @@
 //! `openpencil-docs/superpowers/plans/2026-04-25-jian-action-surface-mcp.md`.
 
 pub mod bridge;
+pub mod tools;
+
+pub use bridge::{Bridge, Drain, Request};
+pub use tools::{ExecuteRequest, JianToolServer, ListRequest, WirePageScope};

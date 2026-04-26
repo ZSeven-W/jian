@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ListResponse {
     pub actions: Vec<ListedAction>,
     pub total: usize,
@@ -15,6 +16,7 @@ pub struct ListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ListedAction {
     pub name: String,
     pub description: String,

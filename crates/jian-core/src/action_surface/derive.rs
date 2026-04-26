@@ -18,8 +18,9 @@
 //!   `direction` parameter)
 //! - `events.onReachEnd` / `events.onScroll` → `load_more_<slug>`
 //!
-//! Key actions (Enter/Esc → confirm_/dismiss_<slug>) still deferred
-//! until KeyDown handlers gain authored intent metadata.
+//! Key actions (Enter/Esc → `confirm_<slug>` / `dismiss_<slug>`)
+//! also derive from `events.onKey`; the dispatcher synthesises a
+//! `KeyDown` against the source node so handlers see `$event.key`.
 
 use super::naming::{compute_slug, has_ai_name, short_hash};
 use super::types::{

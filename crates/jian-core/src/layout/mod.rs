@@ -1,17 +1,17 @@
 //! LayoutEngine — wraps `taffy::TaffyTree` and maps SlotMap keys ↔
 //! taffy NodeIds.
 //!
-//! Text leaves measure through a pluggable [`MeasureBackend`]
-//! ([`measure`] module). The default `EstimateBackend` is a
-//! character-count heuristic — fast, font-engine-agnostic, accurate
-//! to ~10% on Latin script. Hosts that want real shaping (CJK / emoji
-//! glyph width, kerning, custom-font metrics) install an alternative
-//! backend at runtime via [`Runtime::build_layout_with`]; jian-skia
-//! ships `SkiaMeasure` under the `textlayout` cargo feature.
+//! Text leaves measure through a pluggable [`measure::MeasureBackend`].
+//! The default [`measure::EstimateBackend`] is a character-count
+//! heuristic — fast, font-engine-agnostic, accurate to ~10% on Latin
+//! script. Hosts that want real shaping (CJK / emoji glyph width,
+//! kerning, custom-font metrics) install an alternative backend at
+//! runtime via `Runtime::build_layout_with`; jian-skia ships
+//! `SkiaMeasure` under the `textlayout` cargo feature.
 //!
 //! Wrapping is governed by the text node's `text_growth` field
-//! (`Auto` / `FixedWidth` / `FixedWidthHeight`). See
-//! [`measure_text_for_taffy`] for the budget-resolution rules.
+//! (`Auto` / `FixedWidth` / `FixedWidthHeight`); the budget-resolution
+//! rules live in the private `measure_text_for_taffy` callback.
 
 pub mod measure;
 pub mod resolve;

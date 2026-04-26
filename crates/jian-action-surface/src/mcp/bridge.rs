@@ -157,9 +157,7 @@ mod tests {
             let (bridge, mut drain) = Bridge::new();
             let bridge2 = bridge.clone();
 
-            let task = tokio::spawn(async move {
-                bridge2.list(ListOptions::default()).await
-            });
+            let task = tokio::spawn(async move { bridge2.list(ListOptions::default()).await });
 
             // Drain on "main thread", reply with a ListResponse.
             let req = loop {
@@ -194,9 +192,8 @@ mod tests {
         rt.block_on(async {
             let (bridge, mut drain) = Bridge::new();
 
-            let task = tokio::spawn(async move {
-                bridge.execute("home.does_not_exist", None).await
-            });
+            let task =
+                tokio::spawn(async move { bridge.execute("home.does_not_exist", None).await });
 
             let req = loop {
                 if let Some(req) = drain.try_recv() {

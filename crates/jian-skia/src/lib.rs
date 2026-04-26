@@ -6,7 +6,7 @@
 //! through their own GPU-backed [`SkiaSurface`].
 //!
 //! Under the `textlayout` cargo feature this crate also exposes
-//! [`measure::SkiaMeasure`] — a `jian_core::layout::measure::MeasureBackend`
+//! `measure::SkiaMeasure` — a `jian_core::layout::measure::MeasureBackend`
 //! that defers to `skia_safe::textlayout::Paragraph`. Hosts wire
 //! it via `Runtime::build_layout_with` to align layout metrics
 //! with what the renderer paints.
