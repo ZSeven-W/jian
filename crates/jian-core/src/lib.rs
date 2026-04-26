@@ -28,6 +28,7 @@ pub mod runtime;
 pub mod scene;
 pub mod signal;
 pub mod spatial;
+pub mod startup;
 pub mod state;
 pub mod value;
 pub mod viewport;
