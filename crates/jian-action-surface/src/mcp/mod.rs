@@ -22,7 +22,11 @@
 //!     if !req.worker_listening() { continue; }
 //!     match req {
 //!         mcp::Request::List { opts, reply } => {
-//!             let _ = reply.send(surface.list(opts));
+//!             // Spec §10: MCP must filter dynamically hidden actions.
+//!             // Pass the same `state_gate` you use for execute so an
+//!             // AI client never sees an action it would then bounce
+//!             // off `state_gated`.
+//!             let _ = reply.send(surface.list_with_gate(opts, &state_gate));
 //!         }
 //!         mcp::Request::Execute { name, params, reply } => {
 //!             let mut dispatcher = RuntimeDispatcher::new(&mut runtime);
@@ -37,6 +41,19 @@
 //!     }
 //! }
 //! ```
+//!
+//! # List-then-execute TOCTOU
+//!
+//! `list_with_gate` filters by the live `bindings.visible` /
+//! `bindings.disabled` state at the moment of the call. State can
+//! change between the AI client receiving the listing and calling
+//! `execute_action` — a tap that flips a `visible` binding,
+//! a hot-reload, or a network state mutation. Clients MUST treat
+//! `state_gated` as a possible outcome of any `execute_action` call,
+//! even when the tool name appeared in the most recent
+//! `list_available_actions` response. The cost of cache-and-verify
+//! is one round-trip; spec §10 prefers that over leaking transient
+//! UI state through silent successes.
 //!
 //! # Audit + data-hiding (spec §8.1, §10)
 //!

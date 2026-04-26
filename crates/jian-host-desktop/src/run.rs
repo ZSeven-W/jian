@@ -600,10 +600,13 @@ impl RunApp {
                                     &runtime.state,
                                     runtime.expr_cache.clone(),
                                 );
+                                // `find_action` matches canonical names
+                                // AND aliases — same matcher
+                                // `execute_with_gate` uses, so an alias
+                                // can't bypass this pre-computed gate
+                                // verdict.
                                 surface
-                                    .actions()
-                                    .iter()
-                                    .find(|a| a.name.full() == name)
+                                    .find_action(&name)
                                     .map(|a| gate.allows(&a.source_node_id))
                                     // unknown_action is handled by the
                                     // surface itself — pretend "allowed"

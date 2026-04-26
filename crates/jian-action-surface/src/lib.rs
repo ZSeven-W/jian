@@ -241,6 +241,22 @@ impl ActionSurface {
         &self.actions
     }
 
+    /// Look up an action by canonical name *or* alias — same matcher
+    /// `execute_with_gate` uses internally. Hosts that need to query
+    /// per-action metadata (e.g. resolving the dynamic state gate
+    /// against the source node before constructing a `&mut Runtime`
+    /// borrow) should use this instead of iterating `actions()` —
+    /// otherwise an `aiAliases:` entry would silently miss the
+    /// lookup and bypass the host's gate verdict.
+    pub fn find_action(&self, name: &str) -> Option<&ActionDefinition> {
+        if let Some(a) = self.actions.iter().find(|a| a.name.full() == name) {
+            return Some(a);
+        }
+        self.actions
+            .iter()
+            .find(|a| a.aliases.iter().any(|al| al.full() == name))
+    }
+
     /// `list_available_actions` — never rate-limited (§7). Skips
     /// dynamic state-gate filtering — useful for in-process callers
     /// that already filter at the UI layer or for tests.
@@ -701,6 +717,41 @@ mod tests {
         assert_eq!(snap[0].reason_code, ReasonCode::Ok);
         assert!(snap[0].alias_used, "alias_used flag should be set");
         assert_eq!(snap[0].action_name, "home.renamed");
+    }
+
+    #[test]
+    fn find_action_matches_canonical_name_and_aliases() {
+        // Codex round 24 HIGH regression test: the MCP host's
+        // `drain_mcp_requests` resolves the dynamic state gate
+        // against the action's source_node_id BEFORE taking the
+        // `&mut Runtime` borrow needed to dispatch. If that
+        // pre-computed lookup misses an alias, the host falls
+        // through to `unwrap_or(true)` and dispatches a
+        // dynamically-hidden action that should have been gated.
+        // `find_action` MUST match aliases the same way
+        // `execute_with_gate` does.
+        let doc: PenDocument = serde_json::from_str(
+            r#"{
+              "version":"0.8.0",
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"btn",
+                  "semantics":{ "aiName":"renamed", "aiAliases":["plus"] },
+                  "events":{ "onTap": [ { "set": { "$state.x": "1" } } ] }
+                }
+              ]}],
+              "children":[]
+            }"#,
+        )
+        .unwrap();
+        let surface = ActionSurface::from_document(&doc, &[0u8; 16]);
+        // Canonical name resolves.
+        let canonical = surface.find_action("home.renamed").expect("canonical");
+        assert_eq!(canonical.source_node_id, "btn");
+        // Alias name resolves to the same definition.
+        let via_alias = surface.find_action("home.plus").expect("alias");
+        assert_eq!(via_alias.source_node_id, "btn");
+        // Unknown name misses cleanly.
+        assert!(surface.find_action("home.bogus").is_none());
     }
 
     #[test]
