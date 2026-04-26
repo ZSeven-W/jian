@@ -84,24 +84,16 @@ fn action_is_destructive(action: &Value, depth: usize) -> bool {
             }
             // Control-flow verbs — recurse into nested ActionLists,
             // bumping `depth` so a malicious deeply-nested structure
-            // can't blow the stack.
-            "if" => {
-                if recurse_branch(body.get("then"), depth + 1)
-                    || recurse_branch(body.get("else"), depth + 1)
-                {
-                    return true;
-                }
+            // can't blow the stack. Match-guards instead of nested
+            // `if` blocks keep clippy's `collapsible_if` happy on
+            // rust ≥ 1.95.
+            "if" if recurse_branch(body.get("then"), depth + 1)
+                || recurse_branch(body.get("else"), depth + 1) =>
+            {
+                return true;
             }
-            "for_each" => {
-                if recurse_branch(body.get("do"), depth + 1) {
-                    return true;
-                }
-            }
-            "parallel" | "race" => {
-                if scan_parallel_body(body, depth + 1) {
-                    return true;
-                }
-            }
+            "for_each" if recurse_branch(body.get("do"), depth + 1) => return true,
+            "parallel" | "race" if scan_parallel_body(body, depth + 1) => return true,
             _ => {}
         }
     }

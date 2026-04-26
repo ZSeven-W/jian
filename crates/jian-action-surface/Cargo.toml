@@ -19,8 +19,12 @@ default = ["agent-surface"]
 # whole crate); kept as a feature so future MCP/tokio work doesn't
 # silently bloat the binary for consumers that only want the API.
 agent-surface = []
-# Future MCP server (rmcp + tokio). Not implemented yet.
-mcp = []
+# MCP server transport (rmcp + tokio). Adds a stdio listener that
+# forwards `tools/list` and `tools/call` into the in-process
+# `ActionSurface` via a typed mpsc bridge. No-op when off — the
+# in-process API stays the same. See plan
+# `2026-04-25-jian-action-surface-mcp.md`.
+mcp = ["dep:rmcp", "dep:tokio"]
 
 [dependencies]
 jian-core       = { path = "../jian-core" }
@@ -31,6 +35,11 @@ thiserror       = { workspace = true }
 async-trait     = "0.1"
 futures         = "0.3"
 blake3          = "1.5"
+
+# rmcp transports + tokio runtime are gated behind `mcp`; default
+# builds drop them.
+rmcp            = { version = "0.8", optional = true, features = ["server", "transport-io"] }
+tokio           = { version = "1", optional = true, features = ["rt", "macros", "io-std", "sync"] }
 
 [dev-dependencies]
 serde_json      = { workspace = true }
