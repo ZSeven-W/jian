@@ -18,6 +18,7 @@ use crate::action::services::{
 use crate::action::{
     default_registry, ActionContext, CancellationToken, ExecOutcome, SharedRegistry,
 };
+use crate::binding::{BindingEffect, DeferredBindingQueue};
 use crate::capability::{
     from_schema_capability, AuditLog, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate,
     NullPermissionBroker, PermissionBroker,
@@ -58,6 +59,11 @@ pub struct Runtime {
     pub gestures: PointerRouter,
     pub actions: SharedRegistry,
     pub expr_cache: Rc<ExpressionCache>,
+    /// Bindings whose evaluation is deferred past first-paint. Schema
+    /// load pushes off-viewport bindings here; the host drains them via
+    /// [`Runtime::drain_deferred_bindings`] inside (or after) the
+    /// `EventPumpReady` startup phase. See `binding::DeferredBindingQueue`.
+    pub deferred_bindings: DeferredBindingQueue,
     pub network: Rc<dyn NetworkClient>,
     /// Live WebSocket sessions, populated by `ws_connect` / drained by
     /// `ws_close`. Shared with every `ActionContext` the runtime makes.
@@ -96,6 +102,7 @@ impl Runtime {
             gestures: PointerRouter::new(),
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
+            deferred_bindings: DeferredBindingQueue::new(),
             network: Rc::new(NullNetworkClient),
             ws_sessions: Rc::new(RefCell::new(std::collections::HashMap::new())),
             storage: Rc::new(NullStorageBackend),
@@ -160,6 +167,7 @@ impl Runtime {
             gestures: PointerRouter::new(),
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
+            deferred_bindings: DeferredBindingQueue::new(),
             network: Rc::new(NullNetworkClient),
             ws_sessions: Rc::new(RefCell::new(std::collections::HashMap::new())),
             storage: Rc::new(NullStorageBackend),
@@ -448,6 +456,27 @@ impl Runtime {
         // values before the host's next frame.
         self.scheduler.flush();
         outcome
+    }
+
+    /// Drain the deferred-binding queue into registered, reactive
+    /// `BindingEffect`s. Returns the freshly-registered effects, which
+    /// the caller must keep alive for the runtime's lifetime — dropping
+    /// a `BindingEffect` deregisters its underlying effect and breaks
+    /// reactivity for that binding.
+    ///
+    /// Plan 19 calls this from inside (or just after) the
+    /// `EventPumpReady` startup phase: schema load enqueues every
+    /// off-viewport binding, the critical-path phases finish first paint,
+    /// and only then do the deferred bindings get compiled + subscribed
+    /// — spreading the cost across post-paint frames.
+    #[must_use = "keep the returned BindingEffect handles alive; dropping them \
+                  deregisters the drained bindings and silently disables reactivity"]
+    pub fn drain_deferred_bindings(&mut self) -> Vec<BindingEffect> {
+        self.deferred_bindings.drain_into_effects(
+            &self.effects,
+            Rc::clone(&self.expr_cache),
+            Rc::clone(&self.state),
+        )
     }
 
     /// Build an `ActionContext` tied to this runtime's services. Exposed

@@ -33,7 +33,7 @@ pub mod state;
 pub mod value;
 pub mod viewport;
 
-pub use binding::BindingEffect;
+pub use binding::{BindingEffect, DeferredBindingQueue};
 pub use error::{CoreError, CoreResult};
 pub use runtime::Runtime;
 
