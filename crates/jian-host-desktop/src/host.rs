@@ -14,7 +14,9 @@ use std::sync::mpsc::Receiver;
 #[cfg(feature = "mcp")]
 use jian_action_surface::mcp::Drain as McpDrain;
 #[cfg(feature = "mcp")]
-use jian_action_surface::{ActionSurface, BuildSalt};
+use jian_action_surface::{ActionAuditLog, ActionSurface, BuildSalt};
+#[cfg(feature = "mcp")]
+use std::rc::Rc;
 
 /// Channel that delivers new `.op` schemas to a running host. Used by
 /// `jian dev` to swap the document on file change without tearing down
@@ -36,7 +38,8 @@ pub struct DesktopHost {
     #[cfg(feature = "mcp")]
     pub mcp_drain: Option<McpDrain>,
     /// Live `ActionSurface` rebuilt on every hot-reload. Stays
-    /// `None` until `with_mcp` wires the bridge.
+    /// `None` when `with_mcp` is called before a document loads;
+    /// `apply_reload` lazily builds it once the first schema arrives.
     #[cfg(feature = "mcp")]
     pub mcp_surface: Option<ActionSurface>,
     /// Build salt used for action-name derivation. Held so the
@@ -44,6 +47,12 @@ pub struct DesktopHost {
     /// host author re-supplying it on every save.
     #[cfg(feature = "mcp")]
     pub mcp_salt: BuildSalt,
+    /// Audit ring buffer attached to every fresh `ActionSurface` the
+    /// host derives from a document. Held here so reload-time
+    /// re-derivation reuses the same log (audit history survives
+    /// hot-reload, matching designer expectations for `jian dev`).
+    #[cfg(feature = "mcp")]
+    pub mcp_audit: Option<Rc<ActionAuditLog>>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +93,8 @@ impl DesktopHost {
             mcp_surface: None,
             #[cfg(feature = "mcp")]
             mcp_salt: [0u8; 16],
+            #[cfg(feature = "mcp")]
+            mcp_audit: None,
         }
     }
 
@@ -99,6 +110,8 @@ impl DesktopHost {
             mcp_surface: None,
             #[cfg(feature = "mcp")]
             mcp_salt: [0u8; 16],
+            #[cfg(feature = "mcp")]
+            mcp_audit: None,
         }
     }
 
@@ -112,10 +125,23 @@ impl DesktopHost {
 
     /// Wire an MCP `Bridge::Drain` into the run loop. The host
     /// builds an `ActionSurface` from the runtime's current document,
-    /// stores `salt` so each reload re-derives action names with the
-    /// same key, and drains queued requests once per `about_to_wait`.
-    /// Each request is dispatched against the live `Runtime` through
-    /// `RuntimeDispatcher`, exactly like the in-process API.
+    /// attaches a fresh `ActionAuditLog` (capacity 256 — spec §8.1's
+    /// ring-buffer guidance), stores `salt` so each reload re-derives
+    /// action names with the same key, and drains queued requests
+    /// once per `about_to_wait`. Each request is dispatched against
+    /// the live `Runtime` through `RuntimeDispatcher`, exactly like
+    /// the in-process API. Audit rows ride the same log; `session_id`
+    /// defaults to `"mcp"`.
+    ///
+    /// Hosts that want to inspect audit history (or share it with the
+    /// in-process surface) read `host.mcp_audit` after construction.
+    ///
+    /// Lifecycle: if no document is loaded yet (`runtime.document`
+    /// is `None`), `mcp_surface` stays `None` and the first
+    /// hot-reload (`apply_reload`) lazily builds it. The bridge
+    /// drains pending requests but skips them until the surface
+    /// exists — clients should expect a brief startup window where
+    /// `tools/list` returns empty before the first save lands.
     ///
     /// Activating MCP also forces the run loop into the same
     /// ~200ms-poll mode `with_reloader` uses so a quiet client still
@@ -123,14 +149,16 @@ impl DesktopHost {
     /// once per tick, drains the bridge, replies via the oneshot.
     #[cfg(feature = "mcp")]
     pub fn with_mcp(mut self, drain: McpDrain, salt: BuildSalt) -> Self {
-        let surface = self
-            .runtime
-            .document
-            .as_ref()
-            .map(|doc| ActionSurface::from_document(&doc.schema, &salt).with_session_id("mcp"));
+        let audit = Rc::new(ActionAuditLog::new(256));
+        let surface = self.runtime.document.as_ref().map(|doc| {
+            ActionSurface::from_document(&doc.schema, &salt)
+                .with_audit(audit.clone())
+                .with_session_id("mcp")
+        });
         self.mcp_drain = Some(drain);
         self.mcp_surface = surface;
         self.mcp_salt = salt;
+        self.mcp_audit = Some(audit);
         self
     }
 
@@ -218,6 +246,30 @@ mod tests {
         let host = DesktopHost::new(rt, "Mcp").with_mcp(drain, [9u8; 16]);
         assert!(host.mcp_drain.is_some(), "drain stored");
         assert!(host.mcp_surface.is_some(), "surface derived from doc");
+        assert!(host.mcp_audit.is_some(), "audit log attached");
         assert_eq!(host.mcp_salt, [9u8; 16], "salt held for reload re-derive");
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn with_mcp_without_document_defers_surface_until_reload() {
+        // Spec §10 lifecycle (Codex round 23 MEDIUM): a host that
+        // wires `with_mcp` before any document has loaded must NOT
+        // crash. `mcp_surface` stays None — the run loop's
+        // `apply_reload` path lazily builds it from the first
+        // arriving schema. The drain code in `run.rs` skips
+        // requests until then.
+        let rt = Runtime::new();
+        let (_bridge, drain) = jian_action_surface::mcp::Bridge::new();
+        let host = DesktopHost::new(rt, "Mcp").with_mcp(drain, [0u8; 16]);
+        assert!(host.mcp_drain.is_some());
+        assert!(
+            host.mcp_surface.is_none(),
+            "no doc loaded → surface deferred to first reload"
+        );
+        assert!(
+            host.mcp_audit.is_some(),
+            "audit log still attached up-front"
+        );
     }
 }

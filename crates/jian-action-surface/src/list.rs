@@ -1,5 +1,6 @@
 //! `list_available_actions` — spec §5.1, §5.2.
 
+use crate::StateGate;
 use jian_core::action_surface::{ActionDefinition, AvailabilityStatic, ParamSpec, ParamTy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -56,8 +57,23 @@ pub struct ListOptions {
 }
 
 /// Filter the derived action list by static availability + scope and
-/// render the MCP-shaped response.
+/// render the MCP-shaped response. Skips dynamic state-gate filtering;
+/// callers that need to honour live `bindings.visible` /
+/// `bindings.disabled` must use [`list_actions_with_gate`].
 pub fn list_actions(actions: &[ActionDefinition], opts: ListOptions) -> ListResponse {
+    list_actions_with_gate(actions, opts, &crate::AlwaysAllow)
+}
+
+/// Same as [`list_actions`] but applies a host-supplied [`StateGate`]
+/// per action — actions whose source node (or any ancestor) is
+/// dynamically hidden / disabled drop out. Required for the MCP path
+/// (spec §10): otherwise we'd advertise an action only to bounce the
+/// AI client off `state_gated` on execute.
+pub fn list_actions_with_gate<G: StateGate>(
+    actions: &[ActionDefinition],
+    opts: ListOptions,
+    gate: &G,
+) -> ListResponse {
     let mut out = Vec::with_capacity(actions.len());
     for a in actions {
         // §4.1 default — only Available unless include_confirm_gated.
@@ -74,6 +90,9 @@ pub fn list_actions(actions: &[ActionDefinition], opts: ListOptions) -> ListResp
                     continue;
                 }
             }
+        }
+        if !gate.allows(&a.source_node_id) {
+            continue;
         }
         out.push(ListedAction {
             name: a.name.full(),
@@ -255,6 +274,24 @@ mod tests {
             },
         );
         assert_eq!(r.total, 2);
+    }
+
+    #[test]
+    fn list_with_gate_drops_dynamically_hidden_actions() {
+        // Two actions on the same page; the gate hides one by node id.
+        // Spec §10 + Codex review HIGH: MCP must not advertise an
+        // action it would then bounce off `state_gated` on execute.
+        let mut acts = vec![def("plus", AvailabilityStatic::Available, vec![])];
+        acts[0].source_node_id = "node-plus".into();
+        let mut hidden = def("nope", AvailabilityStatic::Available, vec![]);
+        hidden.source_node_id = "node-hidden".into();
+        acts.push(hidden);
+        let gate = crate::ClosureGate(|id: &str| id != "node-hidden");
+        let r = list_actions_with_gate(&acts, ListOptions::default(), &gate);
+        let names: Vec<_> = r.actions.iter().map(|a| a.name.as_str()).collect();
+        assert!(names.contains(&"home.plus"), "kept: {names:?}");
+        assert!(!names.contains(&"home.nope"), "dropped: {names:?}");
+        assert_eq!(r.total, 1);
     }
 
     #[test]

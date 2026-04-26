@@ -59,7 +59,9 @@ pub use audit::{
     hash_params, ActionAuditLog, ActionSurfaceAuditEntry, AuditVerdict, ReasonCode, SessionId,
 };
 pub use error::{BusyReason, ExecuteError, ExecutionReason, NotAvailableReason, ValidationReason};
-pub use list::{list_actions, ListOptions, ListResponse, ListedAction, PageScope};
+pub use list::{
+    list_actions, list_actions_with_gate, ListOptions, ListResponse, ListedAction, PageScope,
+};
 pub use runtime_dispatch::RuntimeDispatcher;
 
 use crate::concurrency::ConcurrencyTracker;
@@ -162,6 +164,18 @@ where
     }
 }
 
+/// Production state gate — defers to `jian-core`'s built-in
+/// `bindings.visible` / `bindings.disabled` evaluator. Hosts that
+/// already hold a `&Runtime` build this directly with the runtime's
+/// document, state graph, and expression cache. The trait impl
+/// lives in this crate (rather than `jian-core`) because the
+/// `StateGate` trait does too.
+impl<'a> StateGate for jian_core::action_surface::RuntimeStateGate<'a> {
+    fn allows(&self, source_node_id: &str) -> bool {
+        jian_core::action_surface::RuntimeStateGate::allows(self, source_node_id)
+    }
+}
+
 /// Per-session state — rate-limit bucket + in-flight action set +
 /// swipe throttle.
 struct Session {
@@ -227,9 +241,20 @@ impl ActionSurface {
         &self.actions
     }
 
-    /// `list_available_actions` — never rate-limited (§7).
+    /// `list_available_actions` — never rate-limited (§7). Skips
+    /// dynamic state-gate filtering — useful for in-process callers
+    /// that already filter at the UI layer or for tests.
     pub fn list(&self, opts: ListOptions) -> ListResponse {
-        list_actions(&self.actions, opts)
+        list_actions_with_gate(&self.actions, opts, &AlwaysAllow)
+    }
+
+    /// Like [`Self::list`] but applies a host-supplied [`StateGate`]
+    /// to drop actions whose source node (or any ancestor) is
+    /// dynamically hidden / disabled. MCP hosts MUST use this path
+    /// — spec §10 forbids advertising actions an AI client would
+    /// then bounce off `state_gated` on execute.
+    pub fn list_with_gate<G: StateGate>(&self, opts: ListOptions, gate: &G) -> ListResponse {
+        list_actions_with_gate(&self.actions, opts, gate)
     }
 
     /// `execute_action` with a host-supplied dispatcher. Runs the

@@ -489,11 +489,31 @@ impl RunApp {
         self.host.runtime.rebuild_spatial();
         // Refresh the MCP action set so AI clients see the new
         // aiNames immediately after save (no `tools/list` cache to
-        // invalidate — rmcp re-queries on demand).
+        // invalidate — rmcp re-queries on demand). When MCP is wired
+        // but the surface didn't exist yet (host author called
+        // `with_mcp` before any document was loaded), build it now.
         #[cfg(feature = "mcp")]
-        if let Some(surface) = self.host.mcp_surface.as_mut() {
-            if let Some(doc) = self.host.runtime.document.as_ref() {
-                surface.refresh(&doc.schema, &self.host.mcp_salt);
+        {
+            let host = &mut self.host;
+            if host.mcp_drain.is_some() {
+                if let Some(doc) = host.runtime.document.as_ref() {
+                    match host.mcp_surface.as_mut() {
+                        Some(surface) => {
+                            surface.refresh(&doc.schema, &host.mcp_salt);
+                        }
+                        None => {
+                            let mut surface = jian_action_surface::ActionSurface::from_document(
+                                &doc.schema,
+                                &host.mcp_salt,
+                            )
+                            .with_session_id("mcp");
+                            if let Some(audit) = host.mcp_audit.as_ref() {
+                                surface = surface.with_audit(audit.clone());
+                            }
+                            host.mcp_surface = Some(surface);
+                        }
+                    }
+                }
             }
         }
         Ok(())
@@ -514,10 +534,19 @@ impl RunApp {
     /// iff we executed at least one action (caller redraws).
     /// `list_available_actions` doesn't mutate state and doesn't
     /// trigger a redraw.
+    ///
+    /// Both `list` and `execute` honour spec §4.2 #4 (dynamic state
+    /// gate): live `bindings.visible` / `bindings.disabled` filter
+    /// the listing AND short-circuit execute with `state_gated`.
+    /// Without the gate, MCP would advertise every statically-visible
+    /// action regardless of UI state — and §10 data-hiding forbids
+    /// that, since AI clients infer node tree structure from the
+    /// presence/absence of derived names.
     #[cfg(feature = "mcp")]
     fn drain_mcp_requests(&mut self) -> bool {
         use jian_action_surface::mcp::Request;
-        use jian_action_surface::{AlwaysAllow, RuntimeDispatcher};
+        use jian_action_surface::{ClosureGate, RuntimeDispatcher};
+        use jian_core::action_surface::RuntimeStateGate;
         let mut executed = false;
         let Some(drain) = self.host.mcp_drain.as_mut() else {
             return false;
@@ -534,7 +563,20 @@ impl RunApp {
                     let Some(surface) = self.host.mcp_surface.as_ref() else {
                         continue;
                     };
-                    let _ = reply.send(surface.list(opts));
+                    // Build the dynamic gate from the live runtime —
+                    // immutable borrow only, no conflict with surface.
+                    let response = match self.host.runtime.document.as_ref() {
+                        Some(doc) => {
+                            let gate = RuntimeStateGate::new(
+                                doc,
+                                &self.host.runtime.state,
+                                self.host.runtime.expr_cache.clone(),
+                            );
+                            surface.list_with_gate(opts, &gate)
+                        }
+                        None => surface.list(opts),
+                    };
+                    let _ = reply.send(response);
                 }
                 Request::Execute {
                     name,
@@ -544,13 +586,37 @@ impl RunApp {
                     let Some(surface) = self.host.mcp_surface.as_mut() else {
                         continue;
                     };
+                    // The state gate borrows `&Runtime`, the
+                    // dispatcher needs `&mut Runtime`. Resolve the
+                    // gate verdict for THIS action up-front, capture
+                    // it in a `ClosureGate`, then drop the immutable
+                    // borrow before constructing the dispatcher.
+                    let allowed = {
+                        let runtime = &self.host.runtime;
+                        match runtime.document.as_ref() {
+                            Some(doc) => {
+                                let gate = RuntimeStateGate::new(
+                                    doc,
+                                    &runtime.state,
+                                    runtime.expr_cache.clone(),
+                                );
+                                surface
+                                    .actions()
+                                    .iter()
+                                    .find(|a| a.name.full() == name)
+                                    .map(|a| gate.allows(&a.source_node_id))
+                                    // unknown_action is handled by the
+                                    // surface itself — pretend "allowed"
+                                    // here so the lookup error wins.
+                                    .unwrap_or(true)
+                            }
+                            None => true,
+                        }
+                    };
+                    let gate = ClosureGate(move |_id: &str| allowed);
                     let mut dispatcher = RuntimeDispatcher::new(&mut self.host.runtime);
-                    let outcome = surface.execute_with_gate(
-                        &name,
-                        params.as_ref(),
-                        &mut dispatcher,
-                        &AlwaysAllow,
-                    );
+                    let outcome =
+                        surface.execute_with_gate(&name, params.as_ref(), &mut dispatcher, &gate);
                     if matches!(outcome, jian_action_surface::ExecuteOutcome::Ok) {
                         executed = true;
                     }
