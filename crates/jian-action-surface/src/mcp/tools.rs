@@ -198,4 +198,52 @@ mod tests {
         let back = serde_json::to_value(&req).unwrap();
         assert_eq!(back, json);
     }
+
+    /// Spec §10 data-hiding: every ExecuteOutcome MCP serialises is
+    /// either `{ ok: true }` or `{ ok: false, error: { kind, reason } }`
+    /// — *only* those keys, no source-node ids / paths / handler
+    /// names / internal state. Pin every error path so an
+    /// accidental new field on `ExecuteError` (e.g. a debug
+    /// "details" string) trips this test before it leaks to a
+    /// real client.
+    #[test]
+    fn execute_outcome_wire_form_does_not_leak_internal_state() {
+        use crate::ExecuteError;
+        use crate::ExecuteOutcome;
+
+        let cases = [
+            ExecuteOutcome::Ok,
+            ExecuteOutcome::Err(ExecuteError::unknown_action()),
+            ExecuteOutcome::Err(ExecuteError::static_hidden()),
+            ExecuteOutcome::Err(ExecuteError::state_gated()),
+            ExecuteOutcome::Err(ExecuteError::confirm_gated()),
+            ExecuteOutcome::Err(ExecuteError::rate_limited()),
+            ExecuteOutcome::Err(ExecuteError::already_running()),
+            ExecuteOutcome::Err(ExecuteError::missing_required()),
+            ExecuteOutcome::Err(ExecuteError::type_mismatch()),
+            ExecuteOutcome::Err(ExecuteError::schema_violation()),
+            ExecuteOutcome::Err(ExecuteError::capability_denied()),
+            ExecuteOutcome::Err(ExecuteError::handler_error()),
+        ];
+        for outcome in cases {
+            let v = serde_json::to_value(&outcome).expect("serialize");
+            let obj = v.as_object().expect("object");
+            // Always exactly { ok } or { ok, error }.
+            for key in obj.keys() {
+                assert!(
+                    matches!(key.as_str(), "ok" | "error"),
+                    "outcome leaked top-level key {key:?}: {v}"
+                );
+            }
+            if let Some(error) = obj.get("error") {
+                let eobj = error.as_object().expect("error object");
+                for key in eobj.keys() {
+                    assert!(
+                        matches!(key.as_str(), "kind" | "reason"),
+                        "error leaked field {key:?}: {error}"
+                    );
+                }
+            }
+        }
+    }
 }
