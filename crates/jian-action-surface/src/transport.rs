@@ -171,22 +171,14 @@ fn list<G: StateGate>(
             opts.current_page = Some(s.to_owned());
         }
     }
-    let mut resp = surface.list(opts);
     // Spec consistency: an action that's `state_gated` would
     // immediately reject `execute_action`, so it shouldn't appear
-    // in the listed set. Walk the rendered actions and drop any
-    // whose source node currently fails the gate. Source ids are
-    // recoverable from the underlying derive list since
-    // `surface.list` doesn't echo them.
-    let derived = surface.actions();
-    resp.actions.retain(|listed| {
-        derived
-            .iter()
-            .find(|a| a.name.full() == listed.name)
-            .map(|a| state_gate.allows(&a.source_node_id))
-            .unwrap_or(true)
-    });
-    resp.total = resp.actions.len();
+    // in the listed set. `list_with_gate` is the single-source-of-
+    // truth filter used by the in-process surface, MCP host, and
+    // this JSON-RPC transport — adding a second per-action lookup
+    // here would re-introduce the alias-bypass / duplicated-logic
+    // class of bugs Codex round 25 flagged.
+    let resp = surface.list_with_gate(opts, state_gate);
     serde_json::to_value(resp).map_err(|e| (codes::INVALID_PARAMS, format!("serialise: {}", e)))
 }
 

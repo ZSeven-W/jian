@@ -15,8 +15,11 @@
 //!    mid-call doesn't get the side effect; we drop the request and
 //!    keep the surface clean. Spec §10 data-hiding doesn't want
 //!    silent state mutations for callers that won't see the result.
-//! 2. Calls `ActionSurface::list` / `execute_with_gate` against the
-//!    payload, captures the typed outcome, sends it through the
+//! 2. Calls `ActionSurface::list_with_gate` / `execute_with_gate`
+//!    against the payload — the gate-aware variants honour live
+//!    `bindings.visible` / `bindings.disabled` and prevent
+//!    dynamically-hidden actions from leaking onto the wire (spec
+//!    §10). Captures the typed outcome, sends it through the
 //!    oneshot. The send may fail if the worker dropped during the
 //!    main-thread call — same handling as #1, log + continue.
 //!
