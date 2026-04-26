@@ -1,0 +1,110 @@
+name: startup-budget
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+# Plan 19 Task 19 scaffolding: collects per-platform `jian perf startup`
+# JSON artifacts on every push + PR so future commits can wire a
+# regression-comment bot without re-running CI matrices on top of
+# what `ci.yml` already does. The bot itself, the >15% regression
+# threshold gate, and the per-platform budget assertions all wait on
+# Plan 19 Task 9 (real Runtime-coupled phase impls — currently the
+# CLI runs the driver with no-op closures, so its timings reflect
+# framework overhead and are not yet representative of cold-start
+# cost).
+#
+# Today: build the CLI, run `jian perf startup --format json` against
+# the bundled counter template, archive the output. Future commits:
+# diff against `main`, comment on PRs, fail the job on regressions
+# beyond a per-platform threshold.
+
+jobs:
+  startup-perf:
+    name: startup-perf ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Windows: long-path support for skia-bindings vendor extraction
+      # (matches the corresponding step in `ci.yml`).
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
+
+      - uses: actions/checkout@v4
+
+      # Linux: skia-safe links system fontconfig + freetype.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: startup-perf-${{ matrix.target }}
+
+      # Build the CLI in release for representative timings. `--no-default-features`
+      # keeps the binary off the `player` / `dev` paths (winit + softbuffer +
+      # notify) — `perf startup` is purely the StartupDriver path and doesn't
+      # need a window. Reduces build time and avoids platform-specific
+      # display-server flakes.
+      - name: Build jian CLI (release, headless)
+        run: cargo build --release --no-default-features -p jian --target ${{ matrix.target }}
+
+      # Run perf startup against the bundled counter template. 20 runs is
+      # enough for the nearest-rank p95 (`ceil(0.95 * 20) - 1 = 18`) without
+      # ballooning CI minutes; the pre-Task-9 driver runs in microseconds
+      # per phase regardless.
+      - name: jian perf startup (counter.op, JSON, 20 runs)
+        shell: bash
+        run: |
+          mkdir -p target/perf-reports
+          ./target/${{ matrix.target }}/release/jian perf startup \
+            crates/jian-cli/src/templates/counter.op \
+            --runs 20 \
+            --format json \
+            > target/perf-reports/counter-${{ matrix.name }}.json
+
+      # Quick visibility: dump the table form to the job log too.
+      - name: jian perf startup (table form, log only)
+        shell: bash
+        run: |
+          ./target/${{ matrix.target }}/release/jian perf startup \
+            crates/jian-cli/src/templates/counter.op \
+            --runs 20 \
+            --format table
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: startup-perf-${{ matrix.name }}
+          path: target/perf-reports/counter-${{ matrix.name }}.json
+          retention-days: 30
+          if-no-files-found: error
