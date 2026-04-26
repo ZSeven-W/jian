@@ -119,9 +119,9 @@ impl SemanticEvent {
             Self::ScaleStart { .. } => "onScaleStart",
             Self::ScaleUpdate { .. } => "onScaleUpdate",
             Self::ScaleEnd { .. } => "onScaleEnd",
-            Self::RotateStart { .. } | Self::RotateUpdate { .. } | Self::RotateEnd { .. } => {
-                "onRotate"
-            }
+            Self::RotateStart { .. } => "onRotateStart",
+            Self::RotateUpdate { .. } => "onRotateUpdate",
+            Self::RotateEnd { .. } => "onRotateEnd",
             Self::Scroll { .. } => "onScroll",
             Self::HoverEnter { .. } => "onHoverEnter",
             Self::HoverLeave { .. } => "onHoverLeave",

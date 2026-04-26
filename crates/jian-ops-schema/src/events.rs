@@ -58,6 +58,12 @@ pub struct EventHandlers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_scale_end: Option<ActionList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_rotate_start: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_rotate_update: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_rotate_end: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_hover_enter: Option<ActionList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_hover_leave: Option<ActionList>,

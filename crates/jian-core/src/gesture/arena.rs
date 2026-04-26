@@ -145,6 +145,25 @@ impl Arena {
         self.members.iter_mut()
     }
 
+    /// Reject every still-Possible member and mark the arena as
+    /// resolved. Used when a cross-arena recognizer (Scale / Rotate)
+    /// claims its multi-pointer gesture — the per-pointer arenas it
+    /// participated in are pre-empted, so a single-finger Tap / Pan
+    /// / LongPress on those pointers loses to the multi gesture.
+    /// `resolved` gets a synthetic id (u64::MAX) so subsequent
+    /// `dispatch` calls take the fast path and feed nothing further.
+    pub fn cancel_all(&mut self) {
+        if self.resolved.is_some() {
+            return;
+        }
+        for r in &mut self.members {
+            if !matches!(r.state(), RecognizerState::Rejected) {
+                r.reject();
+            }
+        }
+        self.resolved = Some(u64::MAX);
+    }
+
     /// Drive `tick()` on every still-Possible member. If one of them claims
     /// as a side effect (LongPress is the canonical case), resolve the
     /// arena — accept the winner, reject everyone else — so that the

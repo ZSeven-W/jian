@@ -512,6 +512,24 @@ fn event_payload(event: &SemanticEvent) -> Option<serde_json::Value> {
                 "modifiers": mods,
             }))
         }
+        // Scale carries the running ratio + focal point. Authors bind
+        // `$state.zoom` to `$event.scale` and read `$event.focal.x` /
+        // `$event.focal.y` to compute pinch-around behaviour. Start
+        // omits `scale` (always 1.0 at activation); Update carries it;
+        // End is a bare signal.
+        SemanticEvent::ScaleStart { focal, .. } => Some(serde_json::json!({
+            "focal": { "x": focal.x, "y": focal.y },
+        })),
+        SemanticEvent::ScaleUpdate { scale, focal, .. } => Some(serde_json::json!({
+            "scale": *scale,
+            "focal": { "x": focal.x, "y": focal.y },
+        })),
+        // Rotate carries running radians. Authors typically bind
+        // `$state.rotation` directly to `$event.radians`. Start omits
+        // it (always 0 at activation).
+        SemanticEvent::RotateUpdate { radians, .. } => Some(serde_json::json!({
+            "radians": *radians,
+        })),
         _ => None,
     }
 }
@@ -548,6 +566,135 @@ fn json_has_event_handler(node: &jian_ops_schema::node::PenNode, key: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two-finger pinch on a frame that declares `events.onScaleUpdate`
+    /// drives `$state.zoom` via `$event.scale`. Locks in the full
+    /// chain: PointerRouter cross-arena registration → ScaleRecognizer
+    /// geometry → SemanticEvent dispatch → event_payload → expression
+    /// resolves `$event.scale` → state graph write.
+    #[test]
+    fn two_finger_pinch_updates_state_zoom_via_event_scale() {
+        use crate::geometry::point;
+        use crate::gesture::pointer::PointerPhase;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "state":{ "zoom":{ "type":"float", "default":1.0 } },
+              "children":[
+                { "type":"frame","id":"canvas",
+                  "width":800, "height":600,
+                  "events":{
+                    "onScaleUpdate": [
+                      { "set": { "$app.zoom": "$event.scale" } }
+                    ]
+                  }
+                }
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.build_layout((800.0, 600.0)).unwrap();
+        rt.rebuild_spatial();
+        // First finger Down at (200, 300), second at (400, 300):
+        // distance 200, focal (300, 300).
+        rt.dispatch_pointer(PointerEvent::simple(
+            0,
+            PointerPhase::Down,
+            point(200.0, 300.0),
+        ));
+        rt.dispatch_pointer(PointerEvent::simple(
+            1,
+            PointerPhase::Down,
+            point(400.0, 300.0),
+        ));
+        // Spread fingers to (100, 300) and (500, 300): distance 400 →
+        // scale 2.0. Past 5% threshold → ScaleStart + ScaleUpdate fire.
+        rt.dispatch_pointer(PointerEvent::simple(
+            0,
+            PointerPhase::Move,
+            point(100.0, 300.0),
+        ));
+        rt.dispatch_pointer(PointerEvent::simple(
+            1,
+            PointerPhase::Move,
+            point(500.0, 300.0),
+        ));
+        let zoom = rt
+            .state
+            .app_get("zoom")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        assert!(
+            (zoom - 2.0).abs() < f32::EPSILON,
+            "$event.scale should drive $app.zoom to 2.0, got {zoom}"
+        );
+    }
+
+    /// Companion test for Rotate: `$state.rotation` driven from
+    /// `$event.radians`. Same pipeline as pinch, different recognizer.
+    #[test]
+    fn two_finger_rotate_updates_state_via_event_radians() {
+        use crate::geometry::point;
+        use crate::gesture::pointer::PointerPhase;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "state":{ "rotation":{ "type":"float", "default":0.0 } },
+              "children":[
+                { "type":"frame","id":"canvas",
+                  "width":800, "height":600,
+                  "events":{
+                    "onRotateUpdate": [
+                      { "set": { "$app.rotation": "$event.radians" } }
+                    ]
+                  }
+                }
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.build_layout((800.0, 600.0)).unwrap();
+        rt.rebuild_spatial();
+        // Two fingers along the x-axis (angle 0).
+        rt.dispatch_pointer(PointerEvent::simple(
+            0,
+            PointerPhase::Down,
+            point(300.0, 300.0),
+        ));
+        rt.dispatch_pointer(PointerEvent::simple(
+            1,
+            PointerPhase::Down,
+            point(500.0, 300.0),
+        ));
+        // Rotate finger 1 down to (500, 400): line from (300,300) →
+        // (500,400) has angle atan2(100, 200) ≈ 0.4636 rad. > 5° threshold.
+        rt.dispatch_pointer(PointerEvent::simple(
+            1,
+            PointerPhase::Move,
+            point(500.0, 400.0),
+        ));
+        // Now fully to (500, 500): angle ≈ 0.7854 rad (45°). Update fires.
+        rt.dispatch_pointer(PointerEvent::simple(
+            1,
+            PointerPhase::Move,
+            point(500.0, 500.0),
+        ));
+        let rad = rt
+            .state
+            .app_get("rotation")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(-1.0) as f32;
+        assert!(
+            rad > 0.7 && rad < 0.85,
+            "$event.radians should drive $state.rotation near 0.785 (45°), got {rad}"
+        );
+    }
 
     #[test]
     fn full_pipeline_smoke() {
