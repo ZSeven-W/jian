@@ -35,6 +35,7 @@ pub mod menus;
 pub mod pointer;
 pub mod scene;
 pub mod services;
+pub mod startup;
 
 #[cfg(feature = "run")]
 mod run;
