@@ -34,6 +34,8 @@ pub mod concurrency;
 pub mod error;
 pub mod execute;
 pub mod list;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod rate_limit;
 pub mod runtime_dispatch;
 pub mod swipe_throttle;

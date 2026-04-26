@@ -100,16 +100,25 @@ fn corpus_renders_match_golden_bytes() {
         }
         let tracked = fs::read(&golden_path).expect("read golden");
         checked += 1;
-        // Under the `textlayout` feature the ParagraphBuilder path
-        // produces different (still deterministic) bytes; defer the
-        // byte-equality check to Plan 11 / 12 where the tolerance
-        // comparator + dedicated baselines land. Render coverage
-        // still happens — `png` was just produced above.
-        #[cfg(not(feature = "textlayout"))]
+        // Byte-equality only runs on macOS:
+        //   1. The committed baselines were `GOLDEN_BLESS=1`'d on
+        //      macOS — Skia's font fallback resolves a different
+        //      typeface for "Inter" / "Space Grotesk" / fallback
+        //      glyphs on Linux + Windows, producing genuinely
+        //      different PNG bytes for a deterministic-but-platform-
+        //      specific raster.
+        //   2. The `textlayout` feature swaps the canvas single-line
+        //      path for ParagraphBuilder, which also widens the
+        //      same drift.
+        // Plan 11 / 12 will land a tolerance comparator + per-platform
+        // baseline sets. Until then, render coverage runs everywhere
+        // (we still encode the PNG); byte compare only on the
+        // platform the baselines came from.
+        #[cfg(all(target_os = "macos", not(feature = "textlayout")))]
         if tracked != png {
             failures.push(name);
         }
-        #[cfg(feature = "textlayout")]
+        #[cfg(any(not(target_os = "macos"), feature = "textlayout"))]
         let _ = tracked;
     }
     if !failures.is_empty() {
