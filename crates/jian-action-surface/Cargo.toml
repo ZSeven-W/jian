@@ -24,7 +24,7 @@ agent-surface = []
 # `ActionSurface` via a typed mpsc bridge. No-op when off — the
 # in-process API stays the same. See plan
 # `2026-04-25-jian-action-surface-mcp.md`.
-mcp = ["dep:rmcp", "dep:tokio", "dep:schemars"]
+mcp = ["dep:rmcp", "dep:tokio", "dep:tokio-util", "dep:schemars"]
 
 [dependencies]
 jian-core       = { path = "../jian-core" }
@@ -44,7 +44,8 @@ rmcp            = { version = "0.8", optional = true, features = ["server", "tra
 # rmcp 0.8's bundled v1.x version (workspace `schemars` is 0.8 — the
 # different API the schemars-1 macros expect would mismatch).
 schemars        = { version = "1.2", optional = true }
-tokio           = { version = "1", optional = true, features = ["rt", "macros", "io-std", "sync"] }
+tokio           = { version = "1", optional = true, features = ["rt", "macros", "io-std", "io-util", "sync", "net"] }
+tokio-util      = { version = "0.7", optional = true, features = ["rt"] }
 
 [dev-dependencies]
 serde_json      = { workspace = true }
