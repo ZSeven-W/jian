@@ -69,13 +69,16 @@ confidence-threshold = 0.93
 # `multiple-versions = "warn"` (default `deny` is too noisy in a
 # winit-heavy graph; keep visibility without breaking PRs).
 multiple-versions = "warn"
-# `wildcards = "deny"` would catch a real wildcard like `foo = "*"`
-# in a Cargo.toml. Workspace path deps (`jian-core = { path = "..." }`)
-# don't carry a version, which cargo-deny also reads as a wildcard;
-# `allow-wildcard-paths = true` keeps the lint useful for crates.io
-# deps without false-positiving on path deps inside the workspace.
-wildcards = "deny"
-allow-wildcard-paths = true
+# `wildcards = "allow"` because this isolation gate is purely about
+# banning specific crates from production hosts (see [[bans.deny]]
+# below). The wildcard lint flags any `foo = "*"`-shaped Cargo.toml
+# entry, which is mainly a publish-hygiene concern; cargo-deny's
+# `allow-wildcard-paths` escape hatch only applies to crates marked
+# `publish = false`, which our workspace crates aren't, so we'd
+# false-positive on every internal path dep. Workspace publish
+# hygiene is a separate concern; if it ever matters, run cargo-deny
+# from a different config rather than entangling it here.
+wildcards = "allow"
 
 # ─── Headline bans (Plan 22 Task 10 Job 2) ───────────────────────────
 #
