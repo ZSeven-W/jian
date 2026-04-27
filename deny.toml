@@ -25,20 +25,16 @@ targets = [
     { triple = "x86_64-apple-darwin" },
 ]
 
-# Exclude `jian-asp` itself from the analysed graph: it lives in the
-# workspace as a Phase 0 skeleton (Plan 18 Task 0), and its own
-# `default = ["dev-asp"]` brings the gated mods into its own root
-# build — but no other workspace member depends on it under default
-# features. Excluding the crate as an analysis root lets the
-# bans.deny rule below work the way we want: it triggers ONLY when
-# something OTHER than jian-asp itself reaches it via the dep graph
-# (which under default features is nothing — exactly the invariant).
-exclude = ["jian-asp"]
-
-# Ignore dev-only target trees — dev-dependencies pull `proptest`,
-# `criterion`, etc. that we don't care to gate. The `bans` section
-# below explicitly allows `jian-asp` to live behind `dev-asp` features
-# anyway, so this is belt-and-suspenders.
+# Why no `[graph] exclude` and why NOT `--workspace`: cargo-deny's
+# `exclude` removes a crate AND all edges leading to it, which would
+# silently bypass the ban below in a regression where a host
+# non-optionally depends on `jian-asp`. The workflow instead invokes
+# cargo-deny with `--no-default-features --features <production-set>
+# -p <host>` so the analysis is rooted at the host (not the
+# workspace), `jian-asp` only appears if it's actually reachable from
+# the host's production-feature graph, and the ban triggers exactly
+# when that reachability becomes real. See
+# `.github/workflows/ci-action-surface-isolation.yml::cargo-deny`.
 all-features = false
 
 [advisories]

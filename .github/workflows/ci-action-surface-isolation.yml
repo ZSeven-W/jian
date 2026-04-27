@@ -58,16 +58,24 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each row is one host × one production feature set. Keep
-        # rows narrow (one feature combo) so a failure points at the
-        # exact graph that triggered it. The matrix invariant guard
-        # below refuses any row that contains `dev-asp`.
+        # Each row is one host or top-level crate × one production
+        # feature set. Keep rows narrow (one feature combo) so a
+        # failure points at the exact graph that triggered it. The
+        # matrix invariant guard below refuses any row that contains
+        # `dev-asp`.
         host:
           - name: desktop
             crate: jian-host-desktop
             # The realistic production wire: the run helper +
             # action-surface MCP bridge, no `dev-asp`.
             features: run,mcp
+          - name: cli
+            crate: jian
+            # The shipped CLI's full production feature set: opens
+            # windows (`player`) + serves MCP (`mcp`). If a future
+            # change wires `dev-asp` into the CLI without putting
+            # it behind a separate feature, this row catches it.
+            features: player,mcp
         # Web / iOS / Android hosts not yet in the workspace; add
         # rows here when their crates land (Plan 8 / 11).
     steps:
@@ -116,9 +124,35 @@ jobs:
   cargo-deny:
     name: cargo deny (declared bans)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same matrix as `cargo-tree`: each row is one production
+        # entry point. The flags below scope cargo-deny's analysis
+        # to that crate's production feature graph specifically —
+        # NOT the whole workspace. The whole-workspace mode would
+        # trip on `jian-asp` itself being a member; rooting at the
+        # host makes `jian-asp` visible to cargo-deny only when
+        # it's *actually reachable from production code*, which is
+        # the regression we want the ban to catch.
+        host:
+          - name: desktop
+            crate: jian-host-desktop
+            features: run,mcp
+          - name: cli
+            crate: jian
+            features: player,mcp
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: matrix invariant — production rows must NOT enable dev-asp
+        run: |
+          set -euo pipefail
+          features='${{ matrix.host.features }}'
+          if echo ",$features," | grep -qE ',dev-asp,'; then
+            echo "::error::matrix row '${{ matrix.host.name }}' lists dev-asp; isolation gate would be bypassed"
+            exit 1
+          fi
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           # `bans` is the headline check for this workflow; advisories
@@ -126,7 +160,12 @@ jobs:
           # gated here (separate concern, run by the `cargo-deny`
           # job in `ci.yml` once that lands).
           command: check bans
-          arguments: --workspace
+          # `-p <crate> --no-default-features --features <set>` roots
+          # the analysis at the host, not the workspace. Without
+          # this, jian-asp shows up as a workspace member regardless
+          # of feature settings and the ban can't distinguish "the
+          # crate exists" from "production code reaches it".
+          arguments: -p ${{ matrix.host.crate }} --no-default-features --features ${{ matrix.host.features }}
 
   strings-monitor:
     name: strings | grep (release binary monitor)
