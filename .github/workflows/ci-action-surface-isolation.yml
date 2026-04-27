@@ -141,9 +141,13 @@ jobs:
         host:
           - name: desktop
             crate: jian-host-desktop
+            # The CLI's package name (`jian`) and its directory (`jian-cli`)
+            # don't match, so each row carries an explicit `manifest`.
+            manifest: crates/jian-host-desktop/Cargo.toml
             features: run,mcp
           - name: cli
             crate: jian
+            manifest: crates/jian-cli/Cargo.toml
             features: player,mcp
     steps:
       - uses: actions/checkout@v4
@@ -162,7 +166,7 @@ jobs:
           cargo metadata --format-version=1 \
                          --no-default-features \
                          --features ${{ matrix.host.features }} \
-                         --manifest-path crates/${{ matrix.host.crate }}/Cargo.toml \
+                         --manifest-path ${{ matrix.host.manifest }} \
             > metadata.json
           python3 - <<'PY'
           import json, sys
