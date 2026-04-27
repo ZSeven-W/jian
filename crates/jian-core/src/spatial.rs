@@ -244,7 +244,10 @@ mod tests {
     #[test]
     fn rebuild_from_visible_viewport_off_screen_keeps_nothing() {
         let mut idx = SpatialIndex::new();
-        let items = vec![bbox(1, 10.0, 10.0, 50.0, 50.0), bbox(2, 100.0, 100.0, 30.0, 30.0)];
+        let items = vec![
+            bbox(1, 10.0, 10.0, 50.0, 50.0),
+            bbox(2, 100.0, 100.0, 30.0, 30.0),
+        ];
         // Viewport positioned far off any item.
         let viewport = rect(10_000.0, 10_000.0, 100.0, 100.0);
         idx.rebuild_from_visible(items, viewport);
@@ -331,10 +334,7 @@ mod tests {
         let viewport = rect(0.0, 0.0, 200.0, 200.0);
 
         // First-frame rebuild only sees `inside`.
-        idx.rebuild_from_visible(
-            inside.iter().chain(outside.iter()).cloned(),
-            viewport,
-        );
+        idx.rebuild_from_visible(inside.iter().chain(outside.iter()).cloned(), viewport);
         assert_eq!(idx.len(), 1);
         assert_eq!(idx.hit(point(15.0, 15.0)), vec![nk(1)]);
         assert!(idx.hit(point(515.0, 515.0)).is_empty());

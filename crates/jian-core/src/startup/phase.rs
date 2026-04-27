@@ -193,7 +193,10 @@ mod tests {
             StartupPhase::ComputeFirstLayout,
             StartupPhase::SeedStateGraph,
         ] {
-            assert!(deps.contains(&required), "RenderFirstFrame must depend on {required:?}");
+            assert!(
+                deps.contains(&required),
+                "RenderFirstFrame must depend on {required:?}"
+            );
         }
     }
 

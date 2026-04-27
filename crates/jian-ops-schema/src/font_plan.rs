@@ -177,10 +177,7 @@ fn scan_node(node: &PenNode, inherited_family: Option<&str>, plan: &mut FontPlan
                 TextContent::Styled(segments) => {
                     for seg in segments {
                         // Segment-level font_family overrides node-level.
-                        let seg_family = seg
-                            .font_family
-                            .as_deref()
-                            .or(family.as_deref());
+                        let seg_family = seg.font_family.as_deref().or(family.as_deref());
                         plan.record_run(seg_family, &seg.text);
                     }
                 }
@@ -482,7 +479,10 @@ mod tests {
             ]
         }));
         let plan = FontPlan::scan(&doc);
-        assert!(plan.is_empty(), "icon_font glyphs are out of scope for the codepoint plan");
+        assert!(
+            plan.is_empty(),
+            "icon_font glyphs are out of scope for the codepoint plan"
+        );
     }
 
     #[test]

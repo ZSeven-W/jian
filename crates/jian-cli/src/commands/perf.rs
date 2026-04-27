@@ -31,11 +31,9 @@
 
 use crate::{PerfFormat, PerfStartupArgs};
 use anyhow::{Context, Result};
-use jian_core::startup::{
-    PhaseResult, StartupConfig, StartupDriver, StartupPhase, StartupReport,
-};
 #[cfg(test)]
 use jian_core::startup::PhaseTiming;
+use jian_core::startup::{PhaseResult, StartupConfig, StartupDriver, StartupPhase, StartupReport};
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
@@ -46,8 +44,7 @@ pub fn run(args: PerfStartupArgs) -> Result<ExitCode> {
     // the cold-start critical path so it's the right thing to check.
     let src = std::fs::read_to_string(&args.path)
         .with_context(|| format!("read {}", args.path.display()))?;
-    jian_ops_schema::load_str(&src)
-        .with_context(|| format!("parse {}", args.path.display()))?;
+    jian_ops_schema::load_str(&src).with_context(|| format!("parse {}", args.path.display()))?;
 
     let runs = args.runs.max(1);
     let mut reports: Vec<StartupReport> = Vec::with_capacity(runs);
@@ -326,10 +323,20 @@ mod tests {
 
     #[test]
     fn aggregate_collects_durations_per_phase() {
-        let r1 = report_with(&[(StartupPhase::ReadFile, 1.0), (StartupPhase::ParseSchema, 5.0)]);
-        let r2 = report_with(&[(StartupPhase::ReadFile, 3.0), (StartupPhase::ParseSchema, 7.0)]);
+        let r1 = report_with(&[
+            (StartupPhase::ReadFile, 1.0),
+            (StartupPhase::ParseSchema, 5.0),
+        ]);
+        let r2 = report_with(&[
+            (StartupPhase::ReadFile, 3.0),
+            (StartupPhase::ParseSchema, 7.0),
+        ]);
         let agg = aggregate(&[r1, r2]);
-        let read = agg.phases.iter().find(|p| p.phase == StartupPhase::ReadFile).unwrap();
+        let read = agg
+            .phases
+            .iter()
+            .find(|p| p.phase == StartupPhase::ReadFile)
+            .unwrap();
         assert_eq!(read.durations_ms, vec![1.0, 3.0]);
         let parse = agg
             .phases

@@ -35,9 +35,9 @@
 //! the background-only splash is enough to honour the spec's "user
 //! sees something during 0-300 ms" guarantee on every platform.
 
-use jian_core::geometry::{rect, Size};
 #[cfg(test)]
 use jian_core::geometry::size;
+use jian_core::geometry::{rect, Size};
 use jian_core::render::{DrawOp, Paint, RenderBackend};
 use jian_core::scene::Color;
 use jian_ops_schema::app::SplashConfig;
@@ -271,7 +271,10 @@ mod tests {
     fn timer_uses_default_duration_when_config_missing() {
         let now = Instant::now();
         let t = SplashTimer::new(now, &cfg(None, None));
-        assert_eq!(t.min_duration(), Duration::from_millis(DEFAULT_MIN_DURATION_MS as u64));
+        assert_eq!(
+            t.min_duration(),
+            Duration::from_millis(DEFAULT_MIN_DURATION_MS as u64)
+        );
     }
 
     #[test]
@@ -287,7 +290,10 @@ mod tests {
         let t = SplashTimer::new(now, &cfg(None, Some(20)));
         assert!(!t.is_elapsed(), "fresh timer should not be elapsed");
         thread::sleep(Duration::from_millis(40));
-        assert!(t.is_elapsed(), "timer should be elapsed after 2x min duration");
+        assert!(
+            t.is_elapsed(),
+            "timer should be elapsed after 2x min duration"
+        );
         assert_eq!(t.remaining(), Duration::ZERO);
     }
 
@@ -297,7 +303,10 @@ mod tests {
         let r1 = t.remaining();
         thread::sleep(Duration::from_millis(20));
         let r2 = t.remaining();
-        assert!(r2 < r1, "remaining must decrease as time passes: {r1:?} → {r2:?}");
+        assert!(
+            r2 < r1,
+            "remaining must decrease as time passes: {r1:?} → {r2:?}"
+        );
     }
 
     #[test]

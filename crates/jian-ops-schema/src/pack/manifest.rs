@@ -233,7 +233,9 @@ mod tests {
         );
         let s = serde_json::to_value(&m).unwrap();
         assert_eq!(
-            s.get("capabilities").and_then(|v| v.as_array()).map(|v| v.len()),
+            s.get("capabilities")
+                .and_then(|v| v.as_array())
+                .map(|v| v.len()),
             Some(0),
             "empty capabilities must serialize as `[]`, not be omitted: {s}"
         );
@@ -251,7 +253,8 @@ mod tests {
             "app": { "id": "old", "name": "Old", "version": "0.0.1" },
             "entries": ["app.op"]
         });
-        let m: AotManifest = serde_json::from_value(json).expect("missing-capabilities round-trips");
+        let m: AotManifest =
+            serde_json::from_value(json).expect("missing-capabilities round-trips");
         assert!(m.capabilities.is_empty());
     }
 
@@ -269,7 +272,10 @@ mod tests {
             vec![],
         );
         let s = serde_json::to_value(&m).unwrap();
-        assert!(s.get("aot").is_none(), "aot must be absent for JSON-only packs: {s}");
+        assert!(
+            s.get("aot").is_none(),
+            "aot must be absent for JSON-only packs: {s}"
+        );
     }
 
     #[test]
@@ -278,7 +284,10 @@ mod tests {
             expressions: Some(ENTRY_AOT_EXPRESSIONS.into()),
             initial_layout: None,
             default_state: Some(ENTRY_AOT_DEFAULT_STATE.into()),
-            default_viewport: Some(DefaultViewport { width: 800.0, height: 600.0 }),
+            default_viewport: Some(DefaultViewport {
+                width: 800.0,
+                height: 600.0,
+            }),
             fonts: vec![FontEntry {
                 family: "Inter".into(),
                 critical: Some("fonts/Inter-sub.ttf".into()),

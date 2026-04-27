@@ -38,10 +38,11 @@ impl PhaseTiming {
 pub struct StartupReport {
     pub phases: Vec<PhaseTiming>,
     /// Time from driver entry to `EventPumpReady` end, in milliseconds.
-    /// Filled in by `StartupDriver::run` (in the sibling
-    /// [`crate::startup::driver`] module) once the terminal phase
+    /// Filled in by `StartupDriver::run` once the terminal phase
     /// completes; stays `0.0` if the run aborted before reaching
-    /// `EventPumpReady`.
+    /// `EventPumpReady`. (`StartupDriver` lives in the sibling
+    /// `driver` module, which is private — public access is via
+    /// the re-export at `crate::startup::StartupDriver`.)
     pub first_interactive_ms: f64,
 }
 
@@ -85,7 +86,11 @@ impl StartupReport {
 
         let show_notes = self.phases.iter().any(|t| t.notes.is_some());
         let notes_suffix_header = if show_notes { " │ Notes" } else { "" };
-        let notes_suffix_sep = if show_notes { "─┼──────" } else { "" };
+        let notes_suffix_sep = if show_notes {
+            "─┼──────"
+        } else {
+            ""
+        };
 
         let header = format!(
             "{:width$} │ Start ms │  Dur ms │ Critical{notes_suffix_header}",
@@ -135,8 +140,16 @@ impl StartupReport {
             "Critical path (serial sum): {:.2} ms",
             self.critical_path_ms()
         );
-        let _ = writeln!(out, "First interactive:          {:.2} ms", self.first_interactive_ms);
-        let _ = writeln!(out, "Wall clock (incl. async):   {:.2} ms", self.total_wall_clock_ms());
+        let _ = writeln!(
+            out,
+            "First interactive:          {:.2} ms",
+            self.first_interactive_ms
+        );
+        let _ = writeln!(
+            out,
+            "Wall clock (incl. async):   {:.2} ms",
+            self.total_wall_clock_ms()
+        );
         out
     }
 }
@@ -169,10 +182,10 @@ mod tests {
     fn critical_path_sums_only_critical() {
         let r = StartupReport {
             phases: vec![
-                t(StartupPhase::ReadFile, 0.0, 3.5),         // critical
-                t(StartupPhase::InitGpuContext, 0.0, 80.0),  // critical
-                t(StartupPhase::RenderSplash, 5.0, 4.0),     // NOT critical
-                t(StartupPhase::DecodeImages, 50.0, 200.0),  // NOT critical
+                t(StartupPhase::ReadFile, 0.0, 3.5),        // critical
+                t(StartupPhase::InitGpuContext, 0.0, 80.0), // critical
+                t(StartupPhase::RenderSplash, 5.0, 4.0),    // NOT critical
+                t(StartupPhase::DecodeImages, 50.0, 200.0), // NOT critical
             ],
             first_interactive_ms: 100.0,
         };

@@ -80,15 +80,7 @@ impl BindingEffect {
     where
         F: FnMut(RuntimeValue, Vec<Diagnostic>) + 'static,
     {
-        Self::new_lazy_boxed(
-            reg,
-            cache,
-            source,
-            state,
-            page_id,
-            node_id,
-            Box::new(apply),
-        )
+        Self::new_lazy_boxed(reg, cache, source, state, page_id, node_id, Box::new(apply))
     }
 
     /// Internal entry point shared by `new_lazy` and

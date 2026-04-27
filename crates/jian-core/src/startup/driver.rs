@@ -137,9 +137,7 @@ impl StartupDriver {
     /// Returns true once every phase in [`StartupPhase::ALL`] has a
     /// registered implementation.
     pub fn is_fully_registered(&self) -> bool {
-        StartupPhase::ALL
-            .iter()
-            .all(|p| self.impls.contains_key(p))
+        StartupPhase::ALL.iter().all(|p| self.impls.contains_key(p))
     }
 
     /// Drive the pipeline. Per-completion topological execution; siblings
@@ -150,8 +148,9 @@ impl StartupDriver {
         let mut report = StartupReport::default();
         let mut pending: HashSet<StartupPhase> = StartupPhase::ALL.iter().copied().collect();
         let mut done: HashSet<StartupPhase> = HashSet::with_capacity(StartupPhase::ALL.len());
-        let mut in_flight: FuturesUnordered<LocalBoxFuture<'static, Result<PhaseTiming, StartupError>>> =
-            FuturesUnordered::new();
+        let mut in_flight: FuturesUnordered<
+            LocalBoxFuture<'static, Result<PhaseTiming, StartupError>>,
+        > = FuturesUnordered::new();
         let mut first_error: Option<StartupError> = None;
 
         // Initial dispatch: every phase whose deps are already satisfied.
@@ -343,13 +342,9 @@ mod tests {
         assert_eq!(report.phases.len(), StartupPhase::ALL.len());
         assert!(report.first_interactive_ms >= 0.0);
         let mut names: Vec<_> = report.phases.iter().map(|t| t.phase).collect();
-        names.sort_by_key(|p| {
-            StartupPhase::ALL.iter().position(|q| q == p).unwrap()
-        });
+        names.sort_by_key(|p| StartupPhase::ALL.iter().position(|q| q == p).unwrap());
         let mut expected: Vec<_> = StartupPhase::ALL.to_vec();
-        expected.sort_by_key(|p| {
-            StartupPhase::ALL.iter().position(|q| q == p).unwrap()
-        });
+        expected.sort_by_key(|p| StartupPhase::ALL.iter().position(|q| q == p).unwrap());
         assert_eq!(names, expected);
     }
 
@@ -398,9 +393,7 @@ mod tests {
         let mut d = StartupDriver::new();
         for p in StartupPhase::ALL {
             if *p == StartupPhase::ParseSchema {
-                d.register(*p, || {
-                    future::ready(Err::<(), _>("bad schema".to_string()))
-                });
+                d.register(*p, || future::ready(Err::<(), _>("bad schema".to_string())));
             } else {
                 d.register(*p, ok_phase());
             }
@@ -420,11 +413,8 @@ mod tests {
         let mut d = StartupDriver::new();
         register_all_noop(&mut d);
         let report = block_on(d.run(StartupConfig::default())).expect("run ok");
-        let by_phase: std::collections::HashMap<_, _> = report
-            .phases
-            .iter()
-            .map(|t| (t.phase, t.clone()))
-            .collect();
+        let by_phase: std::collections::HashMap<_, _> =
+            report.phases.iter().map(|t| (t.phase, t.clone())).collect();
         for t in &report.phases {
             for dep in t.phase.deps() {
                 let dt = by_phase.get(dep).expect("dep timing recorded");
@@ -499,9 +489,7 @@ mod tests {
         let mut d = StartupDriver::new();
         for p in StartupPhase::ALL {
             if *p == StartupPhase::ReadFile {
-                d.register(*p, || {
-                    future::ready(Err::<(), _>("disk gone".to_string()))
-                });
+                d.register(*p, || future::ready(Err::<(), _>("disk gone".to_string())));
             } else if *p == StartupPhase::InitGpuContext {
                 let flag = Rc::clone(&init_completed);
                 d.register(*p, move || async move {
@@ -515,7 +503,13 @@ mod tests {
         }
         let err = block_on(d.run(StartupConfig::default())).unwrap_err();
         assert!(
-            matches!(err, StartupError::PhaseFailed { phase: StartupPhase::ReadFile, .. }),
+            matches!(
+                err,
+                StartupError::PhaseFailed {
+                    phase: StartupPhase::ReadFile,
+                    ..
+                }
+            ),
             "expected ReadFile failure, got {err:?}"
         );
         assert!(
@@ -556,7 +550,10 @@ mod tests {
         }
         let err = block_on(d.run(StartupConfig::default())).unwrap_err();
         assert!(
-            matches!(err, StartupError::Unregistered(StartupPhase::InitGpuContext)),
+            matches!(
+                err,
+                StartupError::Unregistered(StartupPhase::InitGpuContext)
+            ),
             "expected Unregistered(InitGpuContext), got {err:?}"
         );
         assert!(
