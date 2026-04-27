@@ -79,7 +79,7 @@ impl JianUrl {
     /// ### Canonical form
     ///
     /// The parser is lenient on input but strict on the canonical
-    /// form returned by [`JianUrl::Display`]:
+    /// form returned by the [`Display`][std::fmt::Display] impl:
     ///
     /// - **Empty path canonicalises to `/`.** `jian://app` and
     ///   `jian://app/` are equivalent — both parse to `path == "/"`,
