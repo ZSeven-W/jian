@@ -25,6 +25,16 @@ targets = [
     { triple = "x86_64-apple-darwin" },
 ]
 
+# Exclude `jian-asp` itself from the analysed graph: it lives in the
+# workspace as a Phase 0 skeleton (Plan 18 Task 0), and its own
+# `default = ["dev-asp"]` brings the gated mods into its own root
+# build — but no other workspace member depends on it under default
+# features. Excluding the crate as an analysis root lets the
+# bans.deny rule below work the way we want: it triggers ONLY when
+# something OTHER than jian-asp itself reaches it via the dep graph
+# (which under default features is nothing — exactly the invariant).
+exclude = ["jian-asp"]
+
 # Ignore dev-only target trees — dev-dependencies pull `proptest`,
 # `criterion`, etc. that we don't care to gate. The `bans` section
 # below explicitly allows `jian-asp` to live behind `dev-asp` features
@@ -59,7 +69,13 @@ confidence-threshold = 0.93
 # `multiple-versions = "warn"` (default `deny` is too noisy in a
 # winit-heavy graph; keep visibility without breaking PRs).
 multiple-versions = "warn"
+# `wildcards = "deny"` would catch a real wildcard like `foo = "*"`
+# in a Cargo.toml. Workspace path deps (`jian-core = { path = "..." }`)
+# don't carry a version, which cargo-deny also reads as a wildcard;
+# `allow-wildcard-paths = true` keeps the lint useful for crates.io
+# deps without false-positiving on path deps inside the workspace.
 wildcards = "deny"
+allow-wildcard-paths = true
 
 # ─── Headline bans (Plan 22 Task 10 Job 2) ───────────────────────────
 #

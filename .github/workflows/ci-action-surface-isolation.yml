@@ -154,8 +154,14 @@ jobs:
       - name: scan for banned symbols
         run: |
           set -euo pipefail
-          # Symbols listed in Plan 22 Task 10's spec body.
-          PATTERN='pen_mcp|batch_design|inspect_ax_tree|snapshot_png|handshake'
+          # Spec §12.2's pattern is `(pen_mcp|batch_design|inspect_ax_tree|snapshot_png)`.
+          # Plan 22 Task 10 added `handshake` but that's too generic — it
+          # matches the canned TLS error string "Not enough data received
+          # to complete the handshake" baked into rustls / tokio-rustls
+          # (pulled in transitively by rmcp), so it false-positives
+          # against any binary that ships TLS. Drop `handshake` and stay
+          # with spec §12.2's narrower set.
+          PATTERN='pen_mcp|batch_design|inspect_ax_tree|snapshot_png'
           binary=target/release/jian
           if [ ! -f "$binary" ]; then
             echo "::error::release binary not found: $binary"
