@@ -12,8 +12,17 @@ description  = "winit-based desktop host for the Jian runtime"
 # Default = pure-function translators + in-memory services. No winit
 # event loop is started unless a `run` helper is called, and no
 # platform-specific surface feature is picked up automatically so CI
-# stays windowless.
+# stays windowless. **`dev-asp` deliberately stays out of `default`**
+# so production release builds don't link `jian-asp` (Plan 18 Task 0
+# physical isolation; Plan 22 Task 10 CI assertion tests this).
 default = []
+
+# Dev-only Agent Shell Protocol (Plan 18). Pulls in `jian-asp` and
+# enables the verb dispatch / transport plumbing once Phase 1 of the
+# ASP plan lands. Production hosts MUST NOT enable this feature; the
+# CI isolation job (`ci-action-surface-isolation.yml`) fails any PR
+# whose `cargo tree` for a release host includes `jian-asp`.
+dev-asp = ["dep:jian-asp", "jian-asp/dev-asp"]
 
 # Opt-in to the real event-loop run helper. Pulls in `softbuffer` for
 # CPU-side pixel presentation (no per-platform GPU context needed).
@@ -43,6 +52,7 @@ jian-core       = { path = "../jian-core" }
 jian-ops-schema = { path = "../jian-ops-schema" }
 jian-skia       = { path = "../jian-skia" }
 jian-action-surface = { path = "../jian-action-surface", optional = true, features = ["mcp"] }
+jian-asp        = { path = "../jian-asp", optional = true, default-features = false }
 winit           = "0.30"
 async-trait     = "0.1"
 serde           = { workspace = true }

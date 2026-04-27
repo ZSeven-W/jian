@@ -1736,6 +1736,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "jian-asp"
+version = "0.0.1"
+
+[[package]]
 name = "jian-core"
 version = "0.0.1"
 dependencies = [
@@ -1765,10 +1769,14 @@ dependencies = [
  "async-trait",
  "futures",
  "jian-action-surface",
+ "jian-asp",
  "jian-core",
  "jian-ops-schema",
  "jian-skia",
  "muda",
+ "objc2 0.5.2",
+ "objc2-app-kit 0.2.2",
+ "objc2-foundation 0.2.2",
  "serde",
  "serde_json",
  "softbuffer",

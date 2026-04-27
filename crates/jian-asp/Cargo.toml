@@ -1,0 +1,30 @@
+[package]
+name         = "jian-asp"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+description  = "Jian Agent Shell Protocol — dev-only debugging / automation channel"
+readme       = "README.md"
+
+# Plan 18 Task 0 — feature-gating contract
+#
+# `dev-asp` is the master switch. Production hosts (jian-host-*) keep
+# this feature OFF in their default set; only dev builds (or explicit
+# `--features dev-asp`) link this crate's code paths.
+#
+# Why `default = ["dev-asp"]` here, but NOT in hosts: stand-alone
+# `cargo build -p jian-asp` is a developer convenience; pulling the
+# crate via a host dep is the gate the CI assertion enforces. Plan 22
+# (action-surface) Task 10's `cargo tree --no-default-features
+# --features agent-surface` strips this default and proves
+# `jian-host-* → jian-asp` is absent in production.
+[features]
+default = ["dev-asp"]
+dev-asp = []
+
+[dependencies]
+# Phase 1 of Plan 18 fills these in. Phase 0 (this commit) is the
+# feature-gating skeleton — empty deps keep `cargo build` cheap and
+# the workspace dep graph clean while the crate is a placeholder.
