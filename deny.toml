@@ -79,29 +79,31 @@ wildcards = "deny"
 # today, this ban is preemptive — when the OP→Jian Rust unification
 # (Plan 19 / Stage D) starts, `pen-mcp` becomes a path-dep candidate
 # and the gate must already exist.
-# `wrappers` lists the only crates allowed to declare a *path-direct*
-# dep on the banned name. Hosts get on the list because Plan 18 Task 0
-# wires `jian-asp` as an **optional** dep activated by their own
-# `dev-asp` feature passthrough. The realised production graph still
-# excludes `jian-asp` — that's tested separately by Job 1 (`cargo tree
-# --no-default-features --features <production-set>`). cargo-deny's
-# wrapper list keeps any *other* crate from accidentally pulling
-# `jian-asp` in (which would defeat the host-level gate).
+# Both bans are unconditional. cargo-deny only inspects the realised
+# dep graph for the workspace's **default features**; jian-host-desktop
+# wires `jian-asp` as an `optional = true` dep activated solely by the
+# `dev-asp` feature, which is NOT in any host's default set, so
+# `jian-asp` never appears in the default-feature graph and the ban
+# is silently satisfied. If a future PR drops the `optional = true`
+# (or otherwise makes `jian-asp` reachable from default features),
+# this ban triggers and the PR fails — which is exactly what we want.
 #
-# When non-desktop host crates (`jian-host-web`, `jian-host-ios`,
-# `jian-host-android`) land per Plan 8 / 11, append them here.
+# We deliberately do **not** allowlist host crates as `wrappers`:
+# - cargo-deny errors on unused wrappers in default-feature workspace
+#   runs (when `dev-asp` is off the wrapper is never exercised),
+# - and the dev-asp-enabled feature path is verified separately by
+#   Plan 22 Task 10 Job 1 (`cargo tree`), so no wrapper is needed
+#   structurally.
 [[bans.deny]]
 name = "jian-asp"
-wrappers = ["jian-host-desktop"]
 
 # `pen-mcp` lives in the OpenPencil repo and isn't reachable from
-# Jian's workspace today, so `wrappers = []` is safe — no Jian crate
-# should ever wrap it. If the OP→Jian Rust unification (Stage D)
-# brings `pen-mcp` into a shared workspace, add the editor-side
-# wrapper here, NOT a runtime crate.
+# Jian's workspace. The ban is preemptive — when the OP→Jian Rust
+# unification (Stage D) brings `pen-mcp` into a shared workspace,
+# the gate must already be in place; any host attempting to
+# pull `pen-mcp` in trips here.
 [[bans.deny]]
 name = "pen-mcp"
-wrappers = []
 
 [sources]
 # No git-source deps allowed without explicit allowlist; the workspace

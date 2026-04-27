@@ -141,6 +141,12 @@ jobs:
     # Hits are never tolerated.
     steps:
       - uses: actions/checkout@v4
+      # skia-safe links system fontconfig + freetype on Linux; install
+      # them so the release build produces a real binary for `strings`.
+      # (Mirrors the apt step in `ci.yml`'s `test` matrix.)
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: build release binary
