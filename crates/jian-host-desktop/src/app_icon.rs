@@ -77,11 +77,7 @@ impl fmt::Display for IconError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             IconError::UnreadableSource(s) => write!(f, "icon source unreadable: {s}"),
-            IconError::SizeMismatch {
-                width,
-                height,
-                got,
-            } => {
+            IconError::SizeMismatch { width, height, got } => {
                 // Match `AppIcon::new`'s saturating math so a
                 // pathologically-large dimension doesn't overflow
                 // the format computation while we're trying to

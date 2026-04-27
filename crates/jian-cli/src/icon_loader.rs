@@ -62,9 +62,8 @@ impl AppIconLoader for FsIconLoader {
             ));
         }
         let path = self.resolve(source);
-        let file = File::open(&path).map_err(|e| {
-            IconError::UnreadableSource(format!("open {}: {e}", path.display()))
-        })?;
+        let file = File::open(&path)
+            .map_err(|e| IconError::UnreadableSource(format!("open {}: {e}", path.display())))?;
         // We always want RGBA8 output. The `png` crate's
         // `set_transformations` normalises common PNG variants —
         // Indexed → RGBA, RGB → RGBA via alpha=0xff, 16-bit → 8-bit
