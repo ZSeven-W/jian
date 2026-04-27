@@ -121,20 +121,23 @@ jobs:
           done
           exit $fail
 
-  cargo-deny:
-    name: cargo deny (declared bans)
+  resolve-graph:
+    # Walks `cargo metadata`'s resolve graph rooted at each host's
+    # Cargo.toml under its production feature set, asserts no banned
+    # crate is reachable. Replaces an earlier `cargo-deny` attempt:
+    # cargo-deny's `bans.deny` operates on the whole workspace's
+    # package list (jian-asp itself is a member, so it always tripped),
+    # `[graph] exclude` removed both the crate AND incoming edges
+    # (so a regression where a host depended on jian-asp wouldn't
+    # trip), and cargo-deny lacks a `-p` flag to root analysis at
+    # one crate. `cargo metadata`'s resolve graph + a small walker
+    # is what we actually wanted: per-package roots, feature-aware,
+    # no surprises.
+    name: resolve graph (no banned crates reachable from production root)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Same matrix as `cargo-tree`: each row is one production
-        # entry point. The flags below scope cargo-deny's analysis
-        # to that crate's production feature graph specifically —
-        # NOT the whole workspace. The whole-workspace mode would
-        # trip on `jian-asp` itself being a member; rooting at the
-        # host makes `jian-asp` visible to cargo-deny only when
-        # it's *actually reachable from production code*, which is
-        # the regression we want the ban to catch.
         host:
           - name: desktop
             crate: jian-host-desktop
@@ -153,27 +156,49 @@ jobs:
             echo "::error::matrix row '${{ matrix.host.name }}' lists dev-asp; isolation gate would be bypassed"
             exit 1
           fi
-      # cargo-deny's `-p / --no-default-features / --features` are
-      # *global* flags (must come before `check bans`), not subcommand
-      # flags. The EmbarkStudios action only appends `arguments` AFTER
-      # the subcommand, so we install + run cargo-deny manually here.
-      - name: install cargo-deny
+      - name: assert no banned crates reachable from ${{ matrix.host.crate }} (${{ matrix.host.features }})
         run: |
-          curl -L https://github.com/EmbarkStudios/cargo-deny/releases/download/0.18.5/cargo-deny-0.18.5-x86_64-unknown-linux-musl.tar.gz \
-            | tar -xzv --strip-components=1 -C /usr/local/bin --wildcards '*/cargo-deny'
-          cargo-deny --version
-      - name: cargo deny check bans (host-rooted)
-        # Per-host root + production feature set. The whole-workspace
-        # mode would trip on `jian-asp` itself being a member; rooting
-        # at the host makes `jian-asp` visible to cargo-deny only when
-        # it's *actually reachable from production code*, which is
-        # the regression we want the ban to catch.
-        run: |
-          cargo-deny \
-            -p ${{ matrix.host.crate }} \
-            --no-default-features \
-            --features ${{ matrix.host.features }} \
-            check bans
+          set -euo pipefail
+          cargo metadata --format-version=1 \
+                         --no-default-features \
+                         --features ${{ matrix.host.features }} \
+                         --manifest-path crates/${{ matrix.host.crate }}/Cargo.toml \
+            > metadata.json
+          python3 - <<'PY'
+          import json, sys
+          BANNED = {"jian-asp", "pen-mcp"}
+          m = json.load(open("metadata.json"))
+          resolve = m["resolve"]
+          root = resolve.get("root")
+          # Build id -> node + id -> name maps.
+          nodes = {n["id"]: n for n in resolve["nodes"]}
+          names = {p["id"]: p["name"] for p in m["packages"]}
+          # Walk reachable set from the root.
+          seen, stack = set(), [root]
+          while stack:
+              nid = stack.pop()
+              if nid in seen:
+                  continue
+              seen.add(nid)
+              for d in nodes.get(nid, {}).get("deps", []):
+                  stack.append(d["pkg"])
+          reachable = {names[i] for i in seen if i in names}
+          hits = sorted(reachable & BANNED)
+          if hits:
+              print(f"::error::banned crates reachable from root {names.get(root, root)!r}: {hits}")
+              # Also print the path(s) for actionable diagnostics.
+              parents = {}
+              for nid, n in nodes.items():
+                  for d in n.get("deps", []):
+                      parents.setdefault(d["pkg"], []).append(nid)
+              for hit in hits:
+                  hit_id = next((i for i, n in names.items() if n == hit), None)
+                  if hit_id is None:
+                      continue
+                  print(f"  reached via parents: {[names[p] for p in parents.get(hit_id, [])]}")
+              sys.exit(1)
+          print(f"resolve graph for {names.get(root, root)} is clean: {sorted(reachable & BANNED) or '∅'}")
+          PY
 
   strings-monitor:
     name: strings | grep (release binary monitor)
