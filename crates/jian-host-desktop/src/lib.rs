@@ -29,6 +29,7 @@
 //! drop(host);
 //! ```
 
+pub mod deeplink;
 pub mod host;
 pub mod keyboard;
 pub mod menus;
@@ -36,6 +37,7 @@ pub mod pointer;
 pub mod scene;
 pub mod services;
 pub mod startup;
+pub mod updater;
 
 #[cfg(feature = "run")]
 mod run;
