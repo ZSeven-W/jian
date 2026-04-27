@@ -86,7 +86,9 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::thread;
-    use std::time::{Duration, Instant};
+    // (Duration / Instant no longer needed — the parallelism test now
+    // proves overlap via Barrier::wait deadlock-detection rather than
+    // wall-clock assertions; CI flake risk on loaded runners is gone.)
 
     #[test]
     fn delivers_value_through_receiver() {
@@ -109,14 +111,17 @@ mod tests {
     /// The whole point of `spawn_blocking_init`: blocking work overlaps
     /// the caller's parallel work.
     ///
-    /// Naïve "sleep both sides and assert wall-clock < threshold" tests
-    /// flake on loaded CI runners because the worker thread might not be
-    /// *scheduled* until after the caller's sleep completes (Codex round 1
-    /// LOW). Instead we prove overlap structurally: the worker
-    /// `Barrier::wait()`s the caller, so the worker provably reaches the
-    /// barrier — and therefore has started running — before the timed
-    /// region opens. After that we still want a coarse wall-clock check,
-    /// but with the scheduling latency removed from the window.
+    /// We prove overlap **structurally** via a `Barrier::new(2)` —
+    /// both threads must reach the barrier before either can
+    /// proceed, so the barrier returning is itself proof both threads
+    /// are on-CPU concurrently. A serialised implementation (worker
+    /// runs only after caller blocks on `block_on(rx)`) would deadlock
+    /// at the barrier and the test would time out. No wall-clock
+    /// assertion needed (and no wall-clock assertion *should* be made:
+    /// CI hardware varies enough that a "total < 90 ms" check on the
+    /// post-barrier window flakes on loaded macOS runners — Codex
+    /// round 1 of Task 2 flagged the flake risk as "not zero" and
+    /// macOS aarch64 CI surfaced it on the first real run).
     #[test]
     fn worker_runs_in_parallel_with_caller() {
         use std::sync::Barrier;
@@ -125,29 +130,19 @@ mod tests {
         let worker_barrier = Arc::clone(&barrier);
         let rx = spawn_blocking_init(move || {
             // Sync point: blocks until the caller also reaches the
-            // barrier. Reaching here proves the worker is on-CPU.
+            // barrier. Reaching here proves the worker is on-CPU
+            // *and* the main thread is too (both must arrive for the
+            // barrier to release).
             worker_barrier.wait();
-            thread::sleep(Duration::from_millis(50));
             "done"
         });
-        // Caller meets the barrier, then starts its own 50 ms blocking
-        // work *concurrently* with the worker. Timer opens AFTER the
-        // barrier so OS scheduling latency before the worker started
-        // doesn't pollute the parallelism measurement.
+        // Main thread meets the barrier. If the worker hadn't been
+        // dispatched concurrently with this call, the barrier would
+        // deadlock and the test would hang. The barrier returning
+        // is the parallelism proof.
         barrier.wait();
-        let started = Instant::now();
-        thread::sleep(Duration::from_millis(50));
         let v = block_on(rx).expect("init thread completed");
-        let total = started.elapsed();
         assert_eq!(v, "done");
-        // With genuine overlap each side takes ~50 ms and total stays
-        // close to 50 ms; serialized work would need ≥ 100 ms. The 90 ms
-        // ceiling is comfortably wide for slow CI without losing the
-        // ability to detect a regression to serial execution.
-        assert!(
-            total < Duration::from_millis(90),
-            "expected parallel execution (≈50ms post-barrier), got {total:?}"
-        );
     }
 
     #[test]
