@@ -155,8 +155,11 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
     let _mcp_handle = if args.mcp {
         let (drain, handle) = jian_action_surface::mcp::spawn_stdio_server()
             .map_err(|e| anyhow!("spawn MCP stdio server: {}", e))?;
-        host = host.with_mcp(drain, [0u8; 16]);
-        eprintln!("jian dev: MCP stdio server attached on stdin/stdout");
+        host = host.with_mcp(drain, jian_core::action_surface::BUILD_SALT);
+        eprintln!(
+            "jian dev: MCP stdio server attached on stdin/stdout (build salt source: {})",
+            jian_core::action_surface::BUILD_SALT_SOURCE
+        );
         Some(handle)
     } else {
         None
