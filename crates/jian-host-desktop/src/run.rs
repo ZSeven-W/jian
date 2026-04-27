@@ -208,7 +208,25 @@ impl ApplicationHandler for RunApp {
         // KB of RGBA pixels and runs once per window creation. A
         // conversion error logs to stderr rather than aborting —
         // a missing-icon is preferable to a missing-window.
+        //
+        // Per-platform reach (winit 0.30 docs):
+        //   - Windows / X11: `set_window_icon` populates the
+        //     taskbar + titlebar icon.
+        //   - macOS: `set_window_icon` is a no-op. We additionally
+        //     push the PNG source bytes through
+        //     `set_macos_dock_icon_from_png` so the Dock icon
+        //     reflects the schema's `app.icon` instead of the
+        //     default unbundled-binary "exec" placeholder.
+        //   - Wayland: both paths are no-ops; the launcher reads the
+        //     `.desktop` file's `Icon=` line. Plan 8 Task 10
+        //     (packaging) ships that.
         if let Some(icon) = self.host.config.icon.clone() {
+            #[cfg(target_os = "macos")]
+            if let Some(png) = icon.source_png() {
+                if let Err(e) = crate::app_icon::set_macos_dock_icon_from_png(png) {
+                    eprintln!("jian-host-desktop: macOS Dock icon update failed: {e}");
+                }
+            }
             match crate::app_icon::to_winit_icon(icon) {
                 Ok(winit_icon) => attrs = attrs.with_window_icon(Some(winit_icon)),
                 Err(e) => eprintln!("jian-host-desktop: icon conversion failed: {e}"),

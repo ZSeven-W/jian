@@ -43,11 +43,20 @@ use std::fmt;
 /// alpha is straight (NOT premultiplied) — winit's
 /// [`winit::window::Icon::from_rgba`] expects this shape and the
 /// builder validates it.
+///
+/// `source_png` optionally carries the original PNG file bytes when
+/// the loader read them from disk. This is the macOS Dock-icon path:
+/// `NSApp.setApplicationIconImage:` needs an `NSImage`, and decoding
+/// PNG bytes through Cocoa is the lightest route (no manual
+/// `NSBitmapImageRep` assembly from raw RGBA). Loaders that don't
+/// have the source bytes (raw-RGBA constructors, embedded resources)
+/// leave it `None` and the macOS Dock falls back to the default.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppIcon {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    source_png: Option<Vec<u8>>,
 }
 
 /// Errors a host's icon pipeline can return — both decoder errors
@@ -119,7 +128,24 @@ impl AppIcon {
             width,
             height,
             rgba,
+            source_png: None,
         })
+    }
+
+    /// Attach the original PNG bytes the icon was decoded from. Used
+    /// by the macOS Dock helper — see [`set_macos_dock_icon_from_png`]
+    /// — so callers don't have to track them separately. The bytes
+    /// are stored as-is; no re-encoding.
+    pub fn with_source_png(mut self, png_bytes: Vec<u8>) -> Self {
+        self.source_png = Some(png_bytes);
+        self
+    }
+
+    /// Borrow the original PNG bytes if the loader recorded them.
+    /// Returns `None` for icons constructed from raw RGBA without a
+    /// known source.
+    pub fn source_png(&self) -> Option<&[u8]> {
+        self.source_png.as_deref()
     }
 
     pub fn width(&self) -> u32 {
@@ -185,6 +211,62 @@ pub fn to_winit_icon(icon: AppIcon) -> Result<winit::window::Icon, IconError> {
     let (w, h, rgba) = icon.into_parts();
     winit::window::Icon::from_rgba(rgba, w, h)
         .map_err(|e| IconError::Decode(format!("winit::Icon::from_rgba: {e}")))
+}
+
+/// macOS-only: set the running app's Dock icon from raw PNG bytes.
+///
+/// On macOS, an unbundled binary (`cargo run` style) shows the default
+/// terminal/exec icon in the Dock because the Dock icon comes from the
+/// `.app` bundle's `Contents/Resources/<name>.icns`. winit's
+/// `set_window_icon` is a no-op on macOS — the only runtime hook is
+/// `NSApp.setApplicationIconImage:`. This helper builds an `NSImage`
+/// from the PNG bytes and applies it.
+///
+/// Must be called on the main thread. Safe to call before the event
+/// loop starts: `NSApplication.sharedApplication` lazy-initialises
+/// the global app object, and the icon assignment persists.
+///
+/// `png_bytes` is the raw `.png` file contents. The decoded
+/// [`AppIcon`] RGBA buffer would also work but requires assembling
+/// an `NSBitmapImageRep` by hand; PNG bytes route through Cocoa's
+/// own decoder which is simpler and supports any color space the
+/// PNG declares (the in-process `png` crate strips down to RGBA8).
+#[cfg(target_os = "macos")]
+pub fn set_macos_dock_icon_from_png(png_bytes: &[u8]) -> Result<(), String> {
+    use objc2::ClassType;
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::{MainThreadMarker, NSData};
+
+    let mtm = MainThreadMarker::new()
+        .ok_or_else(|| "set_macos_dock_icon must be called on the main thread".to_string())?;
+
+    // `with_bytes` copies the slice into an immutable NSData. The
+    // slice is borrowed for the duration of the call only.
+    let data = NSData::with_bytes(png_bytes);
+
+    // `initWithData:` is the documented PNG-decoding entry point.
+    // Returns nil if the data isn't a recognised image format.
+    let image = NSImage::initWithData(NSImage::alloc(), &data)
+        .ok_or_else(|| "NSImage::initWithData returned nil — PNG decode failed".to_string())?;
+
+    let app = NSApplication::sharedApplication(mtm);
+    // SAFETY: `setApplicationIconImage:` is marked unsafe in
+    // objc2-app-kit because it accesses the global app object's
+    // mutable state — but we have a `MainThreadMarker`, which is
+    // exactly the invariant the marker exists to encode (Cocoa
+    // requires NSApp mutations on the main thread). The image is
+    // retained by Cocoa across the call; the local `Retained<NSImage>`
+    // drops at end of scope, leaving Cocoa with its own retain count.
+    unsafe { app.setApplicationIconImage(Some(&image)) };
+    Ok(())
+}
+
+/// No-op stub on non-macOS so callers don't need `cfg` everywhere.
+/// Other platforms apply their icon via `winit::Window::set_window_icon`
+/// (Windows / X11) or the launcher's `.desktop` reference (Wayland).
+#[cfg(not(target_os = "macos"))]
+pub fn set_macos_dock_icon_from_png(_png_bytes: &[u8]) -> Result<(), String> {
+    Ok(())
 }
 
 #[cfg(test)]

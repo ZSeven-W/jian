@@ -51,6 +51,15 @@ arboard         = { version = "3", optional = true }
 softbuffer      = { version = "0.4", optional = true }
 muda            = { version = "0.13", optional = true }
 
+# macOS-only: drive `NSApp.setApplicationIconImage:` so the runtime can
+# update the Dock icon for unbundled binaries (winit's `set_window_icon`
+# is a no-op on macOS — the Dock icon comes from the .app bundle's
+# .icns by default; we override it from the schema's `app.icon` PNG).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSImage"] }
+objc2-foundation = { version = "0.2", features = ["NSData", "NSString"] }
+
 [dev-dependencies.futures]
 version = "0.3"
 

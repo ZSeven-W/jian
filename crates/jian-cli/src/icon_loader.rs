@@ -25,7 +25,6 @@
 
 use jian_host_desktop::app_icon::{AppIcon, AppIconLoader, IconError};
 use jian_ops_schema::PenDocument;
-use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
@@ -62,14 +61,17 @@ impl AppIconLoader for FsIconLoader {
             ));
         }
         let path = self.resolve(source);
-        let file = File::open(&path)
+        // Read the file once into memory: we need the raw PNG bytes
+        // again for the macOS Dock-icon path (Cocoa decodes the PNG
+        // itself), so a single read avoids a second open + slurp.
+        let png_bytes = std::fs::read(&path)
             .map_err(|e| IconError::UnreadableSource(format!("open {}: {e}", path.display())))?;
         // We always want RGBA8 output. The `png` crate's
         // `set_transformations` normalises common PNG variants —
         // Indexed → RGBA, RGB → RGBA via alpha=0xff, 16-bit → 8-bit
         // — so the buffer arrives in canonical form regardless of
         // what the file declared.
-        let mut decoder = png::Decoder::new(BufReader::new(file));
+        let mut decoder = png::Decoder::new(BufReader::new(&png_bytes[..]));
         decoder.set_transformations(
             png::Transformations::EXPAND
                 | png::Transformations::ALPHA
@@ -141,7 +143,7 @@ impl AppIconLoader for FsIconLoader {
             )));
         }
 
-        AppIcon::new(width, height, buf)
+        AppIcon::new(width, height, buf).map(|icon| icon.with_source_png(png_bytes))
     }
 }
 
@@ -272,6 +274,7 @@ pub fn resolve_app_icon(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
     use std::io::Write;
     use tempfile::TempDir;
 
