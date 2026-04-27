@@ -1,16 +1,25 @@
-# cargo-deny config — Plan 22 (action-surface) Task 10 Job 2.
+# cargo-deny config — DOCUMENTATION ONLY, NOT EXERCISED BY CI.
 #
-# This file is the workspace-wide ban list. The headline ban targets
-# are `jian-asp` and `pen-mcp`: production hosts MUST NOT pull either
-# into their dependency graph. The complementary `cargo tree` job
-# (Plan 22 Task 10 Job 1) tests the realised graph; this file tests
-# the *declared* dependency edges so a banned crate can't sneak in
-# under any future feature combination.
+# Originally Plan 22 (action-surface) Task 10 Job 2 was a `cargo deny
+# check bans` job, but cargo-deny operates on the whole workspace's
+# package list — `jian-asp` is itself a workspace member (Plan 18
+# Task 0 skeleton), so the ban triggered on the crate's own existence
+# rather than on the regression we wanted to catch (a host non-
+# optionally pulling it in). cargo-deny lacks a per-crate `-p` flag
+# at the global position, and `[graph] exclude` removes the named
+# crate AND its incoming edges, silently bypassing the ban.
 #
-# Run locally:
-#     cargo deny check bans
+# The CI workflow `.github/workflows/ci-action-surface-isolation.yml`
+# replaces the cargo-deny job with a custom **resolve-graph walker**
+# rooted at each host's manifest, which has the exactly-correct
+# semantics ("does the production feature set reach a banned crate?").
 #
-# CI: `.github/workflows/ci-action-surface-isolation.yml::deny`.
+# This file remains as design documentation: the `[[bans.deny]]`
+# entries below name the bans, and the `[graph] targets` list shows
+# which platforms the original gate cared about. Run locally with
+# `cargo deny check bans` if you want a sanity sweep — but expect
+# false positives because of the workspace-membership issue above.
+# **Do not assume CI will run this file.**
 
 [graph]
 # Check the host targets explicitly so platform-conditional deps are

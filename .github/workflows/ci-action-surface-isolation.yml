@@ -5,21 +5,28 @@ name: action-surface isolation
 # Three jobs, three angles on the same invariant: production builds
 # of `jian-host-*` MUST NOT include `jian-asp` or `pen-mcp` code.
 #
-#   Job 1 (`cargo-tree`):  inspect the resolved dep graph for each
-#                          host's production feature set. Strictest
-#                          single signal — fails if a banned crate
-#                          appears anywhere in the tree.
-#   Job 2 (`cargo-deny`):  inspect the *declared* dep edges via
-#                          `bans.deny`. Catches paths Job 1 might miss
-#                          (e.g. a feature combination we forgot to
-#                          test). Wrapper allowlist in `deny.toml`
-#                          permits hosts to optionally depend on
-#                          `jian-asp` but no one else.
-#   Job 3 (`strings`):     greps the release binary for symbol names
-#                          known to come from banned crates. Belt-and-
-#                          suspenders; the spec acknowledges the
-#                          compiler may inline / strip these so this
-#                          is a *monitor*, not the primary gate.
+#   Job 1 (`cargo-tree`):     inspect the resolved dep graph for
+#                             each host's production feature set
+#                             via `cargo tree`. Strictest single
+#                             signal — fails on any banned crate.
+#   Job 2 (`resolve-graph`):  walk `cargo metadata`'s resolve graph
+#                             rooted at each host's manifest with
+#                             `--no-default-features --features
+#                             <production-set>`. Independent
+#                             implementation of the same invariant
+#                             so a `cargo tree` parser bug or
+#                             output-format change can't bypass
+#                             the gate alone. Replaced an earlier
+#                             `cargo-deny` attempt — see deny.toml
+#                             for why cargo-deny's semantics
+#                             (workspace-wide bans + graph.exclude)
+#                             didn't fit the per-host root we need.
+#   Job 3 (`strings`):        greps the release binary for symbol
+#                             names known to come from banned
+#                             crates. Belt-and-suspenders; the spec
+#                             acknowledges the compiler may inline
+#                             / strip these so this is a *monitor*,
+#                             not the primary gate.
 #
 # Any single job failing fails the workflow → fails the PR.
 
