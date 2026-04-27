@@ -10,7 +10,7 @@ DOM, without an Electron tax.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Rust](https://img.shields.io/badge/rust-1.78%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-604%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-750%20passing-brightgreen.svg)
 ![Workspace](https://img.shields.io/badge/version-0.0.1-purple.svg)
 ![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-success)
 ![MCP](https://img.shields.io/badge/MCP-rmcp%20stdio-9cf)
@@ -33,10 +33,10 @@ DOM, without an Electron tax.
 - ⚡ **Solid-style reactivity** — `Signal<T>` + `Effect`, fine-grained, single-threaded, allocation-light.
 - 🎯 **Real gesture arena** — Tap · LongPress · Swipe · Scroll · multi-pointer **Pinch & Rotate**, with bubble-style hit dispatch.
 - 🎨 **Pixel-stable rendering** — Skia raster, per-corner radii, gradients, shadows, image cache, Lucide icons; opt-in `textlayout` for full Paragraph shaping.
-- 🤖 **AI-native by design** — every interactive node derives a stable `<scope>.<verb>_<slug>` action; `jian dev --mcp` exposes them over a real MCP stdio server.
+- 🤖 **AI-native by design** — every interactive node derives a `<scope>.<slug>_<hash4>` action (Tap stays unprefixed; DoubleTap / LongPress / Submit / Set / Open / LoadMore / Swipe* / Confirm / Dismiss carry verb prefixes); `jian dev --mcp` exposes them over a real MCP stdio server.
 - 🔁 **Hot reload that keeps state** — `jian dev app.op` reparses on save without losing your counter / form / scroll position.
 - 🛡️ **Capability-gated I/O** — declared up-front in `app.capabilities`; the gate refuses anything the document didn't ask for.
-- 🧪 **604 tests, 0 ignored** — `cargo test --workspace` is the source of truth; CI matrix covers macOS / Linux / Windows + the `textlayout` build path.
+- 🧪 **750 tests, 0 failures** — `cargo test --workspace` is the source of truth; CI matrix covers macOS / Linux / Windows + the `textlayout` build path.
 
 ## 🎬 Hello, Counter
 
@@ -202,29 +202,58 @@ that speaks MCP:
 cargo run -p jian --features mcp -- dev app.op --mcp
 ```
 
-Under the hood, every interactive node becomes a tool:
+Under the hood, every interactive node becomes a tool. Names follow
+`<scope>.<slug>_<hash4>` — `<hash4>` is four hex chars derived from
+`(node.id, BUILD_SALT)` and is dropped when the author sets
+`semantics.aiName`:
 
-| Node                                | Action                |
-|-------------------------------------|-----------------------|
-| `<button id="signup-cta">`          | `home.tap_signup_cta` |
-| `<text-input bindings.value="…">`   | `home.set_email`      |
-| `<list events.onLoadMore="…">`      | `home.load_more`      |
+| Node                                                       | Action name shape                          |
+|------------------------------------------------------------|--------------------------------------------|
+| `events.onTap` on `<button id="signup-cta">`               | `home.signup_cta_a3f7`                     |
+| `bindings["bind:value"] = $state.email` on `<text-input>`  | `home.set_email_b012`                      |
+| `events.onScroll` / `onReachEnd` on `<list>`               | `home.load_more_c4d5`                      |
+| `events.onPanStart` + `onPanEnd` on a card                 | `home.swipe_{left,right,up,down}_e6f7` (4) |
+| `events.onSubmit` on a `<form>`                            | `home.submit_<slug>_<hash4>`               |
+| `route = { push: "/checkout" }` on a link                  | `home.open_checkout_<hash4>`               |
+| `semantics.aiName = "checkout"` on the same link           | `home.checkout` (no `_<hash4>`)            |
 
-- **Static availability** comes from the schema (`AvailabilityStatic::Available` / `ConfirmGated`).
-- **Live state-gate** drops actions whose source node (or any ancestor) is
-  bound to `disabled`, `visible:false`, or `opacity:0` — so the AI never sees
-  an action it would then bounce off `state_gated` on execute.
-- **Authorship overrides** (`aiAliases`) survive both `list` and `execute`.
+- **Static availability** comes from the schema (`AvailabilityStatic::Available`
+  / `ConfirmGated` / `StaticHidden`). `confirm:` / `fetch DELETE|POST` /
+  `storage_clear` / `storage_wipe` flip a node to `ConfirmGated` until the
+  author opts back in with `semantics.aiHidden: false`.
+- **Live state-gate** (`RuntimeStateGate`) drops actions whose source node or
+  any ancestor evaluates `bindings.visible == false` or
+  `bindings.disabled == true` against the live `StateGraph` — so the AI
+  never sees an action it would then bounce off `state_gated` on execute.
+- **Authorship overrides** (`aiAliases`) survive both `list` and `execute`;
+  alias hits are audited with `alias_used: true` and stay transparent to
+  the client.
+- **Phase 1 dispatch coverage**: Tap / Confirm / Dismiss / SetValue / OpenRoute
+  are wired against the live `Runtime`. DoubleTap / LongPress / Submit /
+  Swipe* / LoadMore are listed in `list_available_actions` but currently
+  return `ExecutionFailed(handler_error)` until their host-driver paths
+  land.
 - **Pointer dispatch** synthesises a real `PointerDown` + `PointerUp` at the
   layout centre of the source node — the same code path a human cursor takes.
-- **Audit log + rate limit + concurrency caps + swipe throttle** are first-class.
+- **Audit log + rate limit (10 calls/sec/session) + same-action concurrency
+  cap + swipe 400 ms same-direction throttle** are first-class.
 - The `RuntimeDispatcher` wraps `&mut Runtime`, while a `SinkDispatcher` keeps
   unit tests free of `winit`.
+
+> Build-time stable names: the `_<hash4>` suffix comes from `BUILD_SALT`
+> baked in by `crates/jian-core/build.rs` (priority: `JIAN_BUILD_SALT`
+> env override → `<git-short-16>-<cargo-semver>` (e.g.
+> `1a2b3c4d5e6f7890-0.0.1`) → `<cargo-semver>` alone). `jian dev --mcp`
+> prints the resolved source string on attach so prompt caches can key
+> on it.
+
+See [`crates/jian-action-surface/README.md`](crates/jian-action-surface/README.md)
+and [`openpencil-docs/superpowers/notes/2026-04-24-ai-action-surface-client-guide.md`](../openpencil-docs/superpowers/notes/2026-04-24-ai-action-surface-client-guide.md).
 
 ## 🛠 Development
 
 ```bash
-cargo test --workspace                  # 604 tests
+cargo test --workspace                  # 750 tests, 0 failures
 cargo test --workspace --all-features   # adds the mcp + textlayout paths
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
@@ -247,7 +276,10 @@ because Skia's text shaping build pulls it in.
 - ✅ Plan 9 CLI (six subcommands incl. `dev` hot-reload)
 - ✅ Plan 22 `jian-action-surface` Phase 1 + MCP stdio server (`rmcp`) + `jian dev --mcp`
 - ✅ §3.3 CJK transliteration · §3.4 collision detection · §6.3 swipe throttle · §8.1 AuditLog
+- ✅ §3.1 `BUILD_SALT` build-time injection (`crates/jian-core/build.rs` — env override → git+semver → semver fallback; mac `.git` worktree resolved; FNV-1a double-hash → 16 bytes)
 - ✅ Bubble-style event dispatch · binding-aware scene walker
+- ✅ macOS Dock icon at runtime via `NSApp.setApplicationIconImage:` (`set_macos_dock_icon_from_png`) so unbundled `jian player` / `jian dev` (or any host that calls `DesktopHost::with_icon`) shows the schema's `app.icon` instead of the default exec icon
+- ✅ Action Surface protocol docs — `crates/jian-action-surface/README.md` (embedding + threat-model anchors) + `openpencil-docs/superpowers/notes/2026-04-24-ai-action-surface-client-guide.md` (Claude Desktop / raw-stdio Python clients, error-handling policy, build-salt awareness)
 
 **Up next (each warrants its own session):**
 
