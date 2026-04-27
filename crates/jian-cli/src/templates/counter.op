@@ -5,7 +5,8 @@
   "app": {
     "name": "{{APP_NAME}}",
     "version": "0.1.0",
-    "id": "{{APP_ID}}"
+    "id": "{{APP_ID}}",
+    "icon": "icon.png"
   },
   "state": {
     "count": { "type": "int", "default": 0 }

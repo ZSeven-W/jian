@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 mod commands;
+#[cfg(feature = "player")]
+mod icon_loader;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -121,6 +123,13 @@ pub struct PlayerArgs {
     /// when present, otherwise the path's file stem.
     #[arg(long)]
     pub title: Option<String>,
+    /// Override the window icon. PNG file path; absolute or relative
+    /// to the CWD. When unset, the runtime falls back to `app.icon`
+    /// from the `.op` file (resolved relative to the `.op`'s
+    /// directory). Pass `--icon=` to suppress both the override and
+    /// the `app.icon` fallback for this run.
+    #[arg(long)]
+    pub icon: Option<PathBuf>,
 }
 
 #[cfg(feature = "player")]
@@ -131,6 +140,10 @@ pub struct DevArgs {
     pub size: Option<String>,
     #[arg(long)]
     pub title: Option<String>,
+    /// Override the window icon. PNG file path; absolute or relative
+    /// to the CWD. Same semantics as `jian player --icon`.
+    #[arg(long)]
+    pub icon: Option<PathBuf>,
     /// Open a stdio MCP server on this process's stdin/stdout while
     /// the window is running. AI clients can drive `tools/list` /
     /// `tools/call` against the live, hot-reloading document.

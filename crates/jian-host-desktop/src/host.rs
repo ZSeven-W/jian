@@ -65,6 +65,19 @@ pub struct HostConfig {
     /// useful for headless / kiosk-style apps. Defaults to
     /// `MenuSpec::default_app_spec(<title>)` via `with_default_menu`.
     pub menu: Option<crate::menus::MenuSpec>,
+    /// Optional pre-decoded window icon (RGBA8 pixel buffer + size).
+    /// When `Some` the run loop applies it via
+    /// `WindowAttributes::with_window_icon` at create time, so it
+    /// shows in the **Windows taskbar + X11 WM titlebar**.
+    /// Per-platform support: macOS and Wayland return early from
+    /// `winit::window::Window::set_window_icon` (unsupported by the
+    /// platform), so on those targets the runtime icon is a no-op
+    /// and the bundle / `.desktop` icon takes over (Plan 8 Task 10
+    /// packaging). Hosts decode the schema's
+    /// `app.icon: Option<String>` source via their preferred
+    /// `app_icon::AppIconLoader` impl before constructing
+    /// `HostConfig`.
+    pub icon: Option<crate::app_icon::AppIcon>,
 }
 
 impl Default for HostConfig {
@@ -73,6 +86,7 @@ impl Default for HostConfig {
             title: "Jian".to_owned(),
             initial_size: size(800.0, 600.0),
             menu: None,
+            icon: None,
         }
     }
 }
@@ -171,6 +185,20 @@ impl DesktopHost {
         self
     }
 
+    /// Set the runtime window icon. The icon is applied via
+    /// `winit::window::WindowAttributes::with_window_icon` at window
+    /// creation time and shows in the Windows taskbar + X11 WM
+    /// titlebar. macOS and Wayland do not honour this (winit returns
+    /// early); on those platforms the bundle icon (Plan 8 Task 10
+    /// packaging) takes over. Pass `None` to drop a previously-set
+    /// icon. Hosts decode the schema's `app.icon: Option<String>`
+    /// via an [`crate::app_icon::AppIconLoader`] impl before
+    /// calling this.
+    pub fn with_icon(mut self, icon: Option<crate::app_icon::AppIcon>) -> Self {
+        self.config.icon = icon;
+        self
+    }
+
     pub fn title(&self) -> &str {
         &self.config.title
     }
@@ -199,6 +227,7 @@ mod tests {
             title: "Custom".into(),
             initial_size: size(320.0, 200.0),
             menu: None,
+            icon: None,
         };
         let host = DesktopHost::with_config(rt, cfg);
         assert_eq!(host.title(), "Custom");

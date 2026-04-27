@@ -33,6 +33,11 @@ zip              = { version = "2.2", default-features = false, features = ["def
 notify           = { version = "6", optional = true }
 # `jian perf startup` drives the StartupDriver via futures::executor::block_on.
 futures          = "0.3"
+# PNG decoder for the CLI's default app-icon loader (player + dev paths).
+# Lighter than the `image` crate and PNG covers the common case for
+# `app.icon` and `--icon` flags; hosts that need ICO / JPEG decode it
+# themselves before constructing `HostConfig`.
+png              = "0.17"
 
 [dev-dependencies]
 assert_cmd      = "2"

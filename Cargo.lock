@@ -1709,6 +1709,7 @@ dependencies = [
  "jian-host-desktop",
  "jian-ops-schema",
  "notify",
+ "png 0.17.16",
  "predicates",
  "serde",
  "serde_json",

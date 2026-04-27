@@ -55,6 +55,11 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
         None => root_size.unwrap_or((800.0, 600.0)),
     };
 
+    // Resolve the icon BEFORE moving `schema` into the Runtime —
+    // resolve_app_icon needs to read schema.app.icon, and the
+    // Runtime constructor takes ownership.
+    let icon = crate::icon_loader::resolve_app_icon(&args.path, args.icon.as_deref(), &schema);
+
     let mut rt = Runtime::new_from_document(schema)
         .with_context(|| format!("build runtime from {}", path.display()))?;
     rt.build_layout((w, h)).with_context(|| "layout")?;
@@ -132,6 +137,7 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
         title,
         initial_size: size(w, h),
         menu: None,
+        icon,
     };
     // `mut` is only needed when the `mcp` feature reassigns `host`
     // to wire the bridge — silence the warning on default builds.

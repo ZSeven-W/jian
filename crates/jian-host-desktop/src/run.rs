@@ -197,12 +197,23 @@ impl ApplicationHandler for RunApp {
             return;
         }
         let initial = self.host.config.initial_size;
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title(&self.host.config.title)
             .with_inner_size(winit::dpi::LogicalSize::new(
                 initial.width as f64,
                 initial.height as f64,
             ));
+        // Apply the runtime window icon if the host configured one.
+        // `to_winit_icon` cloning is fine: the icon is at most a few
+        // KB of RGBA pixels and runs once per window creation. A
+        // conversion error logs to stderr rather than aborting —
+        // a missing-icon is preferable to a missing-window.
+        if let Some(icon) = self.host.config.icon.clone() {
+            match crate::app_icon::to_winit_icon(icon) {
+                Ok(winit_icon) => attrs = attrs.with_window_icon(Some(winit_icon)),
+                Err(e) => eprintln!("jian-host-desktop: icon conversion failed: {e}"),
+            }
+        }
         let window = event_loop
             .create_window(attrs)
             .expect("jian-host-desktop: failed to create window");

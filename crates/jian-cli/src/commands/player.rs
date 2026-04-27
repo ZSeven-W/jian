@@ -43,6 +43,11 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         None => root_size.unwrap_or((800.0, 600.0)),
     };
 
+    // Resolve the icon BEFORE moving `schema` into the Runtime —
+    // resolve_app_icon needs to read schema.app.icon, and the
+    // Runtime constructor takes ownership.
+    let icon = crate::icon_loader::resolve_app_icon(&args.path, args.icon.as_deref(), &schema);
+
     let mut rt = Runtime::new_from_document(schema)
         .with_context(|| format!("build runtime from {}", args.path.display()))?;
     rt.build_layout((w, h)).with_context(|| "layout")?;
@@ -67,6 +72,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         title,
         initial_size: size(w, h),
         menu: None,
+        icon,
     };
     let host = DesktopHost::with_config(rt, cfg).with_default_menu();
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;

@@ -29,6 +29,7 @@
 //! drop(host);
 //! ```
 
+pub mod app_icon;
 pub mod deeplink;
 pub mod host;
 pub mod keyboard;
