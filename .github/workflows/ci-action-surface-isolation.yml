@@ -1,0 +1,164 @@
+name: action-surface isolation
+
+# Plan 22 (`jian-action-surface`) Task 10 — physical isolation gate.
+#
+# Three jobs, three angles on the same invariant: production builds
+# of `jian-host-*` MUST NOT include `jian-asp` or `pen-mcp` code.
+#
+#   Job 1 (`cargo-tree`):  inspect the resolved dep graph for each
+#                          host's production feature set. Strictest
+#                          single signal — fails if a banned crate
+#                          appears anywhere in the tree.
+#   Job 2 (`cargo-deny`):  inspect the *declared* dep edges via
+#                          `bans.deny`. Catches paths Job 1 might miss
+#                          (e.g. a feature combination we forgot to
+#                          test). Wrapper allowlist in `deny.toml`
+#                          permits hosts to optionally depend on
+#                          `jian-asp` but no one else.
+#   Job 3 (`strings`):     greps the release binary for symbol names
+#                          known to come from banned crates. Belt-and-
+#                          suspenders; the spec acknowledges the
+#                          compiler may inline / strip these so this
+#                          is a *monitor*, not the primary gate.
+#
+# Any single job failing fails the workflow → fails the PR.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  cargo-tree:
+    name: cargo tree (no banned crates in production graph)
+    runs-on: ubuntu-latest
+    # **Load-bearing check.** cargo-deny's `wrappers` allowance lets
+    # `jian-host-desktop` declare any direct edge to `jian-asp`
+    # (the optional+dev-asp-feature wiring needs that escape hatch).
+    # That means `cargo-deny` ALONE cannot catch a regression where a
+    # supposedly-production feature combination ends up enabling the
+    # `dev-asp` feature on the host. This job is the actual gate:
+    # `cargo tree --no-default-features --features <prod>` resolves
+    # the feature DAG and prints the realised dep tree; any banned
+    # crate appearing in that tree fails the PR.
+    #
+    # Maintenance contract: every production feature combo a host
+    # supports must appear as a matrix row. When a new host or
+    # production feature lands, ADD A ROW HERE — leaving it out is
+    # a silent bypass of the entire isolation gate.
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each row is one host × one production feature set. Keep
+        # rows narrow (one feature combo) so a failure points at the
+        # exact graph that triggered it. The matrix invariant guard
+        # below refuses any row that contains `dev-asp`.
+        host:
+          - name: desktop
+            crate: jian-host-desktop
+            # The realistic production wire: the run helper +
+            # action-surface MCP bridge, no `dev-asp`.
+            features: run,mcp
+        # Web / iOS / Android hosts not yet in the workspace; add
+        # rows here when their crates land (Plan 8 / 11).
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: matrix invariant — production rows must NOT enable dev-asp
+        # `cargo-deny`'s `wrappers = ["jian-host-desktop"]` allows the
+        # host to declare a direct edge to `jian-asp` (necessary
+        # because the optional dep is wired through the `dev-asp`
+        # feature passthrough). That means cargo-deny ALONE doesn't
+        # catch a config-rot regression where a future feature combo
+        # implicitly turns on `dev-asp` in a "production" row.
+        # `cargo-tree` (the next step) is the real guard, but only
+        # if no row in this matrix smuggles `dev-asp` in. Refuse to
+        # proceed if it does.
+        run: |
+          set -euo pipefail
+          features='${{ matrix.host.features }}'
+          if echo ",$features," | grep -qE ',dev-asp,'; then
+            echo "::error::matrix row '${{ matrix.host.name }}' lists dev-asp in its production feature set; this defeats the isolation gate"
+            exit 1
+          fi
+      - name: assert no banned crates in production tree
+        run: |
+          set -euo pipefail
+          BANNED=("jian-asp" "pen-mcp")
+          # `cargo tree` doesn't accept `--release`; the dep graph is
+          # the same across profiles, only --features matters here.
+          tree=$(cargo tree -p ${{ matrix.host.crate }} \
+                            --no-default-features \
+                            --features ${{ matrix.host.features }} \
+                            --prefix none)
+          echo "::group::cargo tree (${{ matrix.host.name }} @ ${{ matrix.host.features }})"
+          echo "$tree"
+          echo "::endgroup::"
+          fail=0
+          for crate in "${BANNED[@]}"; do
+            if echo "$tree" | grep -qE "(^| )${crate} v"; then
+              echo "::error::banned crate '$crate' reachable from ${{ matrix.host.crate }} under features '${{ matrix.host.features }}'"
+              fail=1
+            fi
+          done
+          exit $fail
+
+  cargo-deny:
+    name: cargo deny (declared bans)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # `bans` is the headline check for this workflow; advisories
+          # / licenses / sources are configured in deny.toml but not
+          # gated here (separate concern, run by the `cargo-deny`
+          # job in `ci.yml` once that lands).
+          command: check bans
+          arguments: --workspace
+
+  strings-monitor:
+    name: strings | grep (release binary monitor)
+    runs-on: ubuntu-latest
+    # Belt-and-suspenders. Spec §12.2 requires zero hits when the
+    # check fires (`要求 0 命中`); a hit means a banned code path
+    # leaked into the binary somehow and is always actionable, so
+    # the job FAILS on hit. The "monitor, not sole guarantee" caveat
+    # in the spec refers to the fact that a clean binary doesn't
+    # *prove* isolation — compiler/linker may have stripped the
+    # symbols — so cargo-tree + cargo-deny remain the primary gate.
+    # Hits are never tolerated.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build release binary
+        run: cargo build -p jian --release --no-default-features --features player,mcp
+      - name: scan for banned symbols
+        run: |
+          set -euo pipefail
+          # Symbols listed in Plan 22 Task 10's spec body.
+          PATTERN='pen_mcp|batch_design|inspect_ax_tree|snapshot_png|handshake'
+          binary=target/release/jian
+          if [ ! -f "$binary" ]; then
+            echo "::error::release binary not found: $binary"
+            exit 1
+          fi
+          if hits=$(strings "$binary" | grep -E "$PATTERN" || true); [ -n "$hits" ]; then
+            echo "::error::release binary contains banned symbols (Plan 22 Task 10 / spec §12.2):"
+            echo "$hits" | head -20
+            exit 1
+          else
+            echo "release binary is clean of banned symbols"
+          fi

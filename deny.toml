@@ -1,0 +1,111 @@
+# cargo-deny config — Plan 22 (action-surface) Task 10 Job 2.
+#
+# This file is the workspace-wide ban list. The headline ban targets
+# are `jian-asp` and `pen-mcp`: production hosts MUST NOT pull either
+# into their dependency graph. The complementary `cargo tree` job
+# (Plan 22 Task 10 Job 1) tests the realised graph; this file tests
+# the *declared* dependency edges so a banned crate can't sneak in
+# under any future feature combination.
+#
+# Run locally:
+#     cargo deny check bans
+#
+# CI: `.github/workflows/ci-action-surface-isolation.yml::deny`.
+
+[graph]
+# Check the host targets explicitly so platform-conditional deps are
+# evaluated. Linux + macOS + Windows cover the three desktop matrices
+# the runtime ships against today; iOS / Android / WASM hosts get
+# added when their crates land (Plan 8 / 11).
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-unknown-linux-gnu" },
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "aarch64-apple-darwin" },
+    { triple = "x86_64-apple-darwin" },
+]
+
+# Ignore dev-only target trees — dev-dependencies pull `proptest`,
+# `criterion`, etc. that we don't care to gate. The `bans` section
+# below explicitly allows `jian-asp` to live behind `dev-asp` features
+# anyway, so this is belt-and-suspenders.
+all-features = false
+
+[advisories]
+# Action Surface plan doesn't mandate vulnerability gating in Phase 1
+# (separate concern). Switch to `db = "..."` + `vulnerability = "deny"`
+# once a security review cadence is set.
+yanked = "warn"
+
+[licenses]
+# Plan 22 Task 10 doesn't require license gating. Set when needed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+# `multiple-versions = "warn"` (default `deny` is too noisy in a
+# winit-heavy graph; keep visibility without breaking PRs).
+multiple-versions = "warn"
+wildcards = "deny"
+
+# ─── Headline bans (Plan 22 Task 10 Job 2) ───────────────────────────
+#
+# `jian-asp` is the dev-only Agent Shell Protocol crate. It exposes
+# generic UI verbs (`tap`/`find`/`inspect`/`snapshot`) that would be
+# a structural information leak in production (threat model T1).
+# Plan 18 Task 0 puts the entire crate behind `#[cfg(feature =
+# "dev-asp")]`. This ban catches any future host or transitive dep
+# that adds `jian-asp` without going through the `dev-asp` feature
+# passthrough.
+#
+# `pen-mcp` is OpenPencil's editor-side MCP server. It carries the
+# 50+ element tools (`batch_design`, `add_*_v0`, `inspect_ax_tree`,
+# `snapshot_png`, etc.) that completely dump the document. It must
+# never enter a production runtime. Even though `pen-mcp` lives in
+# the OpenPencil repo and isn't reachable from the Jian workspace
+# today, this ban is preemptive — when the OP→Jian Rust unification
+# (Plan 19 / Stage D) starts, `pen-mcp` becomes a path-dep candidate
+# and the gate must already exist.
+# `wrappers` lists the only crates allowed to declare a *path-direct*
+# dep on the banned name. Hosts get on the list because Plan 18 Task 0
+# wires `jian-asp` as an **optional** dep activated by their own
+# `dev-asp` feature passthrough. The realised production graph still
+# excludes `jian-asp` — that's tested separately by Job 1 (`cargo tree
+# --no-default-features --features <production-set>`). cargo-deny's
+# wrapper list keeps any *other* crate from accidentally pulling
+# `jian-asp` in (which would defeat the host-level gate).
+#
+# When non-desktop host crates (`jian-host-web`, `jian-host-ios`,
+# `jian-host-android`) land per Plan 8 / 11, append them here.
+[[bans.deny]]
+name = "jian-asp"
+wrappers = ["jian-host-desktop"]
+
+# `pen-mcp` lives in the OpenPencil repo and isn't reachable from
+# Jian's workspace today, so `wrappers = []` is safe — no Jian crate
+# should ever wrap it. If the OP→Jian Rust unification (Stage D)
+# brings `pen-mcp` into a shared workspace, add the editor-side
+# wrapper here, NOT a runtime crate.
+[[bans.deny]]
+name = "pen-mcp"
+wrappers = []
+
+[sources]
+# No git-source deps allowed without explicit allowlist; the workspace
+# uses path deps + crates.io.
+unknown-git = "deny"
+unknown-registry = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
