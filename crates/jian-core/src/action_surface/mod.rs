@@ -20,11 +20,13 @@
 //! pair — the test suite asserts this invariant (`derive_is_deterministic`).
 
 pub mod availability;
+pub mod build_salt;
 pub mod derive;
 pub mod naming;
 pub mod state_gate;
 pub mod types;
 
+pub use build_salt::{BUILD_SALT, BUILD_SALT_SOURCE};
 pub use derive::{derive_actions, derive_actions_with_warnings, DeriveWarning};
 pub use naming::{compute_slug, normalize_slug, short_hash};
 pub use state_gate::RuntimeStateGate;
