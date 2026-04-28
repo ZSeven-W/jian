@@ -24,6 +24,37 @@ use std::rc::Rc;
 /// matching `Sender` is held by the watcher thread.
 pub type ReloadRx = Receiver<PenDocument>;
 
+/// Outcome the run loop should observe after a menu handler fires.
+/// `Quit` exits the event loop on the next tick; `Handled` keeps
+/// running. `Unknown` is the default for ids the handler doesn't
+/// recognise — currently logged to stderr by the run loop and
+/// otherwise ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuOutcome {
+    Quit,
+    Handled,
+    Unknown,
+}
+
+/// Type alias for the host-installed menu callback: takes the fired
+/// item id and a mutable Runtime borrow so handlers can run an
+/// `ActionList` against `&mut Runtime` directly.
+pub type MenuHandler = Box<dyn FnMut(&str, &mut Runtime) -> MenuOutcome>;
+
+/// Helper: a [`MenuHandler`] that handles `app.quit` (returns
+/// `MenuOutcome::Quit`) and routes everything else to a user-supplied
+/// closure. Hosts that just want to add a few custom items don't have
+/// to re-implement quit semantics each time.
+pub fn quit_aware_menu_handler<F>(mut user: F) -> MenuHandler
+where
+    F: FnMut(&str, &mut Runtime) -> MenuOutcome + 'static,
+{
+    Box::new(move |id: &str, runtime: &mut Runtime| match id {
+        "app.quit" => MenuOutcome::Quit,
+        _ => user(id, runtime),
+    })
+}
+
 pub struct DesktopHost {
     pub runtime: Runtime,
     pub backend: SkiaBackend,
@@ -32,6 +63,13 @@ pub struct DesktopHost {
     /// documents and rebuild layout. `None` keeps the original
     /// `ControlFlow::Wait` behaviour (zero CPU when idle).
     pub reload_rx: Option<ReloadRx>,
+    /// Routing callback for `muda::MenuEvent`. The run loop drains the
+    /// global menu-event channel each `about_to_wait` and forwards
+    /// every fired item id (e.g. `"app.quit"`, `"file.open"`,
+    /// `"edit.undo"`) to this closure. The default `None` value drops
+    /// menu clicks on the floor — useful for headless / single-window
+    /// apps that haven't wired UI semantics yet.
+    pub menu_handler: Option<MenuHandler>,
     /// Main-thread end of an MCP `Bridge`. The run loop drains it
     /// once per `about_to_wait` and dispatches each request through
     /// the `mcp_surface` / `RuntimeDispatcher` chain.
@@ -122,6 +160,7 @@ impl DesktopHost {
                 ..HostConfig::default()
             },
             reload_rx: None,
+            menu_handler: None,
             #[cfg(feature = "mcp")]
             mcp_drain: None,
             #[cfg(feature = "mcp")]
@@ -139,6 +178,7 @@ impl DesktopHost {
             backend: SkiaBackend::new(),
             config,
             reload_rx: None,
+            menu_handler: None,
             #[cfg(feature = "mcp")]
             mcp_drain: None,
             #[cfg(feature = "mcp")]
@@ -148,6 +188,22 @@ impl DesktopHost {
             #[cfg(feature = "mcp")]
             mcp_audit: None,
         }
+    }
+
+    /// Install a handler that fires whenever a `muda` menu item
+    /// matching one of `config.menu`'s ids is clicked. Receives the
+    /// item id (e.g. `"file.save"`) and a mutable `Runtime` reference
+    /// so handlers can run `execute_list` against `&mut Runtime`
+    /// directly. Return `MenuOutcome::Quit` to ask the run loop to
+    /// exit on the next tick.
+    ///
+    /// Idempotent — calling more than once replaces the previous
+    /// handler. `app.quit` is *not* short-circuited here; wrap your
+    /// closure with [`quit_aware_menu_handler`] if you want the
+    /// default Quit semantic without writing a match arm yourself.
+    pub fn with_menu_handler(mut self, handler: MenuHandler) -> Self {
+        self.menu_handler = Some(handler);
+        self
     }
 
     /// Attach a `Receiver` that delivers fresh `.op` schemas. Activates
@@ -288,6 +344,38 @@ mod tests {
         assert_eq!(host.title(), "Custom");
         assert_eq!(host.initial_size().width, 320.0);
         assert_eq!(host.initial_size().height, 200.0);
+    }
+
+    #[test]
+    fn quit_aware_handler_short_circuits_app_quit() {
+        // The helper must always treat `app.quit` as a Quit signal, even
+        // when the user closure has different semantics. This pins the
+        // invariant so a future refactor that moves quit semantics
+        // elsewhere flags the change here, not in production hosts.
+        let mut runtime = Runtime::new();
+        let mut handler = quit_aware_menu_handler(|_id, _rt| MenuOutcome::Handled);
+        assert_eq!(handler("app.quit", &mut runtime), MenuOutcome::Quit);
+        assert_eq!(handler("file.save", &mut runtime), MenuOutcome::Handled);
+    }
+
+    #[test]
+    fn quit_aware_handler_forwards_unknown_ids_to_user_closure() {
+        // Verify the helper actually delegates non-quit ids to the
+        // user closure (and only those). Sharing state with the
+        // closure goes through `Rc<RefCell<...>>` so the closure
+        // stays `'static`.
+        let mut runtime = Runtime::new();
+        let log = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let log_inner = log.clone();
+        let mut handler = quit_aware_menu_handler(move |id, _rt| {
+            log_inner.borrow_mut().push(id.to_owned());
+            MenuOutcome::Unknown
+        });
+        assert_eq!(handler("file.open", &mut runtime), MenuOutcome::Unknown);
+        assert_eq!(handler("edit.undo", &mut runtime), MenuOutcome::Unknown);
+        assert_eq!(handler("app.quit", &mut runtime), MenuOutcome::Quit);
+        let entries = log.borrow().clone();
+        assert_eq!(entries, vec!["file.open", "edit.undo"]);
     }
 
     #[test]

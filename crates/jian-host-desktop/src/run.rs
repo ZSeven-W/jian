@@ -550,6 +550,17 @@ impl ApplicationHandler for RunApp {
             needs_redraw = true;
         }
 
+        // Native menu drain (cfg-gated by `menus`). `muda::MenuEvent`
+        // ships through a global mpsc receiver so any menu wired via
+        // `init_menu_for_window` lands here regardless of which
+        // platform fired the click. Routing semantics live on the
+        // host's `menu_handler`; the run loop only forwards ids and
+        // honours the `Quit` outcome.
+        #[cfg(feature = "menus")]
+        if self.drain_menu_events(event_loop) {
+            needs_redraw = true;
+        }
+
         // Re-arm the polling timer when either reload or mcp wired the
         // host into poll-mode; default Wait stays untouched.
         let needs_polling = self.host.reload_rx.is_some() || self.has_mcp_drain();
@@ -633,6 +644,54 @@ impl RunApp {
         {
             false
         }
+    }
+
+    /// Drain `muda::MenuEvent::receiver()` once per `about_to_wait`.
+    /// Returns `true` if any handler reported a state change (i.e.
+    /// returned `MenuOutcome::Handled`). `MenuOutcome::Quit` short-
+    /// circuits the loop via `event_loop.exit()`.
+    ///
+    /// Without an installed `menu_handler`, fired ids are still
+    /// drained from muda's global channel (otherwise the buffer
+    /// grows unbounded) and each emits a one-line warning so authors
+    /// notice their menu wiring is incomplete.
+    #[cfg(feature = "menus")]
+    fn drain_menu_events(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let rx = muda::MenuEvent::receiver();
+        let mut state_changed = false;
+        let mut requested_quit = false;
+        while let Ok(event) = rx.try_recv() {
+            // muda's event id is `MenuId`; `.0` exposes the string we
+            // gave it via `MudaItem::with_id(...)`.
+            let id = event.id().as_ref().to_owned();
+            let outcome = match self.host.menu_handler.as_mut() {
+                Some(handler) => handler(&id, &mut self.host.runtime),
+                None => {
+                    eprintln!(
+                        "jian-host-desktop: menu item `{}` fired with no handler installed",
+                        id
+                    );
+                    crate::host::MenuOutcome::Unknown
+                }
+            };
+            match outcome {
+                crate::host::MenuOutcome::Quit => requested_quit = true,
+                crate::host::MenuOutcome::Handled => state_changed = true,
+                crate::host::MenuOutcome::Unknown => {
+                    // The handler didn't recognise the id. Log once
+                    // so authors realise their default menu has an
+                    // entry without a route, but otherwise carry on.
+                    eprintln!(
+                        "jian-host-desktop: menu item `{}` fired but the handler returned Unknown",
+                        id
+                    );
+                }
+            }
+        }
+        if requested_quit {
+            event_loop.exit();
+        }
+        state_changed
     }
 
     /// Drain the MCP bridge once per `about_to_wait`. Returns `true`
