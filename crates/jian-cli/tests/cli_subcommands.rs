@@ -111,6 +111,13 @@ fn check_malformed_exits_two() {
         .code(2);
 }
 
+// `player` is feature-gated; without `--features player` the
+// subcommand doesn't exist and clap returns "unrecognized
+// subcommand" before any dpi / fullscreen parsing kicks in. Gate
+// the player-flag tests so `cargo test --no-default-features`
+// passes — pre-existing tests treated this as a bug, but the
+// product contract is "no `player` feature → no `player` cmd".
+#[cfg(feature = "player")]
 #[test]
 fn player_size_and_fullscreen_are_mutually_exclusive() {
     // No window is opened — clap's argument parser rejects the
@@ -256,6 +263,7 @@ fn new_form_template_scaffolds_and_checks_clean() {
         .success();
 }
 
+#[cfg(feature = "player")]
 #[test]
 fn player_dpi_zero_is_rejected_by_clap() {
     // Negative-path test for `--dpi`: clap's `value_parser` rejects 0 /
@@ -283,6 +291,7 @@ fn player_dpi_zero_is_rejected_by_clap() {
     );
 }
 
+#[cfg(feature = "player")]
 #[test]
 fn player_dpi_negative_is_rejected_by_clap() {
     let dir = TempDir::new().unwrap();
@@ -295,6 +304,7 @@ fn player_dpi_negative_is_rejected_by_clap() {
     assert!(!out.status.success());
 }
 
+#[cfg(feature = "player")]
 #[test]
 fn player_dpi_non_numeric_is_rejected_by_clap() {
     let dir = TempDir::new().unwrap();
@@ -309,6 +319,7 @@ fn player_dpi_non_numeric_is_rejected_by_clap() {
     assert!(stderr.contains("not a number"), "stderr={}", stderr);
 }
 
+#[cfg(feature = "player")]
 #[test]
 fn player_help_advertises_dpi_and_debug_overlay() {
     // `--help` exits before any window logic, so this works headless on

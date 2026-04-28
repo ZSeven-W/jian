@@ -229,7 +229,10 @@ pub struct NewArgs {
     pub path: Option<PathBuf>,
 }
 
-#[cfg(test)]
+// `parse_positive_dpi` itself lives behind `#[cfg(feature = "player")]`,
+// so the parser tests must mirror that gate or `cargo test
+// --no-default-features` fails to compile when the function vanishes.
+#[cfg(all(test, feature = "player"))]
 mod parser_tests {
     use super::*;
 
