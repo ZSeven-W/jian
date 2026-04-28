@@ -53,25 +53,6 @@ fn fullscreen_for_config(on: bool) -> Option<winit::window::Fullscreen> {
     }
 }
 
-#[cfg(test)]
-mod fullscreen_tests {
-    use super::fullscreen_for_config;
-    use winit::window::Fullscreen;
-
-    #[test]
-    fn off_returns_none() {
-        assert!(fullscreen_for_config(false).is_none());
-    }
-
-    #[test]
-    fn on_returns_borderless_current_monitor() {
-        match fullscreen_for_config(true) {
-            Some(Fullscreen::Borderless(None)) => {}
-            other => panic!("expected Borderless(None), got {other:?}"),
-        }
-    }
-}
-
 impl DesktopHost {
     /// Open a window and run the event loop until the user closes it.
     /// Blocks the calling thread; returns `Ok(())` on clean shutdown.
@@ -695,5 +676,24 @@ impl RunApp {
             }
         }
         executed
+    }
+}
+
+#[cfg(test)]
+mod fullscreen_tests {
+    use super::fullscreen_for_config;
+    use winit::window::Fullscreen;
+
+    #[test]
+    fn off_returns_none() {
+        assert!(fullscreen_for_config(false).is_none());
+    }
+
+    #[test]
+    fn on_returns_borderless_current_monitor() {
+        match fullscreen_for_config(true) {
+            Some(Fullscreen::Borderless(None)) => {}
+            other => panic!("expected Borderless(None), got {other:?}"),
+        }
     }
 }
