@@ -38,14 +38,21 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-/// Hard upper bound on a single HTTP roundtrip when the schema's
-/// `timeout_ms` is unset. Protects against worker-thread leaks if
-/// the awaiting task gets cancelled mid-flight: dropping the
-/// `oneshot::Receiver` doesn't kill the detached worker, but the
-/// worker is guaranteed to finish (and the thread to be reaped)
-/// within this many ms because reqwest aborts the call when the
-/// builder timeout elapses. Schemas that need longer set their own
-/// `timeout_ms` per request.
+/// Hard upper bound on a single HTTP roundtrip baked into the
+/// auto-built [`reqwest::blocking::Client`] inside
+/// [`DesktopNetworkClient::new`]. Protects against worker-thread
+/// leaks if the awaiting task gets cancelled mid-flight: dropping
+/// the `oneshot::Receiver` doesn't kill the detached worker, but
+/// the worker is guaranteed to finish (and the thread to be
+/// reaped) within this many seconds because reqwest aborts the
+/// call when the client's timeout elapses.
+///
+/// Hosts wiring a custom client via [`DesktopNetworkClient::with_client`]
+/// take ownership of the timeout policy themselves — we deliberately
+/// don't rewrite their config. Per-request `RequestBuilder::timeout`
+/// overrides the client default, so schemas that need a longer
+/// budget for one specific call set their own `timeout_ms` and the
+/// per-request value wins.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// `reqwest`-backed network client. Single-threaded interior — clones
@@ -56,15 +63,27 @@ pub struct DesktopNetworkClient {
 }
 
 impl DesktopNetworkClient {
-    /// Build with `reqwest`'s default settings (rustls + system roots).
+    /// Build with reqwest's defaults (rustls + system roots) plus a
+    /// `DEFAULT_REQUEST_TIMEOUT` baked into the client so worker
+    /// threads can't leak indefinitely on a hung server.
     pub fn new() -> Self {
-        Self {
-            client: reqwest::blocking::Client::new(),
-        }
+        let client = reqwest::blocking::Client::builder()
+            .timeout(DEFAULT_REQUEST_TIMEOUT)
+            .build()
+            // Falling back to the no-timeout default is strictly
+            // worse than panicking — `Client::builder().build()`
+            // failing on a desktop host indicates a broken
+            // rustls / DNS install that the user needs to know
+            // about. Match the panicking behaviour of the previous
+            // `Client::new()` form.
+            .expect("reqwest blocking Client::builder().build() failed");
+        Self { client }
     }
 
     /// Build from a pre-configured `Client`. Use when the host wants a
-    /// custom timeout, proxy, or User-Agent.
+    /// custom timeout, proxy, or User-Agent. The host is responsible
+    /// for any timeout policy on the supplied `Client`; this method
+    /// does not impose `DEFAULT_REQUEST_TIMEOUT`.
     pub fn with_client(client: reqwest::blocking::Client) -> Self {
         Self { client }
     }
@@ -114,16 +133,17 @@ fn request_blocking(
     for (k, v) in &req.headers {
         builder = builder.header(k.as_str(), v.as_str());
     }
-    // Always apply *some* timeout so a cancelled `request` future
-    // (the awaiting task is dropped while the worker thread keeps
-    // running) can't leak an OS thread blocked on a slow / hung
-    // server forever. Honour the schema's value when present,
-    // otherwise fall through to `DEFAULT_REQUEST_TIMEOUT`.
-    let timeout = req
-        .timeout_ms
-        .map(Duration::from_millis)
-        .unwrap_or(DEFAULT_REQUEST_TIMEOUT);
-    builder = builder.timeout(timeout);
+    // Per-request override only when the schema spells out a value —
+    // `RequestBuilder::timeout` overrides whatever the `Client` was
+    // built with, so unconditionally setting it would clobber a
+    // host-supplied custom timeout from `with_client`. The auto-built
+    // client (`DesktopNetworkClient::new`) bakes
+    // `DEFAULT_REQUEST_TIMEOUT` directly into the `Client`, so
+    // unset-`timeout_ms` requests already inherit a bounded budget
+    // from there.
+    if let Some(ms) = req.timeout_ms {
+        builder = builder.timeout(Duration::from_millis(ms));
+    }
     if let Some(body) = req.body {
         builder = builder.json(&body);
     }
