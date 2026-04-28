@@ -1,0 +1,27 @@
+# TEMPLATE — winget locale manifest.
+# Placeholder the release script substitutes:
+#   @@VERSION@@   upstream semver
+
+PackageIdentifier: ZSevenW.Jian
+PackageVersion: @@VERSION@@
+PackageLocale: en-US
+Publisher: ZSeven-W
+PublisherUrl: https://github.com/ZSeven-W
+PublisherSupportUrl: https://github.com/ZSeven-W/jian/issues
+PackageName: Jian
+PackageUrl: https://github.com/ZSeven-W/jian
+License: MIT
+LicenseUrl: https://github.com/ZSeven-W/jian/blob/main/LICENSE
+ShortDescription: Jian runtime CLI — check, pack, and run .op files.
+Description: |
+  Jian is the runtime that backs OpenPencil — a vector design tool that
+  exports .op files. The `jian` CLI validates, packs, and previews
+  those files standalone.
+Tags:
+  - cli
+  - design
+  - runtime
+  - openpencil
+  - rust
+ManifestType: defaultLocale
+ManifestVersion: 1.5.0

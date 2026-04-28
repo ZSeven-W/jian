@@ -1,0 +1,20 @@
+# TEMPLATE — winget installer manifest.
+# Placeholders the release script substitutes:
+#   @@VERSION@@           upstream semver, e.g. 0.0.1
+#   @@SHA256_WIN_X86@@    sha256 of the x86_64 Windows zip
+
+PackageIdentifier: ZSevenW.Jian
+PackageVersion: @@VERSION@@
+MinimumOSVersion: 10.0.17763.0  # Windows 10 1809 — winit's minimum target
+InstallerType: zip
+NestedInstallerType: portable
+ReleaseDate: 2026-01-01  # release script overwrites with the real date
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/ZSeven-W/jian/releases/download/v@@VERSION@@/jian-@@VERSION@@-x86_64-pc-windows-msvc.zip
+    InstallerSha256: @@SHA256_WIN_X86@@
+    NestedInstallerFiles:
+      - RelativeFilePath: jian.exe
+        PortableCommandAlias: jian
+ManifestType: installer
+ManifestVersion: 1.5.0
