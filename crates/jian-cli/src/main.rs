@@ -32,6 +32,7 @@ fn parse_positive_dpi(s: &str) -> Result<f64, String> {
 }
 
 mod commands;
+mod diagnostic_render;
 #[cfg(feature = "player")]
 mod icon_loader;
 

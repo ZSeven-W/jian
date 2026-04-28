@@ -6,6 +6,7 @@
 //! - `2` — parse / validation error (unsupported version, malformed
 //!   JSON, …). Caller-visible `anyhow::Error`.
 
+use crate::diagnostic_render::{push_diagnostic, render_warnings, Severity, Span, Style};
 use crate::CheckArgs;
 use anyhow::{anyhow, Context, Result};
 use jian_ops_schema::document::PenDocument;
@@ -33,11 +34,17 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
                 })
             );
         } else {
-            eprintln!(
-                "jian check: {} — semantic error: {}",
-                args.path.display(),
-                e
+            let mut buf = String::new();
+            push_diagnostic(
+                &mut buf,
+                &src,
+                &args.path.display().to_string(),
+                Severity::Error,
+                &format!("{}", e),
+                Some(Span::NONE),
+                Style::auto(),
             );
+            eprint!("{}", buf);
         }
         // Same exit code as a parse failure (2) — the document is
         // structurally valid JSON but violates the .op contract.
@@ -48,6 +55,7 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
         print_json(&loaded.warnings);
     } else {
         print_human(
+            &src,
             &args.path.display().to_string(),
             &loaded.warnings,
             args.quiet,
@@ -76,7 +84,7 @@ fn semantic_check(doc: &PenDocument) -> Result<()> {
     Ok(())
 }
 
-fn print_human(path: &str, warnings: &[LoadWarning], quiet: bool) {
+fn print_human(source: &str, path: &str, warnings: &[LoadWarning], quiet: bool) {
     if warnings.is_empty() {
         if !quiet {
             println!("jian check: {} — OK, no diagnostics", path);
@@ -92,9 +100,9 @@ fn print_human(path: &str, warnings: &[LoadWarning], quiet: bool) {
         warnings.len(),
         if warnings.len() == 1 { "" } else { "s" }
     );
-    for (i, w) in warnings.iter().enumerate() {
-        println!("  {}. {}", i + 1, render_warning(w));
-    }
+    let mut buf = String::new();
+    render_warnings(&mut buf, source, path, warnings, Style::auto());
+    print!("{}", buf);
 }
 
 fn print_json(warnings: &[LoadWarning]) {
@@ -106,29 +114,6 @@ fn print_json(warnings: &[LoadWarning]) {
             "detail": detail,
         });
         println!("{}", line);
-    }
-}
-
-fn render_warning(w: &LoadWarning) -> String {
-    match w {
-        LoadWarning::UnknownField { path, field } => {
-            format!("unknown field `{}` at {}", field, path)
-        }
-        LoadWarning::FutureFormatVersion {
-            found,
-            supported_max,
-        } => {
-            format!(
-                "formatVersion {} is newer than supported ({}); behaviour may be undefined",
-                found, supported_max
-            )
-        }
-        LoadWarning::LogicModulesSkipped { reason } => {
-            format!("logicModules skipped: {}", reason)
-        }
-        LoadWarning::InvalidExpression { path, expr, reason } => {
-            format!("invalid expression at {}: `{}` — {}", path, expr, reason)
-        }
     }
 }
 

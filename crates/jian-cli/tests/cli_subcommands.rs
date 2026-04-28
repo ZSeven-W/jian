@@ -60,6 +60,47 @@ fn check_warning_exits_one() {
 }
 
 #[test]
+fn check_warning_renders_rustc_style_caret_excerpt() {
+    // The rustc-style renderer should print:
+    //   - "warning: unknown field `mysteryField`"
+    //   - a `path:line:col` location anchor
+    //   - the source excerpt line containing the field
+    //   - a row of `^` characters underlining the field key
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "warn.op", WARNING_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("warning: unknown field `mysteryField`"),
+        "missing rustc-style title, got:\n{}",
+        stdout
+    );
+    // Path anchor includes :line:col after the file path.
+    assert!(
+        stdout.contains("warn.op:"),
+        "missing path anchor, got:\n{}",
+        stdout
+    );
+    // Excerpt: the source line is reproduced.
+    assert!(
+        stdout.contains("\"mysteryField\": 42"),
+        "missing source excerpt, got:\n{}",
+        stdout
+    );
+    // Caret row has at least one ^.
+    assert!(
+        stdout.contains("^^^^"),
+        "missing caret underline, got:\n{}",
+        stdout
+    );
+}
+
+#[test]
 fn check_malformed_exits_two() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "bad.op", MALFORMED_OP);
