@@ -38,6 +38,16 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// Hard upper bound on a single HTTP roundtrip when the schema's
+/// `timeout_ms` is unset. Protects against worker-thread leaks if
+/// the awaiting task gets cancelled mid-flight: dropping the
+/// `oneshot::Receiver` doesn't kill the detached worker, but the
+/// worker is guaranteed to finish (and the thread to be reaped)
+/// within this many ms because reqwest aborts the call when the
+/// builder timeout elapses. Schemas that need longer set their own
+/// `timeout_ms` per request.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// `reqwest`-backed network client. Single-threaded interior — clones
 /// of `reqwest::blocking::Client` share a connection pool, so the
 /// overhead of a per-call clone is negligible.
@@ -104,9 +114,16 @@ fn request_blocking(
     for (k, v) in &req.headers {
         builder = builder.header(k.as_str(), v.as_str());
     }
-    if let Some(ms) = req.timeout_ms {
-        builder = builder.timeout(Duration::from_millis(ms));
-    }
+    // Always apply *some* timeout so a cancelled `request` future
+    // (the awaiting task is dropped while the worker thread keeps
+    // running) can't leak an OS thread blocked on a slow / hung
+    // server forever. Honour the schema's value when present,
+    // otherwise fall through to `DEFAULT_REQUEST_TIMEOUT`.
+    let timeout = req
+        .timeout_ms
+        .map(Duration::from_millis)
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT);
+    builder = builder.timeout(timeout);
     if let Some(body) = req.body {
         builder = builder.json(&body);
     }
