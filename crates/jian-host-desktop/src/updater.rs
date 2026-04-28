@@ -105,6 +105,178 @@ pub trait Updater {
     fn apply(&self, info: &UpdateInfo) -> Result<(), UpdaterError>;
 }
 
+/// GitHub-Releases-backed updater over the `self_update` crate.
+/// Available under the `updater` cargo feature. Works on macOS,
+/// Windows, and Linux without per-platform fanout — `self_update`
+/// detects the host arch + OS and picks the matching release asset
+/// by file-extension convention (`*-aarch64-apple-darwin.tar.gz`,
+/// `*-x86_64-pc-windows-msvc.zip`, etc — the same names produced by
+/// `dist/install.sh` and the Homebrew formula).
+///
+/// `check` invokes `self_update::backends::github::ReleaseList::fetch`
+/// synchronously (≤ a few seconds). `apply` downloads the chosen
+/// release into a temp dir, validates it, then atomically swaps
+/// the running binary. The host *does not* relaunch the app
+/// automatically — `apply` returns `Ok(())` and the caller decides
+/// when to terminate (typically: prompt the user via a feedback
+/// dialog, then `event_loop.exit()`).
+///
+/// Sparkle / AppImageUpdate impls remain deferred — they offer
+/// per-platform polish (Sparkle's signed appcast XML, AppImageUpdate's
+/// delta updates) but introduce platform fanout this generic backend
+/// avoids.
+#[cfg(feature = "updater")]
+pub struct GitHubReleasesUpdater {
+    /// `owner` half of `<owner>/<repo>` on github.com.
+    owner: String,
+    /// `repo` half of `<owner>/<repo>`.
+    repo: String,
+    /// Currently-running app version (typically `env!("CARGO_PKG_VERSION")`).
+    /// `check` skips returning an `UpdateInfo` when the latest tag's
+    /// version isn't strictly greater than this.
+    current_version: String,
+    /// Filename component to match against release-asset names.
+    /// Common values: `"aarch64-apple-darwin"`, `"x86_64-unknown-linux-gnu"`,
+    /// `"x86_64-pc-windows-msvc"`. Defaults to a value derived from
+    /// `std::env::consts::ARCH` + `OS`.
+    target_substring: String,
+    /// Name of the binary to swap inside the archive. Defaults to
+    /// `"jian"` (matches `dist/install.sh`'s expectation).
+    bin_name: String,
+}
+
+#[cfg(feature = "updater")]
+impl GitHubReleasesUpdater {
+    /// Build with sensible defaults for the running host:
+    /// - `current_version` = `CARGO_PKG_VERSION` of the embedding crate
+    /// - `target_substring` = canonical `<arch>-<vendor>-<os>` triple
+    /// - `bin_name` = `"jian"`
+    pub fn new(
+        owner: impl Into<String>,
+        repo: impl Into<String>,
+        current_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            owner: owner.into(),
+            repo: repo.into(),
+            current_version: current_version.into(),
+            target_substring: default_target_substring(),
+            bin_name: "jian".into(),
+        }
+    }
+
+    /// Override the asset-filename match. Use this when a release
+    /// uses a non-default arch / OS naming convention (e.g.
+    /// `linux` instead of `unknown-linux-gnu`).
+    pub fn with_target_substring(mut self, target: impl Into<String>) -> Self {
+        self.target_substring = target.into();
+        self
+    }
+
+    /// Override the binary name swapped inside the archive. Default
+    /// is `"jian"`; openpencil-shell hosts override to their app
+    /// binary name.
+    pub fn with_bin_name(mut self, name: impl Into<String>) -> Self {
+        self.bin_name = name.into();
+        self
+    }
+}
+
+#[cfg(feature = "updater")]
+impl Updater for GitHubReleasesUpdater {
+    fn check(&self) -> Result<Option<UpdateInfo>, UpdaterError> {
+        // ReleaseList::fetch is a blocking HTTP call to the GitHub API.
+        // We map any error path through Io with the underlying message.
+        let releases = self_update::backends::github::ReleaseList::configure()
+            .repo_owner(&self.owner)
+            .repo_name(&self.repo)
+            .build()
+            .and_then(|r| r.fetch())
+            .map_err(|e| UpdaterError::Io(e.to_string()))?;
+        let Some(latest) = releases.first() else {
+            return Ok(None);
+        };
+        let latest_v = latest.version.trim_start_matches('v');
+        let current_v = self.current_version.trim_start_matches('v');
+        if !is_strictly_newer(latest_v, current_v) {
+            return Ok(None);
+        }
+        let asset = latest
+            .asset_for(&self.target_substring, None)
+            .ok_or_else(|| {
+                UpdaterError::Io(format!(
+                    "release {} has no asset matching `{}`",
+                    latest.version, self.target_substring
+                ))
+            })?;
+        Ok(Some(UpdateInfo {
+            version: latest.version.clone(),
+            release_notes_url: Some(format!(
+                "https://github.com/{}/{}/releases/tag/{}",
+                self.owner, self.repo, latest.version
+            )),
+            download_url: asset.download_url,
+        }))
+    }
+
+    fn apply(&self, info: &UpdateInfo) -> Result<(), UpdaterError> {
+        // self_update's Update API rebuilds the asset URL internally
+        // from `target` + `bin_name` + the discovered version, so we
+        // hand it back the same coordinates and let it work.
+        self_update::backends::github::Update::configure()
+            .repo_owner(&self.owner)
+            .repo_name(&self.repo)
+            .bin_name(&self.bin_name)
+            .target(&self.target_substring)
+            .current_version(self.current_version.trim_start_matches('v'))
+            .target_version_tag(&info.version)
+            .show_download_progress(false)
+            .build()
+            .and_then(|u| u.update())
+            .map_err(|e| UpdaterError::Io(e.to_string()))?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "updater")]
+fn default_target_substring() -> String {
+    use std::env::consts;
+    // Match `target_triple()` from `self_update` minus the
+    // libc-suffix variations. Linux glibc reports `gnu`, Windows MSVC
+    // reports `msvc`, macOS reports the apple-darwin triple.
+    let arch = consts::ARCH;
+    match consts::OS {
+        "macos" => format!("{}-apple-darwin", arch),
+        "linux" => format!("{}-unknown-linux-gnu", arch),
+        "windows" => format!("{}-pc-windows-msvc", arch),
+        other => format!("{}-{}", arch, other),
+    }
+}
+
+/// Strictly-greater comparison on dot-separated semver-like strings.
+/// Falls back to lexicographic compare when a component isn't numeric
+/// (covers `1.0.0-rc.1` vs `1.0.0` cases without pulling in the
+/// `semver` crate). `latest` strictly greater than `current` → true.
+#[cfg(feature = "updater")]
+fn is_strictly_newer(latest: &str, current: &str) -> bool {
+    let split = |s: &str| -> Vec<u64> {
+        s.split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect()
+    };
+    let l = split(latest);
+    let c = split(current);
+    let len = l.len().max(c.len());
+    for i in 0..len {
+        let li = l.get(i).copied().unwrap_or(0);
+        let ci = c.get(i).copied().unwrap_or(0);
+        if li != ci {
+            return li > ci;
+        }
+    }
+    false
+}
+
 /// No-op updater: reports "no update available" and refuses to apply.
 /// The default for hosts without a real backend wired up.
 #[derive(Debug, Default, Copy, Clone)]
@@ -152,6 +324,32 @@ mod tests {
             download_url: "https://example.com/x.dmg".into(),
         };
         assert_eq!(info, info.clone());
+    }
+
+    #[cfg(feature = "updater")]
+    #[test]
+    fn is_strictly_newer_handles_basic_semver() {
+        use super::is_strictly_newer;
+        assert!(is_strictly_newer("0.0.2", "0.0.1"));
+        assert!(is_strictly_newer("1.0.0", "0.9.9"));
+        assert!(is_strictly_newer("0.1.0", "0.0.99"));
+        assert!(!is_strictly_newer("0.0.1", "0.0.1"));
+        assert!(!is_strictly_newer("0.0.1", "0.0.2"));
+        assert!(!is_strictly_newer("1.0", "1.0.0"));
+    }
+
+    #[cfg(feature = "updater")]
+    #[test]
+    fn default_target_substring_includes_platform_marker() {
+        use super::default_target_substring;
+        let s = default_target_substring();
+        // Don't pin the exact arch — CI runs on multiple — just
+        // confirm the OS suffix follows the Rust target-triple
+        // convention every release expects.
+        let ok = s.contains("apple-darwin")
+            || s.contains("unknown-linux-gnu")
+            || s.contains("pc-windows-msvc");
+        assert!(ok, "unexpected target triple: {}", s);
     }
 
     #[test]

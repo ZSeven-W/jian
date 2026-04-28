@@ -43,6 +43,13 @@ network = ["dep:reqwest"]
 # desktop. `rfd` 0.14 wraps platform-native dialogs (NSAlert /
 # Win32 / GTK / KDE) without bundling its own widget toolkit.
 feedback = ["dep:rfd"]
+# Generic GitHub-Releases-backed `Updater` impl over `self_update`.
+# Off by default — `self_update` pulls in `reqwest` (rustls) +
+# `zip` / `tar` decoders. Sparkle (macOS) and AppImageUpdate (Linux)
+# remain trait-level deferred; this feature ships a portable
+# replacement that's good enough for shipping while the per-platform
+# backends mature.
+updater = ["dep:self_update"]
 # Native menus via `muda` — cross-platform (macOS / Windows / Linux).
 # Phase 1 ships a pure menu *spec* (`MenuSpec`) so authors can
 # declare File / Edit / View entries; the actual `muda::Menu`
@@ -83,6 +90,7 @@ softbuffer      = { version = "0.4", optional = true }
 muda            = { version = "0.13", optional = true }
 reqwest         = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json", "gzip", "blocking"] }
 rfd             = { version = "0.14", optional = true }
+self_update     = { version = "0.41", optional = true, default-features = false, features = ["rustls", "compression-flate2", "compression-zip-deflate"] }
 
 # macOS-only: drive `NSApp.setApplicationIconImage:` so the runtime can
 # update the Dock icon for unbundled binaries (winit's `set_window_icon`
