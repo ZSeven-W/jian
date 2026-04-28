@@ -205,10 +205,15 @@ fn collect_images(parent: &Path) -> Result<Vec<Asset>> {
     Ok(out)
 }
 
+/// Render the first 16 bytes (128 bits) of a digest as hex. 64-bit
+/// truncation (the original 8-byte form) gave only ~2³² randomness
+/// before a birthday collision and could silently dedup distinct
+/// images into the same archive entry; 128 bits comfortably outruns
+/// any pack's image count. Output length is fixed at 32 hex chars.
 fn hex_first16(bytes: &[u8]) -> String {
     use std::fmt::Write;
-    let mut s = String::with_capacity(16);
-    for b in &bytes[..8] {
+    let mut s = String::with_capacity(32);
+    for b in &bytes[..16] {
         write!(s, "{:02x}", b).unwrap();
     }
     s
@@ -266,10 +271,11 @@ mod tests {
     #[test]
     fn hex_first16_padding_and_length() {
         let zeros = [0u8; 32];
-        assert_eq!(hex_first16(&zeros), "0000000000000000");
+        assert_eq!(hex_first16(&zeros), "0".repeat(32));
+        assert_eq!(hex_first16(&zeros).len(), 32);
         let mut bytes = [0u8; 32];
         bytes[0] = 0x0a;
-        bytes[7] = 0xff;
-        assert_eq!(hex_first16(&bytes), "0a000000000000ff");
+        bytes[15] = 0xff;
+        assert_eq!(hex_first16(&bytes), "0a0000000000000000000000000000ff");
     }
 }

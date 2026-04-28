@@ -49,7 +49,7 @@ feedback = ["dep:rfd"]
 # remain trait-level deferred; this feature ships a portable
 # replacement that's good enough for shipping while the per-platform
 # backends mature.
-updater = ["dep:self_update"]
+updater = ["dep:self_update", "dep:semver"]
 # Native menus via `muda` — cross-platform (macOS / Windows / Linux).
 # Phase 1 ships a pure menu *spec* (`MenuSpec`) so authors can
 # declare File / Edit / View entries; the actual `muda::Menu`
@@ -91,6 +91,11 @@ muda            = { version = "0.13", optional = true }
 reqwest         = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json", "gzip", "blocking"] }
 rfd             = { version = "0.14", optional = true }
 self_update     = { version = "0.41", optional = true, default-features = false, features = ["rustls", "compression-flate2", "compression-zip-deflate"] }
+# `is_strictly_newer` uses `semver::Version` to compare release
+# versions correctly across prerelease / build-metadata edge cases
+# (the previous hand-rolled split-on-dot path mis-ordered
+# `1.0.0-rc.1` vs `1.0.0`).
+semver          = { version = "1", optional = true }
 
 # macOS-only: drive `NSApp.setApplicationIconImage:` so the runtime can
 # update the Dock icon for unbundled binaries (winit's `set_window_icon`

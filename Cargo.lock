@@ -2454,6 +2454,7 @@ dependencies = [
  "reqwest",
  "rfd",
  "self_update",
+ "semver",
  "serde",
  "serde_json",
  "softbuffer",

@@ -15,6 +15,26 @@
 //! schema's `headers` map verbatim. Errors stringify `reqwest::Error`
 //! into the trait's `Result<_, String>` shape.
 //!
+//! ## ⚠ Blocking semantics
+//!
+//! `request` is wrapped in `async fn` for trait conformance, but the
+//! body internally calls `reqwest::blocking::Client::send()`. The
+//! Jian runtime uses a single-threaded executor (`async_trait(?Send)`),
+//! so awaiting this future on the redraw / event-pump thread will
+//! freeze the UI for the duration of the HTTP roundtrip. Two
+//! supported usage patterns:
+//!
+//! 1. **Action-handler path** (recommended): Jian actions are
+//!    dispatched outside the redraw cycle, so blocking for ≤ a few
+//!    seconds during a `http_request` action is acceptable. Most
+//!    user-triggered network calls (login, save, fetch) fall here.
+//! 2. **Worker-thread path** (advanced): hosts that need parallel
+//!    network IO during the frame loop must spawn `std::thread`s
+//!    themselves and pump results through the runtime's signal
+//!    graph. A future revision may introduce a tokio-runtime variant
+//!    of this client; until then `DesktopNetworkClient` remains
+//!    deliberately synchronous to keep the dependency tree small.
+//!
 //! WebSocket (`connect_websocket`) intentionally returns the trait's
 //! default `Err(...)` — the reqwest crate doesn't ship a WS client.
 //! A follow-up plan can layer `tokio-tungstenite` on top.

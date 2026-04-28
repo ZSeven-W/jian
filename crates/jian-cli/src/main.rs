@@ -131,10 +131,13 @@ pub struct PackArgs {
     #[arg(long)]
     pub include_fonts: bool,
     /// Bundle every image under `<input>/../assets/images/` into the
-    /// archive at `assets/images/<blake3-hash>.<ext>` — content-addressed
-    /// so identical bytes dedupe. Missing directory is a no-op.
-    /// Recognised extensions: .png / .jpg / .jpeg / .webp / .gif / .svg.
-    /// Manifest exposes `images: { "<original-name>": "assets/images/<hash>.<ext>" }`
+    /// archive at `assets/images/<blake3-128>.<ext>` — content-addressed
+    /// (first 16 bytes of the BLAKE3 digest, 32 hex chars) so identical
+    /// bytes dedupe to one archive entry. 128 bits comfortably outruns
+    /// any pack's image count before a birthday collision risk. Missing
+    /// directory is a no-op. Recognised extensions: .png / .jpg / .jpeg
+    /// / .webp / .gif / .svg. Manifest exposes
+    /// `images: { "<original-name>": "assets/images/<hash>.<ext>" }`
     /// so consumers can rewrite document references at load time.
     #[arg(long)]
     pub include_images: bool,

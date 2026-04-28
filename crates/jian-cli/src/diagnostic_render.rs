@@ -65,16 +65,42 @@ pub struct Style {
 }
 
 impl Style {
+    /// Style for output written to stdout. ANSI on iff stdout is a TTY
+    /// AND no `NO_COLOR` env var is set AND `TERM` isn't `dumb`.
     pub fn auto() -> Self {
         Self {
-            color: std::io::stdout().is_terminal(),
+            color: env_allows_color() && std::io::stdout().is_terminal(),
         }
     }
+
+    /// Style for output written to stderr. The `check` command's
+    /// semantic-error path uses `eprint!`, so probing stdout (which
+    /// might be redirected separately) leaks ANSI escapes when
+    /// stdout is a TTY but stderr is captured. This variant probes
+    /// stderr instead.
+    pub fn auto_stderr() -> Self {
+        Self {
+            color: env_allows_color() && std::io::stderr().is_terminal(),
+        }
+    }
+
     /// Force the no-color path. Currently used by tests so colour
     /// escapes don't leak into the snapshot strings.
     #[cfg(test)]
     pub fn plain() -> Self {
         Self { color: false }
+    }
+}
+
+/// Honour the de-facto `NO_COLOR` convention (https://no-color.org)
+/// and `TERM=dumb`. Either disables colour even on a TTY.
+fn env_allows_color() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+    match std::env::var("TERM") {
+        Ok(t) if t == "dumb" => false,
+        _ => true,
     }
 }
 
@@ -287,7 +313,11 @@ pub fn locate_quoted_key(source: &str, key: &str) -> Option<Span> {
     let needle = format!("\"{}\"", key);
     let idx = source.find(&needle)?;
     let span_start = idx + 1;
-    let span_len = key.len();
+    // Caret length counts unicode scalar values to match the column
+    // arithmetic in `byte_offset_to_line_col` — using `key.len()`
+    // (bytes) over-counts for non-ASCII field names like
+    // `"ファイル"`, drawing a too-wide underline.
+    let span_len = key.chars().count();
     let (line, col) = byte_offset_to_line_col(source, span_start);
     Some(Span {
         line,
@@ -379,7 +409,19 @@ mod tests {
         assert_eq!(span.line, 4);
         // `  "` prefix → col 4 (after the two spaces and opening quote).
         assert_eq!(span.col, 4);
-        assert_eq!(span.len, "mysteryField".len());
+        // ASCII keys: char count == byte count, so the lengths line up.
+        assert_eq!(span.len, "mysteryField".chars().count());
+    }
+
+    #[test]
+    fn locate_quoted_key_unicode_caret_uses_char_count() {
+        // Non-ASCII keys: `ファイル` is 4 chars but 12 bytes (3 bytes
+        // per CJK glyph). The caret should be 4 wide, not 12 — the
+        // pre-fix code returned 12, drawing an over-long underline.
+        let src = "{\n  \"ファイル\": 1\n}\n".to_owned();
+        let span = locate_quoted_key(&src, "ファイル").expect("found");
+        assert_eq!(span.len, 4, "caret length should be unicode-scalar count");
+        assert_eq!(span.line, 2);
     }
 
     #[test]

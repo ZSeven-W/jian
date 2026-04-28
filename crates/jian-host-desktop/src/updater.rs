@@ -114,12 +114,31 @@ pub trait Updater {
 /// `dist/install.sh` and the Homebrew formula).
 ///
 /// `check` invokes `self_update::backends::github::ReleaseList::fetch`
-/// synchronously (≤ a few seconds). `apply` downloads the chosen
-/// release into a temp dir, validates it, then atomically swaps
-/// the running binary. The host *does not* relaunch the app
-/// automatically — `apply` returns `Ok(())` and the caller decides
-/// when to terminate (typically: prompt the user via a feedback
-/// dialog, then `event_loop.exit()`).
+/// synchronously (≤ a few seconds on a healthy network). `apply`
+/// downloads the chosen release into a temp dir, validates it, then
+/// atomically swaps the running binary. **Both calls block the
+/// invoking thread** — `apply` in particular can take tens of seconds
+/// over a slow link. Hosts MUST dispatch them onto a worker thread
+/// (e.g. `std::thread::spawn`) before invoking from a winit
+/// callback; doing it inline freezes the event loop. The trait's
+/// `&self` receiver makes spawning ergonomic when the updater is
+/// `Arc<dyn Updater + Send + Sync>`.
+///
+/// `apply` is configured with `no_confirm(true)` and
+/// `show_output(false)` so it never prompts on stdin or writes
+/// progress to stdout — desktop hosts surface progress + confirm
+/// dialogs through their own [`crate::services::feedback`] flow.
+/// The host *does not* relaunch the app automatically — `apply`
+/// returns `Ok(())` and the caller decides when to terminate
+/// (typically: prompt the user via the feedback service, then
+/// `event_loop.exit()`).
+///
+/// **Tag convention**: this backend assumes GitHub tags use the
+/// `v<semver>` form (matching `dist/install.sh` + the Homebrew
+/// template). `Release.version` from `self_update` strips the `v`,
+/// so we re-add it whenever we need the canonical tag. If your
+/// release pipeline uses bare `0.1.0` tags instead, override via
+/// the `Release` struct directly (todo: configurable prefix).
 ///
 /// Sparkle / AppImageUpdate impls remain deferred — they offer
 /// per-platform polish (Sparkle's signed appcast XML, AppImageUpdate's
@@ -209,11 +228,16 @@ impl Updater for GitHubReleasesUpdater {
                     latest.version, self.target_substring
                 ))
             })?;
+        // `Release.version` is stripped of the leading `v`; the
+        // GitHub tag itself keeps the prefix per our release pipeline
+        // convention. Both `release_notes_url` and `apply` need the
+        // tag form, not the stripped version, so build it once here.
+        let tag = format!("v{}", latest.version);
         Ok(Some(UpdateInfo {
             version: latest.version.clone(),
             release_notes_url: Some(format!(
                 "https://github.com/{}/{}/releases/tag/{}",
-                self.owner, self.repo, latest.version
+                self.owner, self.repo, tag,
             )),
             download_url: asset.download_url,
         }))
@@ -223,14 +247,24 @@ impl Updater for GitHubReleasesUpdater {
         // self_update's Update API rebuilds the asset URL internally
         // from `target` + `bin_name` + the discovered version, so we
         // hand it back the same coordinates and let it work.
+        // `target_version_tag` MUST be the literal GitHub tag — our
+        // pipeline uses `v<semver>`, so re-add the prefix that
+        // `Release.version` stripped during `check`.
+        // `no_confirm(true)` + `show_output(false)` keep the call
+        // headless: no stdin prompt, no progress writes to stdout.
+        // Desktop hosts surface UI through `services::feedback`
+        // separately.
+        let tag = format!("v{}", info.version.trim_start_matches('v'));
         self_update::backends::github::Update::configure()
             .repo_owner(&self.owner)
             .repo_name(&self.repo)
             .bin_name(&self.bin_name)
             .target(&self.target_substring)
             .current_version(self.current_version.trim_start_matches('v'))
-            .target_version_tag(&info.version)
+            .target_version_tag(&tag)
             .show_download_progress(false)
+            .show_output(false)
+            .no_confirm(true)
             .build()
             .and_then(|u| u.update())
             .map_err(|e| UpdaterError::Io(e.to_string()))?;
@@ -253,28 +287,102 @@ fn default_target_substring() -> String {
     }
 }
 
-/// Strictly-greater comparison on dot-separated semver-like strings.
-/// Falls back to lexicographic compare when a component isn't numeric
-/// (covers `1.0.0-rc.1` vs `1.0.0` cases without pulling in the
-/// `semver` crate). `latest` strictly greater than `current` → true.
+/// Strictly-greater comparison via `semver::Version`. Inputs that
+/// fail to parse — typically because the host author wired an
+/// unconventional tag like `release-2026-04-28` — fall back to
+/// `false` (the safe default; refuse to auto-update from an
+/// unparseable advertised version rather than crashing).
+///
+/// Honours full semver semantics including prerelease ordering, so
+/// `1.0.0-rc.1 < 1.0.0 < 1.0.1`. The previous hand-rolled split-
+/// on-dot path mapped non-numeric components to `0`, which mis-
+/// ordered `1.0.0-rc.1` as *newer* than `1.0.0` and could
+/// auto-roll users from a stable release back onto a release
+/// candidate. Pinned in `is_strictly_newer_handles_prerelease`.
 #[cfg(feature = "updater")]
 fn is_strictly_newer(latest: &str, current: &str) -> bool {
-    let split = |s: &str| -> Vec<u64> {
-        s.split('.')
-            .map(|part| part.parse::<u64>().unwrap_or(0))
-            .collect()
-    };
-    let l = split(latest);
-    let c = split(current);
-    let len = l.len().max(c.len());
-    for i in 0..len {
-        let li = l.get(i).copied().unwrap_or(0);
-        let ci = c.get(i).copied().unwrap_or(0);
-        if li != ci {
-            return li > ci;
+    use semver::Version;
+    let parse = |s: &str| Version::parse(s.trim_start_matches('v')).ok();
+    match (parse(latest), parse(current)) {
+        (Some(l), Some(c)) => l > c,
+        _ => false,
+    }
+}
+
+/// Translate a schema-side [`jian_ops_schema::app::UpdaterConfig`] into
+/// a concrete `Box<dyn Updater>`. Behaviour:
+///
+/// - `kind: "disabled"` → [`NullUpdater`].
+/// - `kind: "github_releases"` (feature `updater`) → builds a
+///   [`GitHubReleasesUpdater`] from `params.owner` / `params.repo` /
+///   optional `params.target` / optional `params.binName`.
+///   Without the feature, falls back to [`NullUpdater`] and logs a
+///   one-line warning to stderr explaining the missing dep.
+/// - Any other `kind` → falls back to [`NullUpdater`] and warns
+///   the same way; lets third-party hosts override this function
+///   to handle their own kinds without modifying jian-host-desktop.
+///
+/// `current_version` is the running app's semver (typically
+/// `env!("CARGO_PKG_VERSION")`); `default_bin_name` is the host's
+/// fallback binary name when the schema doesn't override
+/// `params.binName`.
+pub fn build_updater_from_schema(
+    cfg: &jian_ops_schema::app::UpdaterConfig,
+    current_version: &str,
+    default_bin_name: &str,
+) -> Box<dyn Updater> {
+    use jian_ops_schema::app::UpdaterConfig;
+    let _ = default_bin_name; // touched only inside the `updater` cfg
+    let _ = current_version; //  ditto
+    match cfg.kind.as_str() {
+        UpdaterConfig::KIND_DISABLED => Box::new(NullUpdater),
+        #[cfg(feature = "updater")]
+        UpdaterConfig::KIND_GITHUB_RELEASES => {
+            let owner = cfg.params.get("owner").and_then(|v| v.as_str());
+            let repo = cfg.params.get("repo").and_then(|v| v.as_str());
+            let target = cfg.params.get("target").and_then(|v| v.as_str());
+            // Try both camelCase (`binName`) and snake_case (`bin_name`)
+            // so authors using either convention work — the schema
+            // defaults to camelCase but JSON tooling sometimes
+            // emits snake.
+            let bin_name = cfg
+                .params
+                .get("binName")
+                .or_else(|| cfg.params.get("bin_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(default_bin_name);
+            match (owner, repo) {
+                (Some(o), Some(r)) => {
+                    let mut u =
+                        GitHubReleasesUpdater::new(o, r, current_version).with_bin_name(bin_name);
+                    if let Some(t) = target {
+                        u = u.with_target_substring(t);
+                    }
+                    Box::new(u)
+                }
+                _ => {
+                    eprintln!(
+                        "jian-host-desktop: app.updater kind=\"github_releases\" missing owner/repo; using NullUpdater"
+                    );
+                    Box::new(NullUpdater)
+                }
+            }
+        }
+        #[cfg(not(feature = "updater"))]
+        UpdaterConfig::KIND_GITHUB_RELEASES => {
+            eprintln!(
+                "jian-host-desktop: app.updater kind=\"github_releases\" requires `--features updater`; using NullUpdater"
+            );
+            Box::new(NullUpdater)
+        }
+        other => {
+            eprintln!(
+                "jian-host-desktop: app.updater kind=\"{}\" not built into jian-host-desktop; using NullUpdater",
+                other
+            );
+            Box::new(NullUpdater)
         }
     }
-    false
 }
 
 /// No-op updater: reports "no update available" and refuses to apply.
@@ -335,7 +443,43 @@ mod tests {
         assert!(is_strictly_newer("0.1.0", "0.0.99"));
         assert!(!is_strictly_newer("0.0.1", "0.0.1"));
         assert!(!is_strictly_newer("0.0.1", "0.0.2"));
-        assert!(!is_strictly_newer("1.0", "1.0.0"));
+    }
+
+    #[cfg(feature = "updater")]
+    #[test]
+    fn is_strictly_newer_handles_prerelease() {
+        use super::is_strictly_newer;
+        // Prereleases come BEFORE the bare release per semver §11.
+        // The pre-fix path mis-mapped non-numeric components to 0
+        // and treated `1.0.0-rc.1` as newer than `1.0.0`, which
+        // could roll users from a stable release back onto a
+        // release candidate.
+        assert!(!is_strictly_newer("1.0.0-rc.1", "1.0.0"));
+        assert!(is_strictly_newer("1.0.0", "1.0.0-rc.1"));
+        assert!(is_strictly_newer("1.0.0-rc.2", "1.0.0-rc.1"));
+        assert!(!is_strictly_newer("1.0.0-rc.1", "1.0.0-rc.2"));
+    }
+
+    #[cfg(feature = "updater")]
+    #[test]
+    fn is_strictly_newer_tolerates_v_prefix() {
+        use super::is_strictly_newer;
+        // GitHub `Release.version` strips `v`, but defensive callers
+        // may pass either form. Both should compare correctly.
+        assert!(is_strictly_newer("v0.0.2", "0.0.1"));
+        assert!(is_strictly_newer("0.0.2", "v0.0.1"));
+        assert!(is_strictly_newer("v0.0.2", "v0.0.1"));
+    }
+
+    #[cfg(feature = "updater")]
+    #[test]
+    fn is_strictly_newer_unparseable_returns_false() {
+        use super::is_strictly_newer;
+        // Refuse to auto-update from an unparseable version rather
+        // than guessing — the alternative is silently rolling users
+        // forward on a release tag the script doesn't understand.
+        assert!(!is_strictly_newer("release-2026-04-28", "0.0.1"));
+        assert!(!is_strictly_newer("0.0.1", "wat"));
     }
 
     #[cfg(feature = "updater")]

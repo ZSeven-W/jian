@@ -42,7 +42,9 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
                 Severity::Error,
                 &format!("{}", e),
                 Some(Span::NONE),
-                Style::auto(),
+                // semantic errors land on stderr; probing stdout for
+                // color leaks ANSI escapes when stderr is captured.
+                Style::auto_stderr(),
             );
             eprint!("{}", buf);
         }
