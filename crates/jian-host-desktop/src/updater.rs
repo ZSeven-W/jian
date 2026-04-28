@@ -310,17 +310,24 @@ fn is_strictly_newer(latest: &str, current: &str) -> bool {
 }
 
 /// Translate a schema-side [`jian_ops_schema::app::UpdaterConfig`] into
-/// a concrete `Box<dyn Updater>`. Behaviour:
+/// a concrete `Box<dyn Updater>`. `None` means **no updater wired**:
+/// the caller leaves `DesktopHost::updater` at its default (`None`),
+/// which a `MenuHandler` can detect via `host.updater.is_none()`
+/// before trying to dispatch `app.check_updates`.
 ///
-/// - `kind: "disabled"` → [`NullUpdater`].
-/// - `kind: "github_releases"` (feature `updater`) → builds a
-///   [`GitHubReleasesUpdater`] from `params.owner` / `params.repo` /
-///   optional `params.target` / optional `params.binName`.
-///   Without the feature, falls back to [`NullUpdater`] and logs a
-///   one-line warning to stderr explaining the missing dep.
-/// - Any other `kind` → falls back to [`NullUpdater`] and warns
-///   the same way; lets third-party hosts override this function
-///   to handle their own kinds without modifying jian-host-desktop.
+/// Returns `Some(...)` only for a kind / param combo that produces a
+/// genuinely useful backend. Mappings:
+///
+/// - `kind: "disabled"` → `None` (explicit opt-out — surfacing it as
+///   `Some(NullUpdater)` would force `MenuHandler` authors to also
+///   special-case the null case, drift-prone).
+/// - `kind: "github_releases"` (feature `updater`, with valid
+///   `params.owner` + `params.repo`) → `Some(GitHubReleasesUpdater)`.
+///   Missing owner/repo or feature-off → `None` plus a stderr warning
+///   explaining the fallback.
+/// - Any other `kind` → `None` plus a stderr warning. Third-party
+///   hosts that ship their own backends should inspect `cfg.kind`
+///   themselves before falling back to this function.
 ///
 /// `current_version` is the running app's semver (typically
 /// `env!("CARGO_PKG_VERSION")`); `default_bin_name` is the host's
@@ -330,12 +337,12 @@ pub fn build_updater_from_schema(
     cfg: &jian_ops_schema::app::UpdaterConfig,
     current_version: &str,
     default_bin_name: &str,
-) -> Box<dyn Updater> {
+) -> Option<Box<dyn Updater>> {
     use jian_ops_schema::app::UpdaterConfig;
     let _ = default_bin_name; // touched only inside the `updater` cfg
     let _ = current_version; //  ditto
     match cfg.kind.as_str() {
-        UpdaterConfig::KIND_DISABLED => Box::new(NullUpdater),
+        UpdaterConfig::KIND_DISABLED => None,
         #[cfg(feature = "updater")]
         UpdaterConfig::KIND_GITHUB_RELEASES => {
             let owner = cfg.params.get("owner").and_then(|v| v.as_str());
@@ -358,29 +365,29 @@ pub fn build_updater_from_schema(
                     if let Some(t) = target {
                         u = u.with_target_substring(t);
                     }
-                    Box::new(u)
+                    Some(Box::new(u))
                 }
                 _ => {
                     eprintln!(
-                        "jian-host-desktop: app.updater kind=\"github_releases\" missing owner/repo; using NullUpdater"
+                        "jian-host-desktop: app.updater kind=\"github_releases\" missing owner/repo; updater stays unwired"
                     );
-                    Box::new(NullUpdater)
+                    None
                 }
             }
         }
         #[cfg(not(feature = "updater"))]
         UpdaterConfig::KIND_GITHUB_RELEASES => {
             eprintln!(
-                "jian-host-desktop: app.updater kind=\"github_releases\" requires `--features updater`; using NullUpdater"
+                "jian-host-desktop: app.updater kind=\"github_releases\" requires `--features updater`; updater stays unwired"
             );
-            Box::new(NullUpdater)
+            None
         }
         other => {
             eprintln!(
-                "jian-host-desktop: app.updater kind=\"{}\" not built into jian-host-desktop; using NullUpdater",
+                "jian-host-desktop: app.updater kind=\"{}\" not built into jian-host-desktop; updater stays unwired",
                 other
             );
-            Box::new(NullUpdater)
+            None
         }
     }
 }

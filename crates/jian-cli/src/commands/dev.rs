@@ -210,12 +210,14 @@ fn install_updater_from_doc(host: DesktopHost) -> DesktopHost {
     let Some(cfg) = cfg else {
         return host;
     };
-    let updater = jian_host_desktop::updater::build_updater_from_schema(
+    match jian_host_desktop::updater::build_updater_from_schema(
         cfg,
         env!("CARGO_PKG_VERSION"),
         "jian",
-    );
-    host.with_updater(updater)
+    ) {
+        Some(updater) => host.with_updater(updater),
+        None => host,
+    }
 }
 
 // --- shared helpers (mirror player.rs) -------------------------------

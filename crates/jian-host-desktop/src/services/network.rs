@@ -15,25 +15,18 @@
 //! schema's `headers` map verbatim. Errors stringify `reqwest::Error`
 //! into the trait's `Result<_, String>` shape.
 //!
-//! ## ⚠ Blocking semantics
+//! ## How the blocking IO doesn't block the executor
 //!
-//! `request` is wrapped in `async fn` for trait conformance, but the
-//! body internally calls `reqwest::blocking::Client::send()`. The
-//! Jian runtime uses a single-threaded executor (`async_trait(?Send)`),
-//! so awaiting this future on the redraw / event-pump thread will
-//! freeze the UI for the duration of the HTTP roundtrip. Two
-//! supported usage patterns:
-//!
-//! 1. **Action-handler path** (recommended): Jian actions are
-//!    dispatched outside the redraw cycle, so blocking for ≤ a few
-//!    seconds during a `http_request` action is acceptable. Most
-//!    user-triggered network calls (login, save, fetch) fall here.
-//! 2. **Worker-thread path** (advanced): hosts that need parallel
-//!    network IO during the frame loop must spawn `std::thread`s
-//!    themselves and pump results through the runtime's signal
-//!    graph. A future revision may introduce a tokio-runtime variant
-//!    of this client; until then `DesktopNetworkClient` remains
-//!    deliberately synchronous to keep the dependency tree small.
+//! Each `request` call hands the work off to a fresh
+//! `std::thread::spawn`, which runs `reqwest::blocking::Client::send()`
+//! against the original `Client` (so the connection pool is shared
+//! across calls — `reqwest::blocking::Client` is `Send + Sync` and
+//! cheaply clonable). The trait method is `async`, so we return a
+//! future that awaits a `futures_channel::oneshot::Receiver`; when
+//! the worker thread sends its result, the executor wakes the task.
+//! While the request is in flight the executor stays free to poll
+//! other tasks, which is the contract every other async-trait
+//! service in the runtime depends on.
 //!
 //! WebSocket (`connect_websocket`) intentionally returns the trait's
 //! default `Err(...)` — the reqwest crate doesn't ship a WS client.
@@ -76,11 +69,29 @@ impl Default for DesktopNetworkClient {
 #[async_trait(?Send)]
 impl NetworkClient for DesktopNetworkClient {
     async fn request(&self, req: HttpRequest) -> Result<HttpResponse, String> {
-        // `request_blocking` uses `tokio::task::spawn_blocking` if a
-        // tokio runtime is around, otherwise falls back to running on
-        // the current thread. The runtime crate is single-threaded,
-        // so a synchronous block is fine here.
-        request_blocking(&self.client, req)
+        // Offload the blocking HTTP call to a fresh worker thread and
+        // bridge the result back through a `oneshot` channel. The
+        // executor stays free to poll other tasks while the future
+        // awaits — this is the contract async-trait promises and the
+        // earlier inline `request_blocking(...)` body broke.
+        //
+        // Cloning the `Client` is cheap (an Arc bump): reqwest's
+        // connection pool lives behind it, so concurrent requests
+        // share keep-alive connections.
+        let client = self.client.clone();
+        let (tx, rx) = futures_channel::oneshot::channel();
+        std::thread::spawn(move || {
+            // `tx.send` only fails if the receiver was dropped — the
+            // task got cancelled before the response arrived. Drop
+            // the result quietly in that case; nothing to report to.
+            let _ = tx.send(request_blocking(&client, req));
+        });
+        match rx.await {
+            Ok(r) => r,
+            Err(_canceled) => Err(
+                "network worker thread dropped before sending a response".into(),
+            ),
+        }
     }
 }
 

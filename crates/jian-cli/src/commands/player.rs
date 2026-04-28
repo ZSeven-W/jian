@@ -87,10 +87,9 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
 
 /// Read the runtime document's `app.updater` schema field and install
 /// the matching backend on `host`. Schema-less / `kind: disabled` /
-/// unknown kinds all degrade to the host's existing default (typically
-/// no updater installed) — `build_updater_from_schema` returns
-/// `NullUpdater` in those paths and we simply skip wiring it so the
-/// `MenuHandler` can detect "no updater" via `host.updater.is_none()`.
+/// unknown kinds leave `host.updater` at its default `None`, so a
+/// `MenuHandler` checking `host.updater.is_none()` can short-circuit
+/// `app.check_updates` instead of dispatching to a no-op.
 fn install_updater_from_doc(host: DesktopHost) -> DesktopHost {
     let cfg = host
         .runtime
@@ -103,12 +102,14 @@ fn install_updater_from_doc(host: DesktopHost) -> DesktopHost {
     };
     // Use the binary's own version (`jian-cli` and `jian-host-desktop`
     // share the workspace version) and the conventional binary name.
-    let updater = jian_host_desktop::updater::build_updater_from_schema(
+    match jian_host_desktop::updater::build_updater_from_schema(
         cfg,
         env!("CARGO_PKG_VERSION"),
         "jian",
-    );
-    host.with_updater(updater)
+    ) {
+        Some(updater) => host.with_updater(updater),
+        None => host,
+    }
 }
 
 /// Walk every laid-out node and return the farthest `(max_x, max_y)`

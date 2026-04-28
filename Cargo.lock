@@ -2442,6 +2442,7 @@ dependencies = [
  "arboard",
  "async-trait",
  "futures",
+ "futures-channel",
  "jian-action-surface",
  "jian-asp",
  "jian-core",
