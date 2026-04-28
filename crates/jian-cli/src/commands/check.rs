@@ -47,7 +47,11 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
     if args.json {
         print_json(&loaded.warnings);
     } else {
-        print_human(&args.path.display().to_string(), &loaded.warnings);
+        print_human(
+            &args.path.display().to_string(),
+            &loaded.warnings,
+            args.quiet,
+        );
     }
 
     Ok(if loaded.warnings.is_empty() {
@@ -72,11 +76,16 @@ fn semantic_check(doc: &PenDocument) -> Result<()> {
     Ok(())
 }
 
-fn print_human(path: &str, warnings: &[LoadWarning]) {
+fn print_human(path: &str, warnings: &[LoadWarning], quiet: bool) {
     if warnings.is_empty() {
-        println!("jian check: {} — OK, no diagnostics", path);
+        if !quiet {
+            println!("jian check: {} — OK, no diagnostics", path);
+        }
         return;
     }
+    // Warnings and errors are always printed; `--quiet` only silences
+    // the success-line noise floor so scripts using `check` as a
+    // gating step still see the actionable output on a non-zero exit.
     println!(
         "jian check: {} — {} diagnostic{}",
         path,

@@ -71,6 +71,34 @@ fn check_malformed_exits_two() {
 }
 
 #[test]
+fn check_quiet_silences_success_line_only() {
+    let dir = TempDir::new().unwrap();
+    let clean = write_tmp(&dir, "clean.op", CLEAN_OP);
+    // Clean run + --quiet: no stdout at all (success line suppressed),
+    // exit code still 0.
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["check", "--quiet", clean.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(
+        out.stdout.is_empty(),
+        "expected empty stdout under --quiet on a clean check, got {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // Warning run + --quiet: warnings still printed, exit 1.
+    let warn = write_tmp(&dir, "warn.op", WARNING_OP);
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args(["check", "--quiet", warn.to_str().unwrap()])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("mysteryField"));
+}
+
+#[test]
 fn check_json_emits_ndjson_per_warning() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "warn.op", WARNING_OP);

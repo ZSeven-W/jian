@@ -98,6 +98,12 @@ pub struct CheckArgs {
     /// Emit diagnostics as NDJSON (one object per line).
     #[arg(long)]
     pub json: bool,
+    /// Suppress the "OK, no diagnostics" success line so scripts can
+    /// rely solely on the exit code (0 = clean, 1 = warnings, 2 =
+    /// parse / semantic error). Warnings and errors are still printed
+    /// — `--quiet` only silences the noise floor.
+    #[arg(long, short = 'q')]
+    pub quiet: bool,
 }
 
 #[derive(Parser, Debug)]
