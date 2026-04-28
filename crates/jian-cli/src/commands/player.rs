@@ -68,12 +68,16 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     }
     rt.rebuild_spatial();
 
+    // `--dpi`'s clap value_parser already filters out 0 / negative /
+    // NaN / Inf, so the host-side fallback is just a straight pass-through.
     let cfg = HostConfig {
         title,
         initial_size: size(w, h),
         menu: None,
         icon,
         fullscreen: args.fullscreen,
+        dpi_override: args.dpi,
+        debug_overlay: args.debug_overlay,
     };
     let host = DesktopHost::with_config(rt, cfg).with_default_menu();
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;

@@ -17,8 +17,9 @@
 use crate::pointer::PointerTranslator;
 use crate::scene::collect_draws_with_state;
 use crate::DesktopHost;
-use jian_core::geometry::size as make_size;
-use jian_core::render::RenderBackend;
+use jian_core::geometry::{point, rect, size as make_size};
+use jian_core::render::{DrawOp, Paint, RenderBackend, TextAlign, TextRun};
+use jian_core::scene::Color;
 use jian_skia::surface::SkiaSurface;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -40,6 +41,45 @@ fn logical_size_f32(phys: winit::dpi::PhysicalSize<u32>, scale: f64) -> (f32, f3
     let w = (phys.width as f64 / scale).max(1.0) as f32;
     let h = (phys.height as f64 / scale).max(1.0) as f32;
     (w, h)
+}
+
+/// Build the developer-overlay draw ops: a black strip at top-left in
+/// physical pixel space, white text reporting `<W>×<H> @<scale>x · <N> ops`.
+/// Returned ops live in the post-DPR-pop transform stack so the strip
+/// stays a constant size across monitor scale changes.
+fn build_debug_overlay(width: u32, height: u32, scale: f32, op_count: usize) -> Vec<DrawOp> {
+    // 24 px strip with 8 px content gutter — matches the muda menu bar
+    // height on the macOS reference machine, so the HUD doesn't compete
+    // with the menu region.
+    let strip_w = 260.0_f32;
+    let strip_h = 24.0_f32;
+    let strip_rect = rect(0.0, 0.0, strip_w, strip_h);
+    let bg = Paint {
+        fill: Some(Color::rgba(0, 0, 0, 0xc0)),
+        stroke: None,
+        opacity: 1.0,
+    };
+    let label = format!(
+        "{}×{} · scale {:.2} · {} ops",
+        width, height, scale, op_count
+    );
+    vec![
+        DrawOp::Rect {
+            rect: strip_rect,
+            paint: bg,
+        },
+        DrawOp::Text(TextRun {
+            content: label,
+            font_family: "system-ui".into(),
+            font_size: 12.0,
+            font_weight: 500,
+            color: Color::rgb(0xff, 0xff, 0xff),
+            origin: point(8.0, 6.0),
+            max_width: strip_w - 16.0,
+            align: TextAlign::Start,
+            line_height: 0.0,
+        }),
+    ]
 }
 
 /// Map `HostConfig::fullscreen` to a `winit::window::Fullscreen` value.
@@ -177,6 +217,14 @@ impl RunApp {
         if dpr_scaled {
             self.host.backend.pop();
         }
+        if self.host.config.debug_overlay {
+            // Draw the HUD in physical pixel space (after the DPR pop)
+            // so the strip is the same size on every monitor regardless
+            // of OS scale.
+            for hud in build_debug_overlay(w, h, scale, ops.len()) {
+                self.host.backend.draw(&hud);
+            }
+        }
         self.host.backend.end_frame(&mut state.skia);
 
         // 2. Snapshot raster bytes as RGBA8888 via SkiaSurface helper.
@@ -255,7 +303,14 @@ impl ApplicationHandler for RunApp {
             .create_window(attrs)
             .expect("jian-host-desktop: failed to create window");
         let phys = window.inner_size();
-        self.scale_factor = window.scale_factor();
+        // `dpi_override` (from `jian player --dpi N` etc.) wins over the
+        // OS-reported scale so a tester can pin 1.0 / 2.0 deterministically.
+        // Falls back to the live winit value when unset.
+        self.scale_factor = self
+            .host
+            .config
+            .dpi_override
+            .unwrap_or_else(|| window.scale_factor());
         self.last_size = (phys.width.max(1), phys.height.max(1));
         self.window = Some(Rc::new(window));
         self.ensure_surface(self.last_size.0, self.last_size.1);
@@ -370,7 +425,9 @@ impl ApplicationHandler for RunApp {
                 scale_factor: new_scale,
                 ..
             } => {
-                self.scale_factor = *new_scale;
+                // A user-supplied `--dpi` override pins the scale across
+                // monitor moves; without an override we follow the OS.
+                self.scale_factor = self.host.config.dpi_override.unwrap_or(*new_scale);
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -694,6 +751,36 @@ mod fullscreen_tests {
         match fullscreen_for_config(true) {
             Some(Fullscreen::Borderless(None)) => {}
             other => panic!("expected Borderless(None), got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod debug_overlay_tests {
+    use super::build_debug_overlay;
+    use jian_core::render::DrawOp;
+
+    #[test]
+    fn emits_one_rect_and_one_text_op() {
+        let ops = build_debug_overlay(1280, 720, 2.0, 17);
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[0], DrawOp::Rect { .. }));
+        match &ops[1] {
+            DrawOp::Text(run) => {
+                assert!(run.content.contains("1280×720"));
+                assert!(run.content.contains("scale 2.00"));
+                assert!(run.content.contains("17 ops"));
+            }
+            other => panic!("expected text op, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fractional_scale_renders_two_decimal_places() {
+        let ops = build_debug_overlay(800, 600, 1.5, 0);
+        match &ops[1] {
+            DrawOp::Text(run) => assert!(run.content.contains("scale 1.50")),
+            other => panic!("expected text op, got {:?}", other),
         }
     }
 }

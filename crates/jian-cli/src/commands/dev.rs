@@ -139,6 +139,8 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
         menu: None,
         icon,
         fullscreen: args.fullscreen,
+        dpi_override: args.dpi,
+        debug_overlay: args.debug_overlay,
     };
     // `mut` is only needed when the `mcp` feature reassigns `host`
     // to wire the bridge — silence the warning on default builds.

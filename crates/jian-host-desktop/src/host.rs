@@ -84,6 +84,18 @@ pub struct HostConfig {
     /// and works the same way on every platform without a video-mode
     /// query. Default `false`.
     pub fullscreen: bool,
+    /// Override the DPI scale factor reported by the OS. `None` keeps
+    /// the winit-reported value (typical: 1.0 on standard displays,
+    /// 2.0 on Retina, fractional on Windows). Useful for forcing 1×
+    /// rendering during a HiDPI screenshot diff or stress-testing
+    /// fractional scaling without needing physical hardware. Pointer
+    /// coordinates and the canvas transform both use this value.
+    pub dpi_override: Option<f64>,
+    /// Render a small developer HUD strip at top-left each frame:
+    /// physical size / scale factor / draw-op count. The HUD draws
+    /// after the scene and before the surface flush so it can never
+    /// be hidden by the document. Default `false`.
+    pub debug_overlay: bool,
 }
 
 impl Default for HostConfig {
@@ -94,6 +106,8 @@ impl Default for HostConfig {
             menu: None,
             icon: None,
             fullscreen: false,
+            dpi_override: None,
+            debug_overlay: false,
         }
     }
 }
@@ -243,6 +257,8 @@ mod tests {
             menu: None,
             icon: None,
             fullscreen: false,
+            dpi_override: None,
+            debug_overlay: false,
         };
         let host = DesktopHost::with_config(rt, cfg);
         assert_eq!(host.title(), "Custom");

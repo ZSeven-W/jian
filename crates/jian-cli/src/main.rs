@@ -18,6 +18,19 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+/// Clap value parser for `--dpi`. Accepts a positive finite f64; rejects
+/// `0`, negative values, and `nan`/`inf` so the run loop can `unwrap_or`
+/// without revalidating downstream.
+#[cfg(feature = "player")]
+fn parse_positive_dpi(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|_| format!("not a number: `{}`", s))?;
+    if v.is_finite() && v > 0.0 {
+        Ok(v)
+    } else {
+        Err(format!("must be a finite number > 0 (got `{}`)", s))
+    }
+}
+
 mod commands;
 #[cfg(feature = "player")]
 mod icon_loader;
@@ -110,6 +123,20 @@ pub struct CheckArgs {
 pub struct PackArgs {
     pub input: PathBuf,
     pub output: PathBuf,
+    /// Bundle every font file under `<input>/../assets/fonts/` into the
+    /// archive at `assets/fonts/<original-filename>`. Recognised
+    /// extensions: .ttf / .otf / .woff / .woff2. Missing directory is a
+    /// no-op (not an error). Other files in the dir are skipped.
+    #[arg(long)]
+    pub include_fonts: bool,
+    /// Bundle every image under `<input>/../assets/images/` into the
+    /// archive at `assets/images/<blake3-hash>.<ext>` — content-addressed
+    /// so identical bytes dedupe. Missing directory is a no-op.
+    /// Recognised extensions: .png / .jpg / .jpeg / .webp / .gif / .svg.
+    /// Manifest exposes `images: { "<original-name>": "assets/images/<hash>.<ext>" }`
+    /// so consumers can rewrite document references at load time.
+    #[arg(long)]
+    pub include_images: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -141,6 +168,17 @@ pub struct PlayerArgs {
     /// Mutually exclusive with `--size`.
     #[arg(long)]
     pub fullscreen: bool,
+    /// Override the OS-reported DPI scale factor. Use 1.0 to force a
+    /// non-HiDPI render on a Retina display, 2.0 to mimic Retina on a
+    /// 1× monitor, etc. Must be > 0. When unset, follows the active
+    /// monitor's reported scale and switches with the window.
+    #[arg(long, value_parser = parse_positive_dpi)]
+    pub dpi: Option<f64>,
+    /// Render a developer HUD strip (size / scale / draw-op count)
+    /// at the top-left corner of the window each frame. Off by
+    /// default — flag-only, no value.
+    #[arg(long = "debug-overlay")]
+    pub debug_overlay: bool,
 }
 
 #[cfg(feature = "player")]
@@ -160,6 +198,12 @@ pub struct DevArgs {
     /// Mutually exclusive with `--size`.
     #[arg(long)]
     pub fullscreen: bool,
+    /// Same as `jian player --dpi`. Must be > 0.
+    #[arg(long, value_parser = parse_positive_dpi)]
+    pub dpi: Option<f64>,
+    /// Same as `jian player --debug-overlay`.
+    #[arg(long = "debug-overlay")]
+    pub debug_overlay: bool,
     /// Open a stdio MCP server on this process's stdin/stdout while
     /// the window is running. AI clients can drive `tools/list` /
     /// `tools/call` against the live, hot-reloading document.
@@ -179,6 +223,33 @@ pub struct NewArgs {
     /// Directory to create the project in. Default: `./<name>`.
     #[arg(long)]
     pub path: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+
+    #[test]
+    fn parse_positive_dpi_accepts_typical_values() {
+        assert_eq!(parse_positive_dpi("1.0").unwrap(), 1.0);
+        assert_eq!(parse_positive_dpi("2").unwrap(), 2.0);
+        assert_eq!(parse_positive_dpi("1.5").unwrap(), 1.5);
+        assert_eq!(parse_positive_dpi("0.5").unwrap(), 0.5);
+    }
+
+    #[test]
+    fn parse_positive_dpi_rejects_zero_and_negative() {
+        assert!(parse_positive_dpi("0").is_err());
+        assert!(parse_positive_dpi("0.0").is_err());
+        assert!(parse_positive_dpi("-1.5").is_err());
+    }
+
+    #[test]
+    fn parse_positive_dpi_rejects_non_finite() {
+        assert!(parse_positive_dpi("nan").is_err());
+        assert!(parse_positive_dpi("inf").is_err());
+        assert!(parse_positive_dpi("not-a-number").is_err());
+    }
 }
 
 fn main() -> ExitCode {

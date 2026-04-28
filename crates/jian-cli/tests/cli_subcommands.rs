@@ -216,6 +216,77 @@ fn new_form_template_scaffolds_and_checks_clean() {
 }
 
 #[test]
+fn player_dpi_zero_is_rejected_by_clap() {
+    // Negative-path test for `--dpi`: clap's `value_parser` rejects 0 /
+    // negative / non-finite at parse time, so the run loop never starts
+    // and no display is required for the assertion. This pins the
+    // validation contract — a refactor that drops `parse_positive_dpi`
+    // breaks here, not in a user terminal.
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["player", "--dpi", "0", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "--dpi 0 should be rejected, stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("must be a finite number > 0"),
+        "expected dpi error message, got stderr={}",
+        stderr
+    );
+}
+
+#[test]
+fn player_dpi_negative_is_rejected_by_clap() {
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["player", "--dpi", "-1.5", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+}
+
+#[test]
+fn player_dpi_non_numeric_is_rejected_by_clap() {
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["player", "--dpi", "abc", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("not a number"), "stderr={}", stderr);
+}
+
+#[test]
+fn player_help_advertises_dpi_and_debug_overlay() {
+    // `--help` exits before any window logic, so this works headless on
+    // CI and proves the new flags are publicly visible.
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["player", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--dpi"), "expected --dpi in help");
+    assert!(
+        stdout.contains("--debug-overlay"),
+        "expected --debug-overlay in help"
+    );
+}
+
+#[test]
 fn pack_then_unpack_roundtrips_app_op() {
     let dir = TempDir::new().unwrap();
     let src = write_tmp(&dir, "src.op", CLEAN_OP);
@@ -242,4 +313,166 @@ fn pack_then_unpack_roundtrips_app_op() {
     let out = fs::read_to_string(extracted.join("app.op")).unwrap();
     assert_eq!(out, CLEAN_OP);
     assert!(extracted.join("manifest.json").exists());
+}
+
+#[test]
+fn pack_include_fonts_bundles_assets_fonts_directory() {
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "src.op", CLEAN_OP);
+    let fonts_dir = dir.path().join("assets").join("fonts");
+    fs::create_dir_all(&fonts_dir).unwrap();
+    fs::write(fonts_dir.join("Inter.ttf"), b"FAKE-TTF-1").unwrap();
+    fs::write(fonts_dir.join("Roboto.otf"), b"FAKE-OTF-2").unwrap();
+    fs::write(fonts_dir.join("README.md"), b"not a font").unwrap();
+    let packed = dir.path().join("out.op.pack");
+
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "pack",
+            "--include-fonts",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let extracted = dir.path().join("extracted");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let inter = extracted.join("assets/fonts/Inter.ttf");
+    let roboto = extracted.join("assets/fonts/Roboto.otf");
+    assert!(inter.is_file());
+    assert!(roboto.is_file());
+    assert_eq!(fs::read(&inter).unwrap(), b"FAKE-TTF-1");
+    assert_eq!(fs::read(&roboto).unwrap(), b"FAKE-OTF-2");
+    // Non-font files in the dir are ignored.
+    assert!(!extracted.join("assets/fonts/README.md").exists());
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(extracted.join("manifest.json")).unwrap()).unwrap();
+    let entries: Vec<&str> = manifest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(entries.contains(&"assets/fonts/Inter.ttf"));
+    assert!(entries.contains(&"assets/fonts/Roboto.otf"));
+}
+
+#[test]
+fn pack_include_images_content_addresses_and_dedupes() {
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "src.op", CLEAN_OP);
+    let images_dir = dir.path().join("assets").join("images");
+    fs::create_dir_all(&images_dir).unwrap();
+    fs::write(images_dir.join("cat.png"), b"PNG-DATA-A").unwrap();
+    // Same content, different name → dedupes to one zip entry.
+    fs::write(images_dir.join("cat-copy.png"), b"PNG-DATA-A").unwrap();
+    fs::write(images_dir.join("dog.jpg"), b"JPG-DATA-B").unwrap();
+    fs::write(images_dir.join("notes.txt"), b"not an image").unwrap();
+    let packed = dir.path().join("out.op.pack");
+
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "pack",
+            "--include-images",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let extracted = dir.path().join("extracted");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(extracted.join("manifest.json")).unwrap()).unwrap();
+
+    let images = manifest["images"].as_object().unwrap();
+    let cat_path = images["cat.png"].as_str().unwrap();
+    let cat_copy_path = images["cat-copy.png"].as_str().unwrap();
+    let dog_path = images["dog.jpg"].as_str().unwrap();
+    // Identical bytes → identical zip path. Different bytes → different path.
+    assert_eq!(cat_path, cat_copy_path);
+    assert_ne!(cat_path, dog_path);
+    assert!(cat_path.starts_with("assets/images/"));
+    assert!(cat_path.ends_with(".png"));
+    assert!(dog_path.ends_with(".jpg"));
+
+    // Both physical files unpacked successfully (cat content bundled once).
+    let cat_bytes = fs::read(extracted.join(cat_path)).unwrap();
+    let dog_bytes = fs::read(extracted.join(dog_path)).unwrap();
+    assert_eq!(cat_bytes, b"PNG-DATA-A");
+    assert_eq!(dog_bytes, b"JPG-DATA-B");
+    assert!(!extracted.join("assets/images/notes.txt").exists());
+
+    // Entries list also dedupes — three image inputs → two physical entries.
+    let entries: Vec<&str> = manifest["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    let asset_entries: Vec<&&str> = entries
+        .iter()
+        .filter(|e| e.starts_with("assets/images/"))
+        .collect();
+    assert_eq!(asset_entries.len(), 2, "dedup leaves two unique entries");
+}
+
+#[test]
+fn pack_without_include_flags_omits_assets_dir() {
+    // Even when assets/ exists, the absence of --include-fonts /
+    // --include-images keeps the archive minimal — the bare-pack path
+    // hasn't regressed.
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "src.op", CLEAN_OP);
+    let fonts_dir = dir.path().join("assets").join("fonts");
+    fs::create_dir_all(&fonts_dir).unwrap();
+    fs::write(fonts_dir.join("Inter.ttf"), b"FAKE-TTF").unwrap();
+    let packed = dir.path().join("out.op.pack");
+
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let extracted = dir.path().join("extracted");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(!extracted.join("assets/fonts/Inter.ttf").exists());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(extracted.join("manifest.json")).unwrap()).unwrap();
+    assert!(
+        manifest.get("images").is_none(),
+        "no `images` key when no images bundled"
+    );
 }
