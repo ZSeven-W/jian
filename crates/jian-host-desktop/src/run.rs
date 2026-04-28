@@ -576,6 +576,18 @@ impl ApplicationHandler for RunApp {
             }
         }
     }
+
+    /// Winit fires `exiting` after `event_loop.exit()` is invoked but
+    /// before the event loop actually terminates. This is the
+    /// canonical "save unsaved state" hook — Plan 8 Task 19. The
+    /// host's `shutdown_hook` is moved out (so it can't fire twice
+    /// even if the embedder somehow re-enters the loop) and called
+    /// with `&mut Runtime`.
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(hook) = self.host.shutdown_hook.take() {
+            hook(&mut self.host.runtime);
+        }
+    }
 }
 
 impl RunApp {

@@ -41,6 +41,12 @@ pub enum MenuOutcome {
 /// `ActionList` against `&mut Runtime` directly.
 pub type MenuHandler = Box<dyn FnMut(&str, &mut Runtime) -> MenuOutcome>;
 
+/// Type alias for the shutdown callback fired before the run loop
+/// exits — last chance for a host to flush unsaved state. Receives a
+/// mutable `Runtime` borrow so handlers can serialise `$state.*` /
+/// `$vars.*` to disk via the runtime's existing services.
+pub type ShutdownHook = Box<dyn FnOnce(&mut Runtime)>;
+
 /// Helper: a [`MenuHandler`] that handles `app.quit` (returns
 /// `MenuOutcome::Quit`) and routes everything else to a user-supplied
 /// closure. Hosts that just want to add a few custom items don't have
@@ -70,6 +76,14 @@ pub struct DesktopHost {
     /// menu clicks on the floor — useful for headless / single-window
     /// apps that haven't wired UI semantics yet.
     pub menu_handler: Option<MenuHandler>,
+    /// Last-chance callback fired right before the run loop exits.
+    /// Hosts that persist `$state.*` / `$vars.*` to disk install a
+    /// hook here so a Cmd-Q / window-close doesn't lose unsaved
+    /// state. `FnOnce` because the run loop only exits once;
+    /// `Option<ShutdownHook>` so installing more than once
+    /// replaces the previous hook (calling order is the embedder's
+    /// problem to coordinate).
+    pub shutdown_hook: Option<ShutdownHook>,
     /// Main-thread end of an MCP `Bridge`. The run loop drains it
     /// once per `about_to_wait` and dispatches each request through
     /// the `mcp_surface` / `RuntimeDispatcher` chain.
@@ -161,6 +175,7 @@ impl DesktopHost {
             },
             reload_rx: None,
             menu_handler: None,
+            shutdown_hook: None,
             #[cfg(feature = "mcp")]
             mcp_drain: None,
             #[cfg(feature = "mcp")]
@@ -179,6 +194,7 @@ impl DesktopHost {
             config,
             reload_rx: None,
             menu_handler: None,
+            shutdown_hook: None,
             #[cfg(feature = "mcp")]
             mcp_drain: None,
             #[cfg(feature = "mcp")]
@@ -203,6 +219,17 @@ impl DesktopHost {
     /// default Quit semantic without writing a match arm yourself.
     pub fn with_menu_handler(mut self, handler: MenuHandler) -> Self {
         self.menu_handler = Some(handler);
+        self
+    }
+
+    /// Install a callback that fires once, just before the event loop
+    /// exits (window closed, `app.quit` menu, programmatic
+    /// `event_loop.exit()`). The closure receives `&mut Runtime` so
+    /// hosts can serialise `$state.*` / `$vars.*` snapshots,
+    /// flush a `StorageBackend`, or cancel in-flight work.
+    /// `FnOnce` — the run loop only exits once per invocation.
+    pub fn with_shutdown_hook(mut self, hook: ShutdownHook) -> Self {
+        self.shutdown_hook = Some(hook);
         self
     }
 
@@ -376,6 +403,19 @@ mod tests {
         assert_eq!(handler("app.quit", &mut runtime), MenuOutcome::Quit);
         let entries = log.borrow().clone();
         assert_eq!(entries, vec!["file.open", "edit.undo"]);
+    }
+
+    #[test]
+    fn with_shutdown_hook_stores_callback() {
+        // The host owns the hook until the run loop's `exiting`
+        // callback takes it. This test verifies the install path —
+        // firing the hook in a real exit happens through winit and
+        // can't run headless.
+        let rt = Runtime::new();
+        let host = DesktopHost::new(rt, "ShutdownTest").with_shutdown_hook(Box::new(|_rt| {
+            // No-op; just exercise the type signature.
+        }));
+        assert!(host.shutdown_hook.is_some());
     }
 
     #[test]
