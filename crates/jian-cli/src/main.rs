@@ -136,6 +136,10 @@ pub struct PlayerArgs {
     /// the `app.icon` fallback for this run.
     #[arg(long)]
     pub icon: Option<PathBuf>,
+    /// Open the window borderless-fullscreen on the current monitor.
+    /// `--size` is ignored when this is set.
+    #[arg(long)]
+    pub fullscreen: bool,
 }
 
 #[cfg(feature = "player")]
@@ -150,6 +154,10 @@ pub struct DevArgs {
     /// to the CWD. Same semantics as `jian player --icon`.
     #[arg(long)]
     pub icon: Option<PathBuf>,
+    /// Open the window borderless-fullscreen on the current monitor.
+    /// `--size` is ignored when this is set.
+    #[arg(long)]
+    pub fullscreen: bool,
     /// Open a stdio MCP server on this process's stdin/stdout while
     /// the window is running. AI clients can drive `tools/list` /
     /// `tools/call` against the live, hot-reloading document.

@@ -232,6 +232,14 @@ impl ApplicationHandler for RunApp {
                 Err(e) => eprintln!("jian-host-desktop: icon conversion failed: {e}"),
             }
         }
+        // Borderless-fullscreen on the current monitor when configured.
+        // Exclusive fullscreen needs a video-mode query and changes the
+        // display resolution; borderless skips both and works the same
+        // way across macOS / Windows / Linux. The user can still
+        // multitask via OS shortcuts (Cmd+Tab / Alt+Tab / etc.).
+        if self.host.config.fullscreen {
+            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        }
         let window = event_loop
             .create_window(attrs)
             .expect("jian-host-desktop: failed to create window");

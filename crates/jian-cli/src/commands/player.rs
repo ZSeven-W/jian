@@ -73,6 +73,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         initial_size: size(w, h),
         menu: None,
         icon,
+        fullscreen: args.fullscreen,
     };
     let host = DesktopHost::with_config(rt, cfg).with_default_menu();
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;

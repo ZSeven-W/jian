@@ -78,6 +78,12 @@ pub struct HostConfig {
     /// `app_icon::AppIconLoader` impl before constructing
     /// `HostConfig`.
     pub icon: Option<crate::app_icon::AppIcon>,
+    /// Open the window borderless-fullscreen on the current monitor.
+    /// We deliberately use winit's borderless variant rather than
+    /// exclusive fullscreen — it skips the resolution-change dance
+    /// and works the same way on every platform without a video-mode
+    /// query. Default `false`.
+    pub fullscreen: bool,
 }
 
 impl Default for HostConfig {
@@ -87,6 +93,7 @@ impl Default for HostConfig {
             initial_size: size(800.0, 600.0),
             menu: None,
             icon: None,
+            fullscreen: false,
         }
     }
 }
@@ -199,6 +206,13 @@ impl DesktopHost {
         self
     }
 
+    /// Open the window borderless-fullscreen on the current monitor.
+    /// Equivalent to setting `HostConfig::fullscreen = true`.
+    pub fn fullscreen(mut self, on: bool) -> Self {
+        self.config.fullscreen = on;
+        self
+    }
+
     pub fn title(&self) -> &str {
         &self.config.title
     }
@@ -228,6 +242,7 @@ mod tests {
             initial_size: size(320.0, 200.0),
             menu: None,
             icon: None,
+            fullscreen: false,
         };
         let host = DesktopHost::with_config(rt, cfg);
         assert_eq!(host.title(), "Custom");
