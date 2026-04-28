@@ -47,6 +47,15 @@ menus = ["dep:muda"]
 # rmcp/tokio shared libs.
 mcp = ["dep:jian-action-surface"]
 
+# Real-shaping text measurement via `jian-skia::SkiaMeasure`. When on,
+# `DesktopHost::with_skia_measure()` (and `install_skia_measure`) swap
+# the runtime's `MeasureBackend` to the Skia paragraph shaper, so
+# layout sees the same widths the renderer paints — fixes CJK / emoji
+# undercounts and per-segment style mismatches that the default
+# `EstimateBackend` glosses over. Off by default — pulls in
+# skia-safe's textlayout feature (ICU + HarfBuzz, ~15 MB).
+textlayout = ["jian-skia/textlayout"]
+
 [dependencies]
 jian-core       = { path = "../jian-core" }
 jian-ops-schema = { path = "../jian-ops-schema" }

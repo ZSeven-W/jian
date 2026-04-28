@@ -18,10 +18,14 @@ over a real window surface.
 
 ## Feature flags
 
-| Feature     | Default | Effect                                                             |
-|-------------|---------|--------------------------------------------------------------------|
-| `run`       | off     | Enables `DesktopHost::run` — winit event loop + softbuffer presenter |
-| `clipboard` | off     | Pulls in `arboard` and exposes `DesktopClipboard`                  |
+| Feature       | Default | Effect                                                             |
+|---------------|---------|--------------------------------------------------------------------|
+| `run`         | off     | Enables `DesktopHost::run` — winit event loop + softbuffer presenter |
+| `clipboard`   | off     | Pulls in `arboard` and exposes `DesktopClipboard`                  |
+| `menus`       | off     | Pulls in `muda` for the native menu bar                            |
+| `textlayout`  | off     | Forwards to `jian-skia/textlayout`; activates `with_skia_measure()` |
+| `dev-asp`     | off     | Dev-only Agent Shell Protocol (Plan 18)                             |
+| `mcp`         | off     | Wires `jian-action-surface` MCP drain into the run loop             |
 
 Both are off by default so `cargo test -p jian-host-desktop` stays
 headless and portable across the CI matrix. `jian-cli`'s `player`
@@ -39,23 +43,40 @@ runtime then mutates the engine's backend slot in place; every
 subsequent `build_layout(size)` reuses the installed backend until
 it's swapped again.
 
-The intended production backend is `SkiaMeasure` over
+The production backend is `SkiaMeasure` over
 `skia_safe::textlayout::Paragraph`, gated by `jian-skia`'s
-`textlayout` cargo feature. **It is not yet implemented** — Tasks
-2 and 3 of the font-metrics plan still wait on the textlayout
-build environment. Headless tests and the CI fast-path keep the
-default `EstimateBackend` so neither the skia-bindings build nor
-a system-font scan is required.
-
-When `SkiaMeasure` lands, the install pattern will look like:
+`textlayout` cargo feature. As of font-metrics plan T2 (2026-04-28)
+the host crate exposes a `textlayout` feature that pulls the same
+flag through transitively, plus convenience builders on
+`DesktopHost`:
 
 ```rust
-// future — requires `jian-skia` built with `--features textlayout`,
-// expected once font-metrics plan Task 2 ships:
+// jian-host-desktop = { ..., features = ["run", "textlayout"] }
 //
-// let measure = std::rc::Rc::new(jian_skia::measure::SkiaMeasure::new());
-// runtime.build_layout_with(measure, (w, h))?;
+// Builder form — common case, install once when the host is built.
+let host = DesktopHost::new(runtime, "MyApp")
+    .with_default_menu()
+    .with_skia_measure();    // available under feature = "textlayout"
+host.run()?;
+
+// In-place form — for hosts that already own the DesktopHost and
+// want to swap shaping in / out (e.g. after a hot-reload).
+host.install_skia_measure();
+
+// Manual form — when the host wants a custom FontMgr (bundled
+// fonts, sandboxed font dir, etc.):
+let measure = std::rc::Rc::new(
+    jian_skia::measure::SkiaMeasure::with_font_manager(custom_fm)
+);
+runtime.build_layout_with(measure, (w, h))?;
 ```
+
+The `textlayout` build pulls in skia-safe's ICU + HarfBuzz layer
+(~15 MB binary growth + a Python 3.10 / 3.11 / 3.12 toolchain for
+skia-bindings' depot_tools — see
+`scripts/build-textlayout.sh`). Headless tests and the CI
+fast-path keep the default `EstimateBackend` so the heavier deps
+aren't pulled into ordinary `cargo test`.
 
 `text_growth` semantics in the schema are already honoured by
 every backend (Task 4 shipped):

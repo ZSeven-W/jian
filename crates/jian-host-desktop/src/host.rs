@@ -227,6 +227,30 @@ impl DesktopHost {
         self
     }
 
+    /// Install `jian_skia::SkiaMeasure` as the runtime's text-measure
+    /// backend so layout matches the rendered output (CJK widths,
+    /// per-segment styling, etc). Available only when the host crate
+    /// is compiled with `--features textlayout`. Headless / CI builds
+    /// keep the default `EstimateBackend` and skip the ~15 MB ICU +
+    /// HarfBuzz dependency.
+    ///
+    /// Idempotent: calling more than once just reseats the backend;
+    /// the layout tree is rebuilt on the next `build_layout` regardless.
+    #[cfg(feature = "textlayout")]
+    pub fn with_skia_measure(mut self) -> Self {
+        self.install_skia_measure();
+        self
+    }
+
+    /// In-place sibling of [`Self::with_skia_measure`] for hosts that
+    /// already own a `DesktopHost` and want to swap in real shaping
+    /// after a hot-reload (or never, if a feature flag is off).
+    #[cfg(feature = "textlayout")]
+    pub fn install_skia_measure(&mut self) {
+        let backend = std::rc::Rc::new(jian_skia::measure::SkiaMeasure::new());
+        self.runtime.layout.set_backend(backend);
+    }
+
     pub fn title(&self) -> &str {
         &self.config.title
     }
