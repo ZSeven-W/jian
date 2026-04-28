@@ -12,5 +12,17 @@ pub mod storage;
 #[cfg(feature = "clipboard")]
 pub mod clipboard;
 
+#[cfg(feature = "network")]
+pub mod network;
+
+#[cfg(feature = "feedback")]
+pub mod feedback;
+
 pub use router::HistoryRouter;
 pub use storage::InMemoryStorage;
+
+#[cfg(feature = "network")]
+pub use network::DesktopNetworkClient;
+
+#[cfg(feature = "feedback")]
+pub use feedback::DesktopFeedback;

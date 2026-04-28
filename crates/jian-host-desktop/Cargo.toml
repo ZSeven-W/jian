@@ -31,6 +31,18 @@ run = ["dep:softbuffer"]
 # Native OS feature flags for the optional integrations (added when
 # the implementations land):
 clipboard = ["dep:arboard"]
+# `reqwest::blocking::Client`-backed `NetworkClient`. Off by default so
+# the headless / CI fast path doesn't pull in TLS + the reqwest
+# dependency tree. Activate this for any host that exposes the
+# runtime's `http_request` action. (WebSocket support stays on
+# `connect_websocket`'s default `Err(...)` path until a follow-up
+# wires `tokio-tungstenite`.)
+network = ["dep:reqwest"]
+# `rfd::MessageDialog`-backed `FeedbackSink + AsyncFeedback`. Off by
+# default — enables the `toast` / `alert` / `confirm` actions on
+# desktop. `rfd` 0.14 wraps platform-native dialogs (NSAlert /
+# Win32 / GTK / KDE) without bundling its own widget toolkit.
+feedback = ["dep:rfd"]
 # Native menus via `muda` — cross-platform (macOS / Windows / Linux).
 # Phase 1 ships a pure menu *spec* (`MenuSpec`) so authors can
 # declare File / Edit / View entries; the actual `muda::Menu`
@@ -69,6 +81,8 @@ serde_json      = { workspace = true }
 arboard         = { version = "3", optional = true }
 softbuffer      = { version = "0.4", optional = true }
 muda            = { version = "0.13", optional = true }
+reqwest         = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json", "gzip", "blocking"] }
+rfd             = { version = "0.14", optional = true }
 
 # macOS-only: drive `NSApp.setApplicationIconImage:` so the runtime can
 # update the Dock icon for unbundled binaries (winit's `set_window_icon`
