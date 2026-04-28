@@ -123,7 +123,8 @@ pub struct UnpackArgs {
 pub struct PlayerArgs {
     pub path: PathBuf,
     /// Logical window size in `WxH` form. Defaults to 800x600.
-    #[arg(long)]
+    /// Mutually exclusive with `--fullscreen`.
+    #[arg(long, conflicts_with = "fullscreen")]
     pub size: Option<String>,
     /// Override the window title. Defaults to the .op file's `app.name`
     /// when present, otherwise the path's file stem.
@@ -137,7 +138,7 @@ pub struct PlayerArgs {
     #[arg(long)]
     pub icon: Option<PathBuf>,
     /// Open the window borderless-fullscreen on the current monitor.
-    /// `--size` is ignored when this is set.
+    /// Mutually exclusive with `--size`.
     #[arg(long)]
     pub fullscreen: bool,
 }
@@ -146,7 +147,8 @@ pub struct PlayerArgs {
 #[derive(Parser, Debug)]
 pub struct DevArgs {
     pub path: PathBuf,
-    #[arg(long)]
+    /// Mutually exclusive with `--fullscreen`.
+    #[arg(long, conflicts_with = "fullscreen")]
     pub size: Option<String>,
     #[arg(long)]
     pub title: Option<String>,
@@ -155,7 +157,7 @@ pub struct DevArgs {
     #[arg(long)]
     pub icon: Option<PathBuf>,
     /// Open the window borderless-fullscreen on the current monitor.
-    /// `--size` is ignored when this is set.
+    /// Mutually exclusive with `--size`.
     #[arg(long)]
     pub fullscreen: bool,
     /// Open a stdio MCP server on this process's stdin/stdout while

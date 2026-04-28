@@ -71,6 +71,36 @@ fn check_malformed_exits_two() {
 }
 
 #[test]
+fn player_size_and_fullscreen_are_mutually_exclusive() {
+    // No window is opened — clap's argument parser rejects the
+    // combination during arg validation, before player.rs ever runs.
+    // The test pins the `conflicts_with` contract so a future arg-
+    // refactor that drops it triggers here, not in a user's terminal.
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "player",
+            "--size",
+            "640x480",
+            "--fullscreen",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "expected clap to reject --size + --fullscreen combo"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("cannot be used with"),
+        "expected clap conflict message, got stderr={stderr:?}"
+    );
+}
+
+#[test]
 fn check_quiet_silences_success_line_only() {
     let dir = TempDir::new().unwrap();
     let clean = write_tmp(&dir, "clean.op", CLEAN_OP);

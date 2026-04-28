@@ -251,6 +251,21 @@ mod tests {
     }
 
     #[test]
+    fn fullscreen_builder_toggles_config_field() {
+        // Don't open a window in unit tests — just exercise the
+        // builder so a future regression that breaks the config
+        // wiring (renamed field, missing builder, etc.) trips here
+        // before it ships to a real `jian player --fullscreen`.
+        let rt = Runtime::new();
+        let host = DesktopHost::new(rt, "FS").fullscreen(true);
+        assert!(host.config.fullscreen);
+
+        let rt = Runtime::new();
+        let off = DesktopHost::new(rt, "FS").fullscreen(false);
+        assert!(!off.config.fullscreen);
+    }
+
+    #[test]
     fn with_default_menu_attaches_standard_skeleton() {
         let rt = Runtime::new();
         let host = DesktopHost::new(rt, "MenuApp").with_default_menu();
