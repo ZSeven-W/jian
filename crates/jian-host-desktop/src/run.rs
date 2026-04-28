@@ -42,6 +42,36 @@ fn logical_size_f32(phys: winit::dpi::PhysicalSize<u32>, scale: f64) -> (f32, f3
     (w, h)
 }
 
+/// Map `HostConfig::fullscreen` to a `winit::window::Fullscreen` value.
+/// Borderless-on-current-monitor when on, `None` when off. Extracted so
+/// the mapping has a unit test without needing a real display.
+fn fullscreen_for_config(on: bool) -> Option<winit::window::Fullscreen> {
+    if on {
+        Some(winit::window::Fullscreen::Borderless(None))
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod fullscreen_tests {
+    use super::fullscreen_for_config;
+    use winit::window::Fullscreen;
+
+    #[test]
+    fn off_returns_none() {
+        assert!(fullscreen_for_config(false).is_none());
+    }
+
+    #[test]
+    fn on_returns_borderless_current_monitor() {
+        match fullscreen_for_config(true) {
+            Some(Fullscreen::Borderless(None)) => {}
+            other => panic!("expected Borderless(None), got {other:?}"),
+        }
+    }
+}
+
 impl DesktopHost {
     /// Open a window and run the event loop until the user closes it.
     /// Blocks the calling thread; returns `Ok(())` on clean shutdown.
@@ -237,8 +267,8 @@ impl ApplicationHandler for RunApp {
         // display resolution; borderless skips both and works the same
         // way across macOS / Windows / Linux. The user can still
         // multitask via OS shortcuts (Cmd+Tab / Alt+Tab / etc.).
-        if self.host.config.fullscreen {
-            attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+        if let Some(fs) = fullscreen_for_config(self.host.config.fullscreen) {
+            attrs = attrs.with_fullscreen(Some(fs));
         }
         let window = event_loop
             .create_window(attrs)
