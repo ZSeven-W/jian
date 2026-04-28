@@ -84,6 +84,15 @@ pub struct DesktopHost {
     /// replaces the previous hook (calling order is the embedder's
     /// problem to coordinate).
     pub shutdown_hook: Option<ShutdownHook>,
+    /// Optional auto-updater backend. Hosts construct this either
+    /// directly (e.g. `Box::new(GitHubReleasesUpdater::new(...))`)
+    /// or via [`crate::updater::build_updater_from_schema`] which
+    /// reads `app.updater` from a parsed `.op` file. The run loop
+    /// itself does not invoke the updater — `app.check_updates`
+    /// menu items dispatched through the [`MenuHandler`] do that
+    /// (Plan 8 Task 9). `None` means "no updater wired" and any
+    /// menu item that tries to call the updater no-ops.
+    pub updater: Option<Box<dyn crate::updater::Updater>>,
     /// Main-thread end of an MCP `Bridge`. The run loop drains it
     /// once per `about_to_wait` and dispatches each request through
     /// the `mcp_surface` / `RuntimeDispatcher` chain.
@@ -176,6 +185,7 @@ impl DesktopHost {
             reload_rx: None,
             menu_handler: None,
             shutdown_hook: None,
+            updater: None,
             #[cfg(feature = "mcp")]
             mcp_drain: None,
             #[cfg(feature = "mcp")]
@@ -195,6 +205,7 @@ impl DesktopHost {
             reload_rx: None,
             menu_handler: None,
             shutdown_hook: None,
+            updater: None,
             #[cfg(feature = "mcp")]
             mcp_drain: None,
             #[cfg(feature = "mcp")]
@@ -230,6 +241,22 @@ impl DesktopHost {
     /// `FnOnce` — the run loop only exits once per invocation.
     pub fn with_shutdown_hook(mut self, hook: ShutdownHook) -> Self {
         self.shutdown_hook = Some(hook);
+        self
+    }
+
+    /// Install an auto-updater backend (`GitHubReleasesUpdater`,
+    /// `NullUpdater`, or any third-party `Updater` impl). Same
+    /// "wire it once" pattern as [`Self::with_icon`] /
+    /// [`Self::with_menu_handler`]. The run loop never invokes the
+    /// updater on its own — host authors trigger checks through
+    /// their [`MenuHandler`] (e.g. on `app.check_updates`).
+    ///
+    /// Most hosts don't construct an updater directly: they parse
+    /// the running document's `app.updater` field and call
+    /// [`crate::updater::build_updater_from_schema`] which produces
+    /// the right `Box<dyn Updater>` based on the schema descriptor.
+    pub fn with_updater(mut self, updater: Box<dyn crate::updater::Updater>) -> Self {
+        self.updater = Some(updater);
         self
     }
 

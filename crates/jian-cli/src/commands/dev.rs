@@ -148,6 +148,7 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
     let mut host = DesktopHost::with_config(rt, cfg)
         .with_default_menu()
         .with_reloader(rx);
+    host = install_updater_from_doc(host);
 
     // `--mcp`: spawn an rmcp stdio server on a worker thread, hand
     // its `Drain` to the host so `about_to_wait` services bridge
@@ -194,6 +195,27 @@ fn reparse(path: &std::path::Path) -> Result<jian_ops_schema::document::PenDocum
     let src = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     let parsed = load_str(&src).with_context(|| format!("parse {}", path.display()))?;
     Ok(parsed.value)
+}
+
+/// Same semantics as `player::install_updater_from_doc` — kept as a
+/// peer rather than re-exported so the two CLI commands can diverge
+/// (e.g. `jian dev` may someday point at a staging feed instead).
+fn install_updater_from_doc(host: DesktopHost) -> DesktopHost {
+    let cfg = host
+        .runtime
+        .document
+        .as_ref()
+        .and_then(|doc| doc.schema.app.as_ref())
+        .and_then(|app| app.updater.as_ref());
+    let Some(cfg) = cfg else {
+        return host;
+    };
+    let updater = jian_host_desktop::updater::build_updater_from_schema(
+        cfg,
+        env!("CARGO_PKG_VERSION"),
+        "jian",
+    );
+    host.with_updater(updater)
 }
 
 // --- shared helpers (mirror player.rs) -------------------------------

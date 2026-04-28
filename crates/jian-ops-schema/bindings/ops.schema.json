@@ -4989,6 +4989,17 @@
           "items": {
             "type": "string"
           }
+        },
+        "updater": {
+          "description": "Auto-update backend descriptor — same idea as `app.icon`: the schema declares the source of truth (which release feed to consult), the host crate translates it into a concrete `Updater` impl. `None` (the default) means the host's own fallback wins (typically `NullUpdater`). Only consulted by hosts that compile with their respective updater feature (`jian-host-desktop/updater`).\n\nTS-side, the type widens to a generic discriminated record so third-party hosts can declare their own kinds without forking `ops.ts`; the Rust side is the typed `UpdaterConfig` struct below.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UpdaterConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -5045,6 +5056,20 @@
           "minimum": 0.0
         }
       }
+    },
+    "UpdaterConfig": {
+      "description": "Auto-updater feed descriptor — the schema declares **what** to update from; the host crate translates the descriptor into a concrete `Updater` trait impl. The shape is intentionally minimal so this schema doesn't bake in any specific source (GitHub, Sparkle appcast, AppImageUpdate, GitLab Releases, custom HTTPS feed, in-house mirror, …): only `kind` is well-known; everything else goes through `params`.\n\nHosts dispatch on `kind` and read backend-specific fields out of `params`. Conventional kinds shipped by `jian-host-desktop`'s `updater` feature:\n\n- `\"github_releases\"` — pulls from a public GitHub repo. Reads `params.owner`, `params.repo`, optional `params.target` (falls back to host's detected triple), and optional `params.binName` (falls back to host's binary name). - `\"disabled\"` — explicit opt-out, even when the host crate is built with the updater feature on. Useful for AppStore / MAS builds whose channel forbids self-update.\n\nThird-party hosts may add their own kinds (`\"sparkle\"`, `\"my_company_feed\"`, …) without forking this schema; unknown kinds fall back to `NullUpdater` at the host with a load-time warning.",
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Backend selector. See type-level docs for conventional kinds.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
     },
     "RoutesConfig": {
       "type": "object",

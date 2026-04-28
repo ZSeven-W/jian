@@ -24,7 +24,22 @@ splash: SplashConfig | null,
  * C18 ASP web handshake postMessage origin allowlist.
  * Only consulted by the web host; strict match; no wildcards.
  */
-aspAllowedOrigins: Array<string> | null, };
+aspAllowedOrigins: Array<string> | null, 
+/**
+ * Auto-update backend descriptor — same idea as `app.icon`:
+ * the schema declares the source of truth (which release feed
+ * to consult), the host crate translates it into a concrete
+ * `Updater` impl. `None` (the default) means the host's own
+ * fallback wins (typically `NullUpdater`). Only consulted by
+ * hosts that compile with their respective updater feature
+ * (`jian-host-desktop/updater`).
+ *
+ * TS-side, the type widens to a generic discriminated record so
+ * third-party hosts can declare their own kinds without forking
+ * `ops.ts`; the Rust side is the typed `UpdaterConfig` struct
+ * below.
+ */
+updater: { kind: string; [key: string]: unknown } | null, };
 
 export type AppLifecycleHooks = { onLaunch: Array<Action> | null, onResume: Array<Action> | null, onBackground: Array<Action> | null, onTerminate: Array<Action> | null, };
 
