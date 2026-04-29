@@ -112,6 +112,9 @@ objc2-foundation = { version = "0.2", features = ["NSData", "NSString"] }
 [dev-dependencies.futures]
 version = "0.3"
 
+[dev-dependencies.tempfile]
+version = "3"
+
 [[bin]]
 name = "jian-player"
 path = "src/bin/jian-player.rs"

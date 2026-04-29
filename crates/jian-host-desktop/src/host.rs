@@ -260,6 +260,52 @@ impl DesktopHost {
         self
     }
 
+    /// File-open entry-point for OS-level launchers (Plan 8 Task 8):
+    ///
+    /// - macOS `NSApplicationDelegate::application(_:openFiles:)` /
+    ///   `application(_:openURLs:)`
+    /// - Windows `WM_COPYDATA` relay from a primary process to an
+    ///   already-running instance
+    /// - Linux `.desktop`'s `Exec=jian player %F` (a fresh process —
+    ///   covered by the CLI's positional path; in-process open is
+    ///   only relevant once `single-instance` ships)
+    ///
+    /// Reads the file from disk, parses it as a [`PenDocument`], and
+    /// rebuilds the runtime against the same logical viewport size
+    /// the redraw path is using. Existing `$state.*` / `$vars.*`
+    /// values survive the reload (`replace_document` calls
+    /// `loader::build_with(SeedMode::PreserveExisting)`), matching
+    /// hot-reload semantics from `with_reloader`.
+    ///
+    /// Returns the path back on success so callers can chain a UI
+    /// update (window title, recent-files list). Errors are
+    /// stringified — the OS receiver typically logs them and may
+    /// surface a `services::feedback` toast.
+    pub fn open_file(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<std::path::PathBuf, String> {
+        let path = path.as_ref();
+        let src = std::fs::read_to_string(path)
+            .map_err(|e| format!("read {}: {}", path.display(), e))?;
+        let schema = jian_ops_schema::load_str(&src)
+            .map_err(|e| format!("parse {}: {}", path.display(), e))?
+            .value;
+        self.runtime
+            .replace_document(schema)
+            .map_err(|e| format!("apply {}: {:?}", path.display(), e))?;
+        // Keep the layout / spatial index coherent against the
+        // viewport the redraw path already knows about. Run-time
+        // open via a Reloader bypasses build_layout because
+        // `apply_reload` calls it; this one-shot path mirrors that.
+        let viewport = self.runtime.viewport.size;
+        self.runtime
+            .build_layout((viewport.width, viewport.height))
+            .map_err(|e| format!("layout: {:?}", e))?;
+        self.runtime.rebuild_spatial();
+        Ok(path.to_path_buf())
+    }
+
     /// Attach a `Receiver` that delivers fresh `.op` schemas. Activates
     /// dev-mode polling — the run loop wakes every ~200ms to drain
     /// pending reloads instead of sleeping on `ControlFlow::Wait`.
@@ -398,6 +444,75 @@ mod tests {
         assert_eq!(host.title(), "Custom");
         assert_eq!(host.initial_size().width, 320.0);
         assert_eq!(host.initial_size().height, 200.0);
+    }
+
+    #[test]
+    fn open_file_swaps_document_and_preserves_state() {
+        // OS-level deeplink receivers route file double-clicks here,
+        // so the contract is "load the new doc but keep
+        // `$state.*` / `$vars.*` values". This test pins the
+        // preserve-state contract; without it a Cmd-O drop would
+        // silently reset every counter.
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let path_a = dir.path().join("a.op");
+        let path_b = dir.path().join("b.op");
+        let body_a = r##"{
+          "formatVersion":"1.0","version":"1.0.0","id":"a",
+          "app":{"name":"a","version":"1","id":"a"},
+          "state":{"count":{"type":"int","default":0}},
+          "children":[]
+        }"##;
+        let body_b = r##"{
+          "formatVersion":"1.0","version":"1.0.0","id":"b",
+          "app":{"name":"b","version":"1","id":"b"},
+          "state":{"count":{"type":"int","default":0}},
+          "children":[]
+        }"##;
+        std::fs::File::create(&path_a)
+            .unwrap()
+            .write_all(body_a.as_bytes())
+            .unwrap();
+        std::fs::File::create(&path_b)
+            .unwrap()
+            .write_all(body_b.as_bytes())
+            .unwrap();
+
+        let schema_a = jian_ops_schema::load_str(body_a).unwrap().value;
+        let mut runtime = Runtime::new_from_document(schema_a).unwrap();
+        runtime.build_layout((640.0, 480.0)).unwrap();
+        runtime.viewport.size = jian_core::geometry::size(640.0, 480.0);
+        runtime.state.app_set("count", serde_json::json!(7));
+
+        let mut host = DesktopHost::new(runtime, "Test");
+        let opened = host.open_file(&path_b).expect("open_file b");
+        assert_eq!(opened, path_b);
+        // Document body changed (new id "b").
+        let new_id = host
+            .runtime
+            .document
+            .as_ref()
+            .and_then(|d| d.schema.id.as_ref())
+            .map(|s| s.as_str());
+        assert_eq!(new_id, Some("b"));
+        // But the count signal survives — `replace_document` uses
+        // `SeedMode::PreserveExisting` for the same key, so 7 stays.
+        let count = host
+            .runtime
+            .state
+            .app_get("count")
+            .and_then(|v| v.as_i64());
+        assert_eq!(count, Some(7));
+    }
+
+    #[test]
+    fn open_file_returns_error_for_missing_path() {
+        let runtime = Runtime::new();
+        let mut host = DesktopHost::new(runtime, "Test");
+        let err = host
+            .open_file("/no/such/file.op")
+            .expect_err("missing path must error");
+        assert!(err.contains("read") || err.contains("No such file"));
     }
 
     #[test]
