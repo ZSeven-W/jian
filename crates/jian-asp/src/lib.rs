@@ -34,14 +34,17 @@
 #![cfg_attr(not(feature = "dev-asp"), allow(dead_code))]
 
 // Plan 18 Task 1 — protocol types (Request / Response / Verb tagged
-// enum / OutcomePayload). Each sub-module is `#[cfg(feature =
-// "dev-asp")]` gated so the no-feature build is empty.
+// enum / OutcomePayload). The whole `pub mod protocol;` declaration
+// is feature-gated so a `cargo build --no-default-features` of
+// jian-asp is byte-empty (no serde dep, no module tree).
+#[cfg(feature = "dev-asp")]
 pub mod protocol;
 
-// Plan 18 Task 2 — Selector types (Phase 1 types-only). The
-// runtime-side `resolve(&Doc, &Spatial) -> Vec<NodeKey>` is a
-// follow-up (`selector/resolve.rs`) once the runtime borrows are
-// settled.
+// Plan 18 Task 2 — Selector types (Phase 1 types-only). Same gating
+// as `protocol`. The runtime-side `resolve(&Doc, &Spatial) ->
+// Vec<NodeKey>` is a follow-up (`selector/resolve.rs`) once the
+// runtime borrows are settled.
+#[cfg(feature = "dev-asp")]
 pub mod selector;
 
 #[cfg(feature = "dev-asp")]

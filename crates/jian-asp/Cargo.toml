@@ -22,14 +22,18 @@ readme       = "README.md"
 # `jian-host-* → jian-asp` is absent in production.
 [features]
 default = ["dev-asp"]
-dev-asp = []
+# `dev-asp` activates the Phase 1+ code paths AND pulls the serde
+# dep tree. `--no-default-features` truly produces an empty crate —
+# no serde, no modules, just the gating attribute pattern.
+dev-asp = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
 # Phase 1 of Plan 18: protocol + selector type definitions. Pure
 # serde structs / enums — no runtime integration yet (the
 # `resolve(...)` body in `selector/resolve.rs` and the verb dispatch
-# in `verb_impls/` are Task 2-3 follow-ups). All type surfaces below
-# are `#[cfg(feature = "dev-asp")]` gated, so a `cargo build
-# --no-default-features` builds an empty crate.
-serde      = { workspace = true }
-serde_json = { workspace = true }
+# in `verb_impls/` are Task 2-3 follow-ups). Both deps are
+# `optional = true`; the `dev-asp` feature pulls them in via
+# `dep:serde` / `dep:serde_json`. `--no-default-features` keeps the
+# crate empty + serde-free.
+serde      = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }

@@ -10,8 +10,12 @@ description  = "Skia-safe RenderBackend implementation for jian-core"
 
 [features]
 # Raster-only default so `cargo test` doesn't need a GPU context or
-# platform-specific libs. Plan 8 host adapters opt into a GPU backend
-# per-platform.
+# platform-specific libs. Hosts opt into a GPU backend per-platform
+# via `--features metal` (macOS), `--features d3d` (Windows), or
+# `--features gl` (Linux). The `surface/{metal,d3d,gl}.rs` modules
+# additionally `target_os` -gate themselves so building with
+# `--features metal` on Linux compiles cleanly without dragging the
+# Metal codepath in.
 default = []
 metal   = ["skia-safe/metal"]
 d3d     = ["skia-safe/d3d"]
