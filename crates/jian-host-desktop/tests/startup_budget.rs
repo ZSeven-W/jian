@@ -70,26 +70,31 @@ fn startup_driver_overhead_under_framework_ceiling() {
 }
 
 #[test]
-fn startup_driver_critical_path_is_subset_of_total() {
-    // The critical-path metric must not exceed total wall-clock —
-    // every phase on the critical path runs serially, every off-
-    // critical phase runs in parallel with another. A regression
-    // that mis-classifies a phase would make critical_path > total
-    // and trip this guard.
+fn startup_driver_per_phase_end_time_within_total() {
+    // The actual API contract: `critical_path_ms` is a *serial sum*
+    // of `on_critical` phase durations (not a longest-path metric),
+    // so it's not bounded by `total_wall_clock_ms` when multiple
+    // critical phases run in parallel. The genuine invariant the
+    // scheduler must maintain is that **every individual phase
+    // finished no later than the wall-clock total**. A regression
+    // that drifts a phase's `ended_at_ms` past the rolled-up total
+    // (e.g. a wakeup-after-shutdown bug) trips this.
     let mut driver = StartupDriver::new();
     for phase in StartupPhase::ALL {
         driver.register(*phase, || async { PhaseResult::Ok(()) });
     }
     let report = futures::executor::block_on(driver.run(StartupConfig::default()))
         .expect("driver.run returns Ok");
-    let critical = report.critical_path_ms();
     let total = report.total_wall_clock_ms();
-    assert!(
-        critical <= total + 0.001,
-        "critical_path ({:.4}) > total wall-clock ({:.4})",
-        critical,
-        total,
-    );
+    for timing in &report.phases {
+        assert!(
+            timing.ended_at_ms() <= total + 0.001,
+            "phase {:?} ended_at_ms {:.4} > total wall-clock {:.4}",
+            timing.phase,
+            timing.ended_at_ms(),
+            total,
+        );
+    }
 }
 
 #[test]
