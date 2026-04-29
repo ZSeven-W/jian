@@ -3,23 +3,23 @@ Type=Application
 Name=Jian
 GenericName=Vector Design Runtime
 Comment=Run .op design files standalone
-# `%U` (uppercase) accepts a list of URIs — covers both
-# `file:///path/to/foo.op` (file double-click via the
-# `application/x-jian-op` MIME) and `jian://app-id/route?...` deep
-# links via `x-scheme-handler/jian`. `%F` would route only file
-# paths and would silently break URL-scheme launches.
+# `%U` (uppercase) accepts a list of URIs so the file manager can
+# pass a `file:///path/to/foo.op` URI for a double-clicked .op
+# file. `jian player` decodes the `file://` scheme via
+# `resolve_path_arg` and reads the underlying file.
+#
+# `jian://app-id/...` URL-scheme handling is intentionally NOT
+# advertised in the MimeType list below: the runtime-side
+# abstraction (`jian_host_desktop::deeplink::JianUrl::parse` +
+# `DeepLinkHandler`) ships, but `jian player` itself rejects bare
+# `jian://` URIs because deep links target a *running* peer, not a
+# fresh document load. Once single-instance + IPC ships, restore
+# `x-scheme-handler/jian` here and have the CLI forward to the
+# running peer instead of opening a new window.
 Exec=jian player %U
 Icon=jian
 Terminal=false
 Categories=Graphics;2DGraphics;Development;
-MimeType=application/x-jian-op;x-scheme-handler/jian;
-# `MimeType` powers two pieces of OS integration that share this
-# template (Plan 8 Task 8 deeplink + Task 10 packaging):
-#   - `application/x-jian-op` registers `jian player <path>` as the
-#     default opener for .op files (file double-click).
-#   - `x-scheme-handler/jian` registers `jian://<app-id>/<path>?...`
-#     URL handling — the host's `DeepLinkHandler` parses the URL via
-#     `jian_host_desktop::deeplink::JianUrl::parse` and routes it
-#     through the runtime's `HistoryRouter`.
+MimeType=application/x-jian-op;
 StartupWMClass=jian
 Keywords=design;vector;openpencil;
