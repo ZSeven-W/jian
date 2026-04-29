@@ -43,17 +43,19 @@
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
-    <key>CFBundleURLTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleURLName</key>
-            <string>Jian deep link</string>
-            <key>CFBundleURLSchemes</key>
-            <array>
-                <string>jian</string>
-            </array>
-        </dict>
-    </array>
+    <!--
+      `CFBundleURLTypes` for `jian://` is intentionally NOT
+      registered: the runtime-side `JianUrl::parse` +
+      `DeepLinkHandler` abstractions ship, but the
+      NSApplicationDelegate Apple-Event receiver that forwards
+      URLs into the running app does not. Registering the scheme
+      without dispatching it would route deep links into a black
+      hole. Re-add this block once the receiver lands in
+      `crates/jian-host-desktop/src/app_delegate.rs` (or wherever
+      it ships) — at that point single-instance / IPC will also
+      need to be in place so a fresh launch can forward to a
+      running peer.
+    -->
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -64,12 +66,19 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>dev.jian.op</string>
-                <string>dev.jian.op-pack</string>
             </array>
             <key>LSHandlerRank</key>
             <string>Owner</string>
         </dict>
     </array>
+    <!--
+      `dev.jian.op-pack` is intentionally not exported either:
+      `DesktopHost::open_file` reads its argument as a raw `.op`
+      JSON document and would fail on a ZIP pack. `jian unpack` is
+      a separate command for now; restore the type declaration when
+      `open_file` learns to detect the `op.pack` extension and
+      unpack transparently.
+    -->
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
@@ -83,19 +92,6 @@
             <dict>
                 <key>public.filename-extension</key>
                 <array><string>op</string></array>
-            </dict>
-        </dict>
-        <dict>
-            <key>UTTypeIdentifier</key>
-            <string>dev.jian.op-pack</string>
-            <key>UTTypeDescription</key>
-            <string>Jian packed archive</string>
-            <key>UTTypeConformsTo</key>
-            <array><string>public.zip-archive</string></array>
-            <key>UTTypeTagSpecification</key>
-            <dict>
-                <key>public.filename-extension</key>
-                <array><string>op.pack</string></array>
             </dict>
         </dict>
     </array>

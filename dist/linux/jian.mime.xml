@@ -6,11 +6,17 @@
   (or `/usr/share/mime/packages/` for system-wide installs) and
   is picked up by `update-mime-database`.
 -->
+<!--
+  `*.op.pack` is intentionally NOT in the glob list: the
+  `DesktopHost::open_file` entry-point currently reads its
+  argument as a raw `.op` JSON and would fail on a ZIP pack.
+  Restore the second `<glob>` line once `open_file` learns to
+  detect `.op.pack` and route through `jian unpack` first.
+-->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-jian-op">
     <comment>Jian / OpenPencil design file</comment>
     <glob pattern="*.op"/>
-    <glob pattern="*.op.pack"/>
     <icon name="jian"/>
   </mime-type>
 </mime-info>
