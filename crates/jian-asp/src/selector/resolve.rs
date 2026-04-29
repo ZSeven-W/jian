@@ -264,28 +264,60 @@ fn node_visible_text(node: &PenNode) -> Option<String> {
 
 /// True iff `node`'s ancestor chain contains any key in `targets`.
 /// Walks `parent` links until reaching a root.
+///
+/// Cycle-bounded: `NodeTree`'s `parent` / `children` fields are
+/// `pub`, so a buggy mutation could install a parent cycle that
+/// would otherwise loop here forever. Cap the walk at the tree's
+/// node count — a legitimate ancestor chain is at most that long.
 fn has_ancestor_in(tree: &NodeTree, node: NodeKey, targets: &[NodeKey]) -> bool {
+    let max_depth = tree.nodes.len();
     let mut cursor = tree.nodes.get(node).and_then(|d| d.parent);
+    let mut steps = 0usize;
     while let Some(p) = cursor {
+        if steps > max_depth {
+            // Cycle detected — refuse rather than hang. The caller
+            // gets `false`, which is the safe answer for the
+            // `child_of` filter (don't claim a cyclic node is a
+            // descendant of anything).
+            return false;
+        }
         if targets.contains(&p) {
             return true;
         }
         cursor = tree.nodes.get(p).and_then(|d| d.parent);
+        steps += 1;
     }
     false
 }
 
 /// True iff `node`'s subtree contains any key in `targets`.
+///
+/// Cycle-bounded the same way as `has_ancestor_in`: track visited
+/// keys so a `children` cycle doesn't recurse forever.
 fn has_descendant_in(tree: &NodeTree, node: NodeKey, targets: &[NodeKey]) -> bool {
+    let mut visited: Vec<NodeKey> = Vec::new();
+    has_descendant_in_inner(tree, node, targets, &mut visited)
+}
+
+fn has_descendant_in_inner(
+    tree: &NodeTree,
+    node: NodeKey,
+    targets: &[NodeKey],
+    visited: &mut Vec<NodeKey>,
+) -> bool {
     let data = match tree.nodes.get(node) {
         Some(d) => d,
         None => return false,
     };
     for &child in &data.children {
+        if visited.contains(&child) {
+            continue;
+        }
+        visited.push(child);
         if targets.contains(&child) {
             return true;
         }
-        if has_descendant_in(tree, child, targets) {
+        if has_descendant_in_inner(tree, child, targets, visited) {
             return true;
         }
     }
