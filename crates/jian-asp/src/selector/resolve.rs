@@ -82,9 +82,16 @@ impl Selector {
         }
 
         // Phase 1: collect every node whose per-node predicates match.
+        // The walk shares the same cycle-bound rationale as the
+        // relational helpers below: `NodeTree`'s `children` field is
+        // `pub`, so a buggy mutation could install a child cycle.
+        // `visited` keeps the recursion bounded to one visit per
+        // node; a normal acyclic tree pays one BTreeSet insert per
+        // node, which is cheap.
         let mut hits: Vec<NodeKey> = Vec::new();
+        let mut visited: Vec<NodeKey> = Vec::new();
         for &root in &tree.roots {
-            walk_collect(tree, root, self, &mut hits)?;
+            walk_collect(tree, root, self, &mut hits, &mut visited)?;
         }
 
         // Phase 2: combinators (`all_of` / `any_of` / `not`) operate
@@ -148,12 +155,20 @@ impl Selector {
 /// whose per-node predicates match `sel`. The combinators in `sel`
 /// are evaluated separately by the caller — this helper handles
 /// only the leaf predicates.
+///
+/// `visited` skips already-seen keys so a child cycle can't recurse
+/// forever or push the same node into `out` twice.
 fn walk_collect(
     tree: &NodeTree,
     node: NodeKey,
     sel: &Selector,
     out: &mut Vec<NodeKey>,
+    visited: &mut Vec<NodeKey>,
 ) -> Result<(), ResolveError> {
+    if visited.contains(&node) {
+        return Ok(());
+    }
+    visited.push(node);
     let data = match tree.nodes.get(node) {
         Some(d) => d,
         None => return Ok(()),
@@ -162,7 +177,7 @@ fn walk_collect(
         out.push(node);
     }
     for &child in &data.children {
-        walk_collect(tree, child, sel, out)?;
+        walk_collect(tree, child, sel, out, visited)?;
     }
     Ok(())
 }
