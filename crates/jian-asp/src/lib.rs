@@ -5,12 +5,14 @@
 //!
 //! # Status
 //!
-//! This is the **Phase 0 skeleton** — an empty crate that exists solely to
-//! own the `dev-asp` feature gate. Plan 18 Task 0 explicitly designates
-//! this crate as the single owner of dev/prod isolation; subsequent tasks
-//! (Task 1 protocol, Task 2 selectors, Task 3 verbs, …) fill in the
-//! `protocol` / `selector` / `verb_impls` / `transport` / `server` modules
-//! behind `#[cfg(feature = "dev-asp")]`.
+//! Phase 1 (Plan 18 Tasks 1+2) ships the **type surface**: NDJSON
+//! `Request` / `Response` envelope, the tagged `Verb` enum, the
+//! `OutcomePayload` semantic-result shape, and the structured-JSON
+//! `Selector` data type. Real runtime integration (transport,
+//! session, verb dispatch, selector resolver) lands in Plan 18
+//! Tasks 3-7 against `&mut Runtime`. All types live behind
+//! `#[cfg(feature = "dev-asp")]` so a default-feature build of a
+//! consumer crate compiles to the empty Phase 0 skeleton.
 //!
 //! Production hosts (`jian-host-*`) link this crate as an **optional**
 //! dependency that activates only when their own `dev-asp` feature is
@@ -31,40 +33,38 @@
 
 #![cfg_attr(not(feature = "dev-asp"), allow(dead_code))]
 
-#[cfg(feature = "dev-asp")]
-pub mod protocol {
-    //! Phase 1 placeholder — Plan 18 Task 1 fills in `Request` / `Response`
-    //! types + the verb enum (`tap` / `type` / `find` / `wait_for` / etc.).
-}
+// Plan 18 Task 1 — protocol types (Request / Response / Verb tagged
+// enum / OutcomePayload). Each sub-module is `#[cfg(feature =
+// "dev-asp")]` gated so the no-feature build is empty.
+pub mod protocol;
 
-#[cfg(feature = "dev-asp")]
-pub mod selector {
-    //! Phase 1 placeholder — Plan 18 Task 2 fills in the structured-JSON
-    //! selector language (`id` / `alias` / `role` / `text_contains` /
-    //! `child_of` / `all_of` / etc.) and `resolve(&Doc, &Spatial) -> Vec<NodeKey>`.
-}
+// Plan 18 Task 2 — Selector types (Phase 1 types-only). The
+// runtime-side `resolve(&Doc, &Spatial) -> Vec<NodeKey>` is a
+// follow-up (`selector/resolve.rs`) once the runtime borrows are
+// settled.
+pub mod selector;
 
 #[cfg(feature = "dev-asp")]
 pub mod verb_impls {
-    //! Phase 1 placeholder — Plan 18 Task 3+4 fill in the verb dispatch
-    //! table and the individual handler bodies.
+    //! Phase 2 placeholder — Plan 18 Tasks 3+4 fill in the verb
+    //! dispatch table and the individual handler bodies.
 }
 
 #[cfg(feature = "dev-asp")]
 pub mod transport {
-    //! Phase 1 placeholder — Plan 18 Task 5 fills in the
+    //! Phase 2 placeholder — Plan 18 Task 5 fills in the
     //! Unix-socket / Named-Pipe / WebSocket / stdio transports.
 }
 
 #[cfg(feature = "dev-asp")]
 pub mod session {
-    //! Phase 1 placeholder — Plan 18 Task 6 fills in token bootstrap +
+    //! Phase 2 placeholder — Plan 18 Task 6 fills in token bootstrap +
     //! per-session permission tier (`Observe` / `Act` / `Full`).
 }
 
 #[cfg(feature = "dev-asp")]
 pub mod server {
-    //! Phase 1 placeholder — Plan 18 Task 7 fills in the main loop:
+    //! Phase 2 placeholder — Plan 18 Task 7 fills in the main loop:
     //! transport accept → handshake → verb dispatch → audit ring buffer.
 }
 

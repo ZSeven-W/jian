@@ -25,6 +25,11 @@ default = ["dev-asp"]
 dev-asp = []
 
 [dependencies]
-# Phase 1 of Plan 18 fills these in. Phase 0 (this commit) is the
-# feature-gating skeleton — empty deps keep `cargo build` cheap and
-# the workspace dep graph clean while the crate is a placeholder.
+# Phase 1 of Plan 18: protocol + selector type definitions. Pure
+# serde structs / enums — no runtime integration yet (the
+# `resolve(...)` body in `selector/resolve.rs` and the verb dispatch
+# in `verb_impls/` are Task 2-3 follow-ups). All type surfaces below
+# are `#[cfg(feature = "dev-asp")]` gated, so a `cargo build
+# --no-default-features` builds an empty crate.
+serde      = { workspace = true }
+serde_json = { workspace = true }
