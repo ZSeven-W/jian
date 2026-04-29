@@ -7,7 +7,7 @@ that a release script substitutes with real values before publishing.
 
 | Path | Channel | Substitutions |
 |------|---------|---------------|
-| `homebrew/jian.rb` | Homebrew tap (`zseven-w/tap`) | `@@VERSION@@`, `@@SHA256_MAC_ARM@@`, `@@SHA256_MAC_X86@@`, `@@SHA256_LINUX_X86@@`, `@@SHA256_LINUX_ARM@@` |
+| `homebrew/jian.rb` | Homebrew tap (`zseven-w/tap`) | `@@VERSION@@`, `@@SHA256_MAC_ARM@@`, `@@SHA256_LINUX_X86@@`, `@@SHA256_LINUX_ARM@@` (no Intel macOS slot — see formula header) |
 | `winget/manifests/jian.installer.yaml` | winget-pkgs (`ZSevenW.Jian`) | `@@VERSION@@`, `@@SHA256_WIN_X86@@` |
 | `winget/manifests/jian.locale.en-US.yaml` | winget-pkgs | `@@VERSION@@` |
 | `winget/manifests/jian.yaml` | winget-pkgs | `@@VERSION@@` |

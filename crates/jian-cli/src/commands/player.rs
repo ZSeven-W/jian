@@ -14,13 +14,25 @@ use jian_host_desktop::host::HostConfig;
 use jian_host_desktop::DesktopHost;
 use jian_ops_schema::load_str;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 pub fn run(args: PlayerArgs) -> Result<ExitCode> {
-    let src =
-        fs::read_to_string(&args.path).with_context(|| format!("read {}", args.path.display()))?;
+    // The Linux `.desktop` registers `Exec=jian player %U`, which
+    // means the file manager hands us URI strings (`file:///path/x.op`)
+    // for double-clicked files alongside `jian://...` deep links for
+    // URL-scheme launches. clap stores the raw arg as a `PathBuf`
+    // before we ever see it, so we resolve it here:
+    //
+    // - `file://...` → strip the scheme + percent-decode → real path.
+    // - `jian://...` → unsupported by `player` directly (deep links
+    //   need the running runtime's URL handler); error early.
+    // - anything else → treat as a filesystem path verbatim.
+    let resolved_path = resolve_path_arg(&args.path)?;
+    let src = fs::read_to_string(&resolved_path)
+        .with_context(|| format!("read {}", resolved_path.display()))?;
     let schema = load_str(&src)
-        .with_context(|| format!("parse {}", args.path.display()))?
+        .with_context(|| format!("parse {}", resolved_path.display()))?
         .value;
 
     // Title priority: --title > schema.app.name > file stem > "Jian".
@@ -29,7 +41,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         .clone()
         .or_else(|| schema.app.as_ref().map(|a| a.name.clone()))
         .or_else(|| {
-            args.path
+            resolved_path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .map(str::to_owned)
@@ -46,10 +58,10 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // Resolve the icon BEFORE moving `schema` into the Runtime —
     // resolve_app_icon needs to read schema.app.icon, and the
     // Runtime constructor takes ownership.
-    let icon = crate::icon_loader::resolve_app_icon(&args.path, args.icon.as_deref(), &schema);
+    let icon = crate::icon_loader::resolve_app_icon(&resolved_path, args.icon.as_deref(), &schema);
 
     let mut rt = Runtime::new_from_document(schema)
-        .with_context(|| format!("build runtime from {}", args.path.display()))?;
+        .with_context(|| format!("build runtime from {}", resolved_path.display()))?;
     rt.build_layout((w, h)).with_context(|| "layout")?;
 
     // When auto-sizing, grow the window to cover any content that our
@@ -83,6 +95,89 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     let host = install_updater_from_doc(host);
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve a CLI argument that may be either a filesystem path or a
+/// `file://` / `jian://` URI (see `dist/linux/jian.desktop`'s
+/// `Exec=jian player %U`). Returns the on-disk path to read.
+///
+/// `file://` handling: strip the scheme, percent-decode the rest.
+/// We don't pull in `url::Url` for this tiny case — desktop file
+/// managers emit ASCII-only URIs for the common case (`file:///`
+/// + an absolute path), and we percent-decode the handful of bytes
+/// (`%20`, `%2F`, …) inline.
+///
+/// `jian://` is rejected with a clear error: deep links need to
+/// route through the running runtime's URL handler, not the CLI's
+/// fresh-document load path. Once `single-instance` ships, the CLI
+/// can forward `jian://...` to the running peer instead.
+fn resolve_path_arg(raw: &Path) -> Result<PathBuf> {
+    let s = match raw.to_str() {
+        Some(s) => s,
+        // Non-UTF8 path → no URI scheme could match → use verbatim.
+        None => return Ok(raw.to_path_buf()),
+    };
+    if let Some(rest) = s.strip_prefix("file://") {
+        let decoded = percent_decode(rest);
+        // POSIX `file:///abs/path` → `rest = "/abs/path"` after the
+        // prefix strip; on Windows `file:///C:/path` → `rest =
+        // "/C:/path"` and we strip the leading `/` so `PathBuf`
+        // sees `C:/path`. Linux paths already start with `/` so we
+        // leave that alone.
+        #[cfg(windows)]
+        let trimmed = decoded.strip_prefix('/').unwrap_or(&decoded).to_owned();
+        #[cfg(not(windows))]
+        let trimmed = decoded;
+        return Ok(PathBuf::from(trimmed));
+    }
+    if s.starts_with("jian://") {
+        return Err(anyhow!(
+            "`jian player` cannot open `{}` directly — `jian://` deep links must \
+             route through a running runtime instance",
+            s
+        ));
+    }
+    Ok(raw.to_path_buf())
+}
+
+/// Inline percent-decoder for the byte slice between `file://` and
+/// the path end. Handles `%XX` byte triples; passes everything else
+/// through unchanged. Stops at malformed escapes (treats `%X?` as
+/// literal). Sufficient for the typical desktop-file-manager output
+/// (`file:///path%20with%20spaces/foo.op`); a hand-crafted
+/// `file:///%E4%B8%AD%E6%96%87.op` (CJK) likewise round-trips
+/// because we operate on raw bytes.
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = hex_nybble(bytes[i + 1]);
+            let lo = hex_nybble(bytes[i + 2]);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    // Round-trip via lossy String — the decoded bytes may contain
+    // non-UTF8 sequences in pathological inputs, but `PathBuf`
+    // tolerates that on the platforms we actually target (POSIX is
+    // bytes; Windows already restricted us above).
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_nybble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Read the runtime document's `app.updater` schema field and install
@@ -206,5 +301,44 @@ mod tests {
         assert!(parse_size(Some("1024")).is_err());
         assert!(parse_size(Some("0x100")).is_err());
         assert!(parse_size(Some("abcxdef")).is_err());
+    }
+
+    #[test]
+    fn resolve_path_arg_passes_filesystem_paths_through() {
+        let p = resolve_path_arg(Path::new("/tmp/foo.op")).unwrap();
+        assert_eq!(p, PathBuf::from("/tmp/foo.op"));
+        let p = resolve_path_arg(Path::new("relative/bar.op")).unwrap();
+        assert_eq!(p, PathBuf::from("relative/bar.op"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_path_arg_decodes_file_uri_posix() {
+        let p = resolve_path_arg(Path::new("file:///tmp/foo.op")).unwrap();
+        assert_eq!(p, PathBuf::from("/tmp/foo.op"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_path_arg_decodes_percent_escapes() {
+        let p =
+            resolve_path_arg(Path::new("file:///tmp/with%20space/CJ%E4%B8%AD%E6%96%87.op"))
+                .unwrap();
+        assert_eq!(p, PathBuf::from("/tmp/with space/CJ中文.op"));
+    }
+
+    #[test]
+    fn resolve_path_arg_rejects_jian_scheme() {
+        let err = resolve_path_arg(Path::new("jian://app/path")).unwrap_err();
+        assert!(err.to_string().contains("jian://"));
+    }
+
+    #[test]
+    fn percent_decode_handles_malformed_escapes() {
+        // Truncated `%X` and `%X?` keep the original bytes rather
+        // than panicking — the OS may hand us malformed input.
+        assert_eq!(percent_decode("foo%2"), "foo%2");
+        assert_eq!(percent_decode("foo%2Z"), "foo%2Z");
+        assert_eq!(percent_decode("plain"), "plain");
     }
 }

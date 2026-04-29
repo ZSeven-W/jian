@@ -308,14 +308,29 @@ impl DesktopHost {
             .replace_document(schema)
             .map_err(|e| format!("apply {}: {:?}", path.display(), e))?;
         if let Err(e) = self.runtime.build_layout(viewport_pair) {
-            // Best-effort restore of the previous document. Swallow
-            // any secondary error so the original layout failure
-            // remains visible to the caller; if there was no prior
-            // document the host stays empty (same as a fresh start).
-            if let Some(prev) = prev_schema {
-                let _ = self.runtime.replace_document(prev);
-                let _ = self.runtime.build_layout(viewport_pair);
-                self.runtime.rebuild_spatial();
+            // Best-effort restore of the previous document. We do
+            // *not* try to undo `replace_document`'s state-graph
+            // seeding — `loader::build_with(SeedMode::PreserveExisting)`
+            // initialises any keys the new doc declares that the old
+            // didn't, and the runtime doesn't track which keys were
+            // newly seeded. Document-level rollback is the contract
+            // we offer; callers that need transactional state should
+            // serialise + restore via `services::storage` themselves.
+            //
+            // Swallow any secondary error so the original layout
+            // failure remains visible to the caller.
+            match prev_schema {
+                Some(prev) => {
+                    let _ = self.runtime.replace_document(prev);
+                    let _ = self.runtime.build_layout(viewport_pair);
+                    self.runtime.rebuild_spatial();
+                }
+                None => {
+                    // No prior document — clearing the failed swap
+                    // is more honest than leaving the half-loaded
+                    // doc installed with stale layout state.
+                    self.runtime.document = None;
+                }
             }
             return Err(format!("layout {}: {:?}", path.display(), e));
         }
