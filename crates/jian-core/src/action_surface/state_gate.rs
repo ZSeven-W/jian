@@ -53,8 +53,18 @@ impl<'a> RuntimeStateGate<'a> {
             // dropped the node, for instance).
             return false;
         };
+        // Cycle-bound the ancestor walk: legitimate chains are at
+        // most `tree.nodes.len()` long. A longer chain means a
+        // parent cycle (NodeData.parent is `pub`, so a buggy
+        // mutation could install one). Refuse the action rather
+        // than hang `execute_with_gate`.
+        let max_steps = self.document.tree.nodes.len();
         let mut current: Option<NodeKey> = Some(start);
+        let mut steps = 0usize;
         while let Some(key) = current {
+            if steps > max_steps {
+                return false;
+            }
             let Some(data) = self.document.tree.nodes.get(key) else {
                 return false;
             };
@@ -62,6 +72,7 @@ impl<'a> RuntimeStateGate<'a> {
                 return false;
             }
             current = data.parent;
+            steps += 1;
         }
         true
     }

@@ -177,18 +177,31 @@ impl LayoutEngine {
     /// Absolute scene-coord rect for `key`: taffy's `layout.location` is
     /// relative to the node's flex parent, so we walk up the parent
     /// chain and accumulate each ancestor's location offset.
+    ///
+    /// Cycle-bound the walk at the parent map's len: a legitimate
+    /// ancestor chain is at most that long. The map is `pub(crate)`
+    /// so a logic bug elsewhere could in principle install a cycle;
+    /// detecting it returns `None` (same shape as the existing
+    /// "missing layout" early-out) rather than hanging every paint
+    /// frame.
     pub fn node_rect(&self, key: NodeKey) -> Option<Rect> {
         let id = self.map.get(key)?;
         let l = self.tree.layout(*id).ok()?;
         let (mut ax, mut ay) = (l.location.x, l.location.y);
         let (w, h) = (l.size.width, l.size.height);
         let mut cur = key;
+        let max_steps = self.parent.len();
+        let mut steps = 0usize;
         while let Some(&p) = self.parent.get(cur) {
+            if steps > max_steps {
+                return None;
+            }
             let pid = self.map.get(p)?;
             let pl = self.tree.layout(*pid).ok()?;
             ax += pl.location.x;
             ay += pl.location.y;
             cur = p;
+            steps += 1;
         }
         Some(rect(ax, ay, w, h))
     }

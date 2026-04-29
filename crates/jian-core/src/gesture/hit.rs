@@ -49,20 +49,37 @@ pub fn hit_test(spatial: &SpatialIndex, doc: &RuntimeDocument, p: Point) -> HitP
 
     // Start from the top candidate and walk up its ancestor chain so that
     // all enclosing parents are also in the path (event bubbling).
+    // The walk is bounded by the tree's node count; a longer chain
+    // would mean a parent cycle, which we treat as malformed input
+    // and bail out of rather than hang. `NodeData.parent` is `pub`
+    // so a buggy mutation could theoretically install one.
     let top = candidates[0];
     let mut path = vec![top];
     let mut cur = top;
+    let max_steps = doc.tree.nodes.len();
+    let mut steps = 0usize;
     while let Some(p) = doc.tree.nodes[cur].parent {
+        if steps > max_steps {
+            break;
+        }
         path.push(p);
         cur = p;
+        steps += 1;
     }
     HitPath(path)
 }
 
+/// Distance from `key` to its root via parent links. Cycle-bounded
+/// at the tree's node count for the same defensive reason `hit_test`
+/// uses — a malformed `NodeTree` shouldn't hang the hit-test sort.
 fn depth(doc: &RuntimeDocument, key: NodeKey) -> u32 {
-    let mut d = 0;
+    let mut d = 0u32;
     let mut cur = key;
+    let max_steps = doc.tree.nodes.len() as u32;
     while let Some(p) = doc.tree.nodes[cur].parent {
+        if d > max_steps {
+            break;
+        }
         d += 1;
         cur = p;
     }
@@ -82,6 +99,13 @@ fn paint_index_table(doc: &RuntimeDocument) -> HashMap<NodeKey, u32> {
 }
 
 fn walk_paint(doc: &RuntimeDocument, key: NodeKey, idx: &mut u32, out: &mut HashMap<NodeKey, u32>) {
+    // Skip already-visited keys so a `children` cycle terminates
+    // instead of recursing forever / blowing the stack. The first
+    // visit's index wins (matches document order under the normal
+    // acyclic case).
+    if out.contains_key(&key) {
+        return;
+    }
     out.insert(key, *idx);
     *idx += 1;
     for &child in &doc.tree.nodes[key].children {

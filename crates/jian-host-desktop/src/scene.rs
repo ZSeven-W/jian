@@ -39,8 +39,10 @@ pub fn collect_draws(
     layout: &jian_core::layout::LayoutEngine,
 ) -> Vec<DrawOp> {
     let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    let mut visited: std::collections::HashSet<jian_core::document::NodeKey> =
+        std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, root, None, &mut out);
+        walk(doc, layout, root, None, &mut out, &mut visited);
     }
     out
 }
@@ -56,8 +58,10 @@ pub fn collect_draws_with_state(
     state: &jian_core::state::StateGraph,
 ) -> Vec<DrawOp> {
     let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    let mut visited: std::collections::HashSet<jian_core::document::NodeKey> =
+        std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, root, Some(state), &mut out);
+        walk(doc, layout, root, Some(state), &mut out, &mut visited);
     }
     out
 }
@@ -68,7 +72,14 @@ fn walk(
     key: jian_core::document::NodeKey,
     state: Option<&jian_core::state::StateGraph>,
     out: &mut Vec<DrawOp>,
+    visited: &mut std::collections::HashSet<jian_core::document::NodeKey>,
 ) {
+    // Skip already-painted keys so a child cycle (NodeData.children
+    // is `pub`, so a buggy mutation could install one) doesn't blow
+    // the stack or paint the same node twice.
+    if !visited.insert(key) {
+        return;
+    }
     let Some(node) = doc.tree.nodes.get(key) else {
         return;
     };
@@ -98,7 +109,7 @@ fn walk(
     }
 
     for &child in &node.children {
-        walk(doc, layout, child, state, out);
+        walk(doc, layout, child, state, out, visited);
     }
 }
 

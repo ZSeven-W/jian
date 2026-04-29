@@ -22,8 +22,17 @@ pub fn dispatch_event(
     reg: &SharedRegistry,
     ctx: &ActionContext,
 ) -> ExecOutcome {
+    // Cycle-bound the bubble walk at node count: legitimate
+    // ancestor chains are shorter than that. NodeData.parent is
+    // pub, so a buggy mutation could install a cycle and hang
+    // every event dispatch — bail out instead.
+    let max_steps = doc.tree.nodes.len();
     let mut node_key = Some(event.node());
+    let mut steps = 0usize;
     while let Some(key) = node_key {
+        if steps > max_steps {
+            break;
+        }
         let data = match doc.tree.nodes.get(key) {
             Some(d) => d,
             None => break,
@@ -32,6 +41,7 @@ pub fn dispatch_event(
             return execute_list_shared(reg, &list, ctx);
         }
         node_key = data.parent;
+        steps += 1;
     }
     ExecOutcome {
         result: Ok(()),
