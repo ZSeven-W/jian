@@ -50,7 +50,24 @@ jobs:
             os: windows-2022
             archive: zip
     steps:
+      # Windows long-path support — must run before checkout. Mirrors
+      # `.github/workflows/ci.yml::test`. skia-bindings extracts a
+      # harfbuzz vendor tree with very long file names; without this
+      # the Windows release build fails inside `cargo build`.
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --global core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+            -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force | Out-Null
       - uses: actions/checkout@v4
+      # Linux native libs that skia-safe links against. Same install
+      # the CI workflow does, kept in lock-step so a release build
+      # never fails over a missing dev-package while CI is green.
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libfreetype6-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -58,7 +75,6 @@ jobs:
       - name: install cross-compile linker (linux aarch64)
         if: matrix.cross
         run: |
-          sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           mkdir -p .cargo
           echo "[target.aarch64-unknown-linux-gnu]" >> .cargo/config.toml
