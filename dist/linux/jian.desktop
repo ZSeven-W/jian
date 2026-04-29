@@ -3,7 +3,12 @@ Type=Application
 Name=Jian
 GenericName=Vector Design Runtime
 Comment=Run .op design files standalone
-Exec=jian player %F
+# `%U` (uppercase) accepts a list of URIs — covers both
+# `file:///path/to/foo.op` (file double-click via the
+# `application/x-jian-op` MIME) and `jian://app-id/route?...` deep
+# links via `x-scheme-handler/jian`. `%F` would route only file
+# paths and would silently break URL-scheme launches.
+Exec=jian player %U
 Icon=jian
 Terminal=false
 Categories=Graphics;2DGraphics;Development;

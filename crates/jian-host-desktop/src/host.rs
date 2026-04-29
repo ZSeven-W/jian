@@ -291,17 +291,34 @@ impl DesktopHost {
         let schema = jian_ops_schema::load_str(&src)
             .map_err(|e| format!("parse {}: {}", path.display(), e))?
             .value;
+
+        // Snapshot the previous schema before we mutate `runtime`,
+        // so a downstream layout failure can roll the runtime back
+        // to a consistent state rather than leaving it on the new
+        // document with a stale layout / spatial index.
+        let prev_schema = self
+            .runtime
+            .document
+            .as_ref()
+            .map(|d| d.schema.clone());
+        let viewport = self.runtime.viewport.size;
+        let viewport_pair = (viewport.width, viewport.height);
+
         self.runtime
             .replace_document(schema)
             .map_err(|e| format!("apply {}: {:?}", path.display(), e))?;
-        // Keep the layout / spatial index coherent against the
-        // viewport the redraw path already knows about. Run-time
-        // open via a Reloader bypasses build_layout because
-        // `apply_reload` calls it; this one-shot path mirrors that.
-        let viewport = self.runtime.viewport.size;
-        self.runtime
-            .build_layout((viewport.width, viewport.height))
-            .map_err(|e| format!("layout: {:?}", e))?;
+        if let Err(e) = self.runtime.build_layout(viewport_pair) {
+            // Best-effort restore of the previous document. Swallow
+            // any secondary error so the original layout failure
+            // remains visible to the caller; if there was no prior
+            // document the host stays empty (same as a fresh start).
+            if let Some(prev) = prev_schema {
+                let _ = self.runtime.replace_document(prev);
+                let _ = self.runtime.build_layout(viewport_pair);
+                self.runtime.rebuild_spatial();
+            }
+            return Err(format!("layout {}: {:?}", path.display(), e));
+        }
         self.runtime.rebuild_spatial();
         Ok(path.to_path_buf())
     }

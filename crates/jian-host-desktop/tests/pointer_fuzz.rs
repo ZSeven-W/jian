@@ -82,7 +82,51 @@ fn pointer_fuzz_does_not_panic() {
     let mut rng = Lcg::new(0xdeadbeef);
     let device = DeviceId::dummy();
 
+    // Baseline tap from a clean runtime — proves the
+    // translator → dispatch → onTap → state-update chain works
+    // before random events can leave the arena in a half-pressed
+    // state. The fuzz body's `count >= 0` check below would
+    // otherwise also be satisfied if every tap path silently
+    // dropped — this forced sequence seals that gap.
+    drive(
+        &mut translator,
+        &mut runtime,
+        &WindowEvent::CursorMoved {
+            device_id: device,
+            position: PhysicalPosition { x: 300.0, y: 250.0 },
+        },
+    );
+    drive(
+        &mut translator,
+        &mut runtime,
+        &WindowEvent::MouseInput {
+            device_id: device,
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        },
+    );
+    drive(
+        &mut translator,
+        &mut runtime,
+        &WindowEvent::MouseInput {
+            device_id: device,
+            state: ElementState::Released,
+            button: MouseButton::Left,
+        },
+    );
+    let baseline_count = runtime
+        .state
+        .app_get("count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1);
+    assert!(
+        baseline_count >= 1,
+        "forced baseline tap should increment count to ≥ 1, got {}",
+        baseline_count,
+    );
+
     let mut button_down = false;
+    let mut translated_events = 0usize;
     for _ in 0..ITER {
         // Bias the fuzz toward the click target (rectangle at
         // x:200..400, y:200..300) so we actually exercise the
@@ -104,7 +148,9 @@ fn pointer_fuzz_does_not_panic() {
                     device_id: device,
                     position: PhysicalPosition { x, y },
                 };
-                drive(&mut translator, &mut runtime, &ev);
+                if drive(&mut translator, &mut runtime, &ev) {
+                    translated_events += 1;
+                }
             }
             71..=85 => {
                 let state = if button_down {
@@ -117,16 +163,22 @@ fn pointer_fuzz_does_not_panic() {
                     state,
                     button: MouseButton::Left,
                 };
-                drive(&mut translator, &mut runtime, &ev);
+                if drive(&mut translator, &mut runtime, &ev) {
+                    translated_events += 1;
+                }
                 button_down = !button_down;
             }
             86..=92 => {
                 let ev = WindowEvent::CursorLeft { device_id: device };
-                drive(&mut translator, &mut runtime, &ev);
+                if drive(&mut translator, &mut runtime, &ev) {
+                    translated_events += 1;
+                }
             }
             _ => {
                 let ev = WindowEvent::CursorEntered { device_id: device };
-                drive(&mut translator, &mut runtime, &ev);
+                if drive(&mut translator, &mut runtime, &ev) {
+                    translated_events += 1;
+                }
             }
         }
 
@@ -153,13 +205,45 @@ fn pointer_fuzz_does_not_panic() {
     // genuine taps (50–500 over 10k events). Bound the upper end so
     // a runaway loop dispatching the same event many times trips this.
     assert!(count < ITER as i64, "count overflowed: {}", count);
+
+    // Liveness floor: the translator must actually translate the
+    // bulk of the random stream into PointerEvents — without this
+    // a regression that drops every event still satisfies the
+    // count-≥-0 / count-<-ITER assertions trivially.
+    assert!(
+        translated_events > ITER * 7 / 10,
+        "translator dropped too many events: {}/{}",
+        translated_events,
+        ITER,
+    );
+
+    // Count must not regress below the baseline; the random fuzz
+    // can only ever increment, not decrement, the counter.
+    assert!(
+        count >= baseline_count,
+        "fuzz regressed counter below baseline: baseline={}, after_fuzz={}",
+        baseline_count,
+        count,
+    );
 }
 
 /// Drive a single event through the translator + runtime, mirroring
-/// the production run loop's pointer path. Errors are surfaced as
-/// panics so the test catches any silent failure mode.
-fn drive(translator: &mut PointerTranslator, runtime: &mut Runtime, ev: &WindowEvent) {
-    if let Some(pe) = translator.translate(ev) {
-        runtime.dispatch_pointer(pe);
+/// the production run loop's pointer path. Returns whether the
+/// translator actually emitted a `PointerEvent` (the no-op cases —
+/// CursorEntered before a position is known, redundant
+/// CursorMoved without position changes — return `None`). The
+/// fuzz body uses this to assert the run actually exercised the
+/// translator instead of dropping every event silently.
+fn drive(
+    translator: &mut PointerTranslator,
+    runtime: &mut Runtime,
+    ev: &WindowEvent,
+) -> bool {
+    match translator.translate(ev) {
+        Some(pe) => {
+            runtime.dispatch_pointer(pe);
+            true
+        }
+        None => false,
     }
 }

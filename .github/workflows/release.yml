@@ -83,11 +83,15 @@ jobs:
         if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
+          # Archive layout MUST be flat (no `<name>/` prefix) — the
+          # `dist/install.sh` extractor and the Homebrew formula
+          # both expect `jian` at the archive root.
           name="jian-${{ steps.ver.outputs.version }}-${{ matrix.target }}"
-          mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/jian" "dist/$name/"
-          cp LICENSE README.md "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -rf dist/staged
+          mkdir -p dist/staged
+          cp "target/${{ matrix.target }}/release/jian" dist/staged/
+          cp LICENSE README.md dist/staged/
+          tar -C dist/staged -czf "dist/$name.tar.gz" .
           echo "ARTIFACT=dist/$name.tar.gz" >> "$GITHUB_ENV"
           echo "ARTIFACT_NAME=$name.tar.gz" >> "$GITHUB_ENV"
 
@@ -95,11 +99,15 @@ jobs:
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
+          # Same flat-root contract as the unix tarball above — the
+          # winget portable installer + curl|sh fallback both expect
+          # `jian.exe` at the zip root.
           $name = "jian-${{ steps.ver.outputs.version }}-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path "dist/$name"
-          Copy-Item "target/${{ matrix.target }}/release/jian.exe" "dist/$name/"
-          Copy-Item "LICENSE","README.md" "dist/$name/"
-          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          if (Test-Path dist/staged) { Remove-Item -Recurse -Force dist/staged }
+          New-Item -ItemType Directory -Force -Path dist/staged | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/jian.exe" dist/staged/
+          Copy-Item "LICENSE","README.md" dist/staged/
+          Compress-Archive -Path "dist/staged/*" -DestinationPath "dist/$name.zip"
           "ARTIFACT=dist/$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
           "ARTIFACT_NAME=$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
 
@@ -123,6 +131,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag="${GITHUB_REF#refs/tags/}"
+          # Idempotent create — `gh release create` errors when the
+          # release already exists, so probe first. Without this step
+          # `gh release upload` fails the moment the workflow runs
+          # ahead of someone clicking "Publish release" in the UI.
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" \
+              --notes "Automated release — see CHANGELOG / commit history for details." \
+              --draft
+          fi
           shopt -s nullglob
           for d in dist/*/; do
             for f in "$d"*.tar.gz "$d"*.zip; do
