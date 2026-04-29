@@ -2413,6 +2413,8 @@ dependencies = [
 name = "jian-asp"
 version = "0.0.1"
 dependencies = [
+ "jian-core",
+ "jian-ops-schema",
  "serde",
  "serde_json",
 ]

@@ -13,5 +13,13 @@
 #[cfg(feature = "dev-asp")]
 pub mod types;
 
+// Phase 2 resolver — `Selector::resolve(&NodeTree) ->
+// Vec<NodeKey>`. Lives in the same `dev-asp` cfg as the types so a
+// no-feature build remains empty.
+#[cfg(feature = "dev-asp")]
+pub mod resolve;
+
+#[cfg(feature = "dev-asp")]
+pub use resolve::ResolveError;
 #[cfg(feature = "dev-asp")]
 pub use types::{Combinator, Selector};

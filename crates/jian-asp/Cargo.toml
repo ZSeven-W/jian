@@ -25,7 +25,7 @@ default = ["dev-asp"]
 # `dev-asp` activates the Phase 1+ code paths AND pulls the serde
 # dep tree. `--no-default-features` truly produces an empty crate —
 # no serde, no modules, just the gating attribute pattern.
-dev-asp = ["dep:serde", "dep:serde_json"]
+dev-asp = ["dep:serde", "dep:serde_json", "dep:jian-core", "dep:jian-ops-schema"]
 
 [dependencies]
 # Phase 1 of Plan 18: protocol + selector type definitions. Pure
@@ -37,3 +37,8 @@ dev-asp = ["dep:serde", "dep:serde_json"]
 # crate empty + serde-free.
 serde      = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+# Selector resolver (`selector/resolve.rs`) walks the runtime
+# document tree to map a `Selector` → `Vec<NodeKey>`. Optional so
+# the no-feature build stays empty.
+jian-core       = { path = "../jian-core", optional = true }
+jian-ops-schema = { path = "../jian-ops-schema", optional = true }
