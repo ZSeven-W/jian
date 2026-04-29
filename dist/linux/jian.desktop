@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=Jian
+GenericName=Vector Design Runtime
+Comment=Run .op design files standalone
+Exec=jian player %F
+Icon=jian
+Terminal=false
+Categories=Graphics;2DGraphics;Development;
+MimeType=application/x-jian-op;x-scheme-handler/jian;
+# `MimeType` powers two pieces of OS integration that share this
+# template (Plan 8 Task 8 deeplink + Task 10 packaging):
+#   - `application/x-jian-op` registers `jian player <path>` as the
+#     default opener for .op files (file double-click).
+#   - `x-scheme-handler/jian` registers `jian://<app-id>/<path>?...`
+#     URL handling — the host's `DeepLinkHandler` parses the URL via
+#     `jian_host_desktop::deeplink::JianUrl::parse` and routes it
+#     through the runtime's `HistoryRouter`.
+StartupWMClass=jian
+Keywords=design;vector;openpencil;

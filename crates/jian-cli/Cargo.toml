@@ -48,3 +48,38 @@ tempfile        = "3"
 [[bin]]
 name = "jian"
 path = "src/main.rs"
+
+# `cargo bundle` config (Plan 8 Task 10). Run `cargo bundle --release`
+# from this crate's directory on macOS to build `target/release/bundle/
+# osx/Jian.app`. The Linux / Windows variants of `cargo bundle`
+# produce `.deb` / `.msi` from the same metadata.
+#
+# `identifier` follows the reverse-DNS bundle id convention; the
+# concrete release pipeline can override via `--manifest-path`. Icon
+# comes from `dist/icon/AppIcon.icns` once the icon-set is generated
+# (a follow-up commit ships the .icns; the placeholder path is
+# checked in `dist/README.md`).
+[package.metadata.bundle]
+name = "Jian"
+identifier = "dev.jian.cli"
+icon = ["../../dist/icon/AppIcon.icns"]
+short_description = "Jian runtime CLI — check, pack, and run .op files"
+long_description = """
+Jian is the runtime that backs OpenPencil — a vector design tool that
+exports .op files. The `jian` CLI validates, packs, and previews those
+files standalone.
+"""
+copyright = "Copyright (c) 2026 ZSeven-W"
+category = "Developer Tool"
+osx_minimum_system_version = "10.15"
+osx_url_schemes = ["jian"]
+
+# `cargo wix` config (Plan 8 Task 10, Windows MSI). Run
+# `cargo wix --no-build --nocapture` from this crate's directory on
+# Windows once the toolchain is installed (`cargo install cargo-wix`)
+# and a `wix/main.wxs` lives under this crate. The wxs template
+# itself ships in `dist/winget/wix/main.wxs.tmpl` so the same release
+# script that fills in `dist/homebrew/jian.rb` can render it.
+[package.metadata.wix]
+upgrade-guid = "00000000-0000-0000-0000-000000000000"
+path-guid = "00000000-0000-0000-0000-000000000001"

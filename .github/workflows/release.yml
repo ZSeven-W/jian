@@ -1,0 +1,132 @@
+# Plan 8 Task 10: per-platform release-archive build matrix.
+#
+# Triggered on push of a `v*` tag *or* manual workflow dispatch.
+# Builds an unsigned `jian` binary on each tier-1 target, packages it
+# in the same archive shape `dist/install.sh` and the Homebrew
+# template expect (`jian-<version>-<target>.{tar.gz|zip}`), and
+# uploads the archive as a GitHub Release asset.
+#
+# Code-signing / notarisation lives in a follow-up — this workflow
+# produces the *unsigned* artefacts so the rest of the release
+# pipeline (Homebrew formula PR, winget manifest PR, install.sh
+# version bump) can run against real assets even without signing
+# infrastructure in place.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag to build (e.g. v0.0.1)'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # gh release asset upload
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            archive: tar.gz
+            cross: true
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: install cross-compile linker (linux aarch64)
+        if: matrix.cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          echo "[target.aarch64-unknown-linux-gnu]" >> .cargo/config.toml
+          echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
+
+      - name: cargo build --release
+        run: cargo build --release -p jian --target ${{ matrix.target }}
+
+      - name: resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            v="${GITHUB_REF#refs/tags/v}"
+          else
+            v="${{ inputs.version }}"
+            v="${v#v}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: package (unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          name="jian-${{ steps.ver.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/jian" "dist/$name/"
+          cp LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          echo "ARTIFACT=dist/$name.tar.gz" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=$name.tar.gz" >> "$GITHUB_ENV"
+
+      - name: package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $name = "jian-${{ steps.ver.outputs.version }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "dist/$name"
+          Copy-Item "target/${{ matrix.target }}/release/jian.exe" "dist/$name/"
+          Copy-Item "LICENSE","README.md" "dist/$name/"
+          Compress-Archive -Path "dist/$name" -DestinationPath "dist/$name.zip"
+          "ARTIFACT=dist/$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
+          "ARTIFACT_NAME=$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT }}
+          if-no-files-found: error
+
+  release:
+    name: publish release assets
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: gh release upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          shopt -s nullglob
+          for d in dist/*/; do
+            for f in "$d"*.tar.gz "$d"*.zip; do
+              [ -e "$f" ] || continue
+              gh release upload "$tag" "$f" --clobber --repo "$GITHUB_REPOSITORY"
+            done
+          done

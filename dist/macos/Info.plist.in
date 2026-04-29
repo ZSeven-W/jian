@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  cargo-bundle merges this Info.plist into the generated `.app`.
+  The release pipeline replaces `@@VERSION@@` before invoking
+  `cargo bundle`. Drop into `crates/jian-cli/Info.plist` as a
+  symlink or copy at build time; cargo-bundle picks up
+  `<crate-dir>/Info.plist` automatically.
+
+  Two pieces of Plan 8 Task 8 (deeplink) live here:
+
+  - `CFBundleURLTypes` registers the `jian://` URL scheme so
+    macOS routes deep links into our running NSApplication. The
+    NSApplicationDelegate receiver in jian-host-desktop's deeplink
+    layer (still TBD; see Plan 8 Task 8 unchecked items) parses
+    the URL via `JianUrl::parse` and pushes it through the
+    runtime's HistoryRouter.
+
+  - `CFBundleDocumentTypes` advertises `.op` (and `.op.pack`) as
+    Jian-owned document extensions, so a Finder double-click on
+    a .op file launches our bundle and Open Files passes the
+    path to the running app via `application:openURLs:`.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Jian</string>
+    <key>CFBundleDisplayName</key>
+    <string>Jian</string>
+    <key>CFBundleIdentifier</key>
+    <string>dev.jian.cli</string>
+    <key>CFBundleVersion</key>
+    <string>@@VERSION@@</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@@VERSION@@</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleExecutable</key>
+    <string>jian</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Jian deep link</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>jian</string>
+            </array>
+        </dict>
+    </array>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Jian / OpenPencil document</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>dev.jian.op</string>
+                <string>dev.jian.op-pack</string>
+            </array>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>dev.jian.op</string>
+            <key>UTTypeDescription</key>
+            <string>Jian / OpenPencil design file</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>op</string></array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>dev.jian.op-pack</string>
+            <key>UTTypeDescription</key>
+            <string>Jian packed archive</string>
+            <key>UTTypeConformsTo</key>
+            <array><string>public.zip-archive</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>op.pack</string></array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
