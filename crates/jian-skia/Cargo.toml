@@ -32,6 +32,14 @@ base64          = "0.22"
 # `jian-core::startup::StartupDriver` phase impls, which already use
 # futures-rs primitives.
 futures         = "0.3"
+# `raw-window-handle` 0.6 is the version winit 0.30 publishes. The
+# per-platform GPU surface factories under
+# `surface/{metal,d3d,gl}.rs` accept a `RawWindowHandle` from the
+# host as their input contract, so this dep stays version-locked
+# with jian-host-desktop's winit. Pulled unconditionally because
+# the crate is tiny (~30 LoC of types) and gating it on every
+# `target_os` × `feature` combo isn't worth the Cargo.toml noise.
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 serde_json        = { workspace = true }

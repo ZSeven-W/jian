@@ -2484,6 +2484,7 @@ dependencies = [
  "jian-core",
  "jian-host-desktop",
  "jian-ops-schema",
+ "raw-window-handle",
  "serde_json",
  "skia-safe",
 ]
