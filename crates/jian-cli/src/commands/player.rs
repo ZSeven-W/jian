@@ -118,17 +118,14 @@ fn resolve_path_arg(raw: &Path) -> Result<PathBuf> {
         None => return Ok(raw.to_path_buf()),
     };
     if let Some(rest) = s.strip_prefix("file://") {
-        let decoded = percent_decode(rest);
         // POSIX `file:///abs/path` → `rest = "/abs/path"` after the
         // prefix strip; on Windows `file:///C:/path` → `rest =
         // "/C:/path"` and we strip the leading `/` so `PathBuf`
         // sees `C:/path`. Linux paths already start with `/` so we
         // leave that alone.
-        #[cfg(windows)]
-        let trimmed = decoded.strip_prefix('/').unwrap_or(&decoded).to_owned();
-        #[cfg(not(windows))]
-        let trimmed = decoded;
-        return Ok(PathBuf::from(trimmed));
+        let decoded = percent_decode_bytes(rest.as_bytes());
+        let trimmed = strip_windows_drive_slash(decoded);
+        return Ok(path_from_bytes(trimmed));
     }
     if s.starts_with("jian://") {
         return Err(anyhow!(
@@ -143,32 +140,28 @@ fn resolve_path_arg(raw: &Path) -> Result<PathBuf> {
 /// Inline percent-decoder for the byte slice between `file://` and
 /// the path end. Handles `%XX` byte triples; passes everything else
 /// through unchanged. Stops at malformed escapes (treats `%X?` as
-/// literal). Sufficient for the typical desktop-file-manager output
-/// (`file:///path%20with%20spaces/foo.op`); a hand-crafted
-/// `file:///%E4%B8%AD%E6%96%87.op` (CJK) likewise round-trips
-/// because we operate on raw bytes.
-fn percent_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+/// literal). Returns raw bytes so non-UTF-8 POSIX file names
+/// (`file:///%FF%FE-bad-utf8.op`) survive the round-trip into
+/// `PathBuf` — a previous version went via `String::from_utf8_lossy`,
+/// which silently mangled those paths into `?` replacement
+/// characters.
+fn percent_decode_bytes(input: &[u8]) -> Vec<u8> {
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hi = hex_nybble(bytes[i + 1]);
-            let lo = hex_nybble(bytes[i + 2]);
+    while i < input.len() {
+        if input[i] == b'%' && i + 2 < input.len() {
+            let hi = hex_nybble(input[i + 1]);
+            let lo = hex_nybble(input[i + 2]);
             if let (Some(hi), Some(lo)) = (hi, lo) {
                 out.push((hi << 4) | lo);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i]);
+        out.push(input[i]);
         i += 1;
     }
-    // Round-trip via lossy String — the decoded bytes may contain
-    // non-UTF8 sequences in pathological inputs, but `PathBuf`
-    // tolerates that on the platforms we actually target (POSIX is
-    // bytes; Windows already restricted us above).
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 fn hex_nybble(b: u8) -> Option<u8> {
@@ -178,6 +171,37 @@ fn hex_nybble(b: u8) -> Option<u8> {
         b'A'..=b'F' => Some(b - b'A' + 10),
         _ => None,
     }
+}
+
+/// On Windows `file:///C:/path` becomes `/C:/path` after the scheme
+/// strip; chop the leading `/` so `PathBuf` sees a real drive-letter
+/// path. POSIX leaves the leading `/` intact (it IS the path root).
+#[cfg(windows)]
+fn strip_windows_drive_slash(mut bytes: Vec<u8>) -> Vec<u8> {
+    if bytes.first() == Some(&b'/') {
+        bytes.remove(0);
+    }
+    bytes
+}
+#[cfg(not(windows))]
+fn strip_windows_drive_slash(bytes: Vec<u8>) -> Vec<u8> {
+    bytes
+}
+
+/// Build a `PathBuf` from raw bytes, preserving non-UTF-8 sequences
+/// on POSIX where filenames are bytes-not-UTF-8. Windows paths are
+/// always UTF-16 internally, but `file://` URIs on Windows are
+/// already restricted to ASCII / percent-encoded UTF-8 by the URI
+/// spec, so the lossy fallback is safe there.
+#[cfg(unix)]
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    PathBuf::from(OsString::from_vec(bytes))
+}
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Read the runtime document's `app.updater` schema field and install
@@ -344,11 +368,26 @@ mod tests {
     }
 
     #[test]
-    fn percent_decode_handles_malformed_escapes() {
+    fn percent_decode_bytes_handles_malformed_escapes() {
         // Truncated `%X` and `%X?` keep the original bytes rather
         // than panicking — the OS may hand us malformed input.
-        assert_eq!(percent_decode("foo%2"), "foo%2");
-        assert_eq!(percent_decode("foo%2Z"), "foo%2Z");
-        assert_eq!(percent_decode("plain"), "plain");
+        assert_eq!(percent_decode_bytes(b"foo%2"), b"foo%2");
+        assert_eq!(percent_decode_bytes(b"foo%2Z"), b"foo%2Z");
+        assert_eq!(percent_decode_bytes(b"plain"), b"plain");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_path_arg_preserves_non_utf8_posix_filenames() {
+        // POSIX filenames are arbitrary byte sequences. A file
+        // manager could hand us `file:///%FF.op` (a single 0xFF
+        // byte filename) and the previous lossy-UTF8 path mangled
+        // it into the replacement char. Round-trip the bytes
+        // through `PathBuf` and pin that the underlying
+        // `OsStr` still has the raw `0xFF` byte.
+        use std::os::unix::ffi::OsStrExt;
+        let p = resolve_path_arg(Path::new("file:///%FF.op")).unwrap();
+        let bytes = p.as_os_str().as_bytes();
+        assert_eq!(bytes, b"/\xff.op");
     }
 }

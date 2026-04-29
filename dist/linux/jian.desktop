@@ -3,10 +3,12 @@ Type=Application
 Name=Jian
 GenericName=Vector Design Runtime
 Comment=Run .op design files standalone
-# `%U` (uppercase) accepts a list of URIs so the file manager can
-# pass a `file:///path/to/foo.op` URI for a double-clicked .op
-# file. `jian player` decodes the `file://` scheme via
-# `resolve_path_arg` and reads the underlying file.
+# `%u` (lowercase) accepts a single URI — matches the CLI's shape
+# (`jian player <PATH>`, one positional argument). `%U` would let the
+# file manager pass multiple URIs in a "Open With Jian" multi-select
+# and clap would reject the extras as unexpected positional arguments.
+# `jian player` decodes the `file://` scheme via `resolve_path_arg`
+# and reads the underlying file.
 #
 # `jian://app-id/...` URL-scheme handling is intentionally NOT
 # advertised in the MimeType list below: the runtime-side
@@ -16,7 +18,7 @@ Comment=Run .op design files standalone
 # fresh document load. Once single-instance + IPC ships, restore
 # `x-scheme-handler/jian` here and have the CLI forward to the
 # running peer instead of opening a new window.
-Exec=jian player %U
+Exec=jian player %u
 Icon=jian
 Terminal=false
 Categories=Graphics;2DGraphics;Development;
