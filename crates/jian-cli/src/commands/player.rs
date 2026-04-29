@@ -327,6 +327,16 @@ mod tests {
         assert_eq!(p, PathBuf::from("/tmp/with space/CJ中文.op"));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn resolve_path_arg_decodes_file_uri_windows() {
+        // The Windows branch strips the leading `/` so `PathBuf`
+        // sees a drive-letter path. Pin both the strip and the
+        // percent-decoding pass on that platform.
+        let p = resolve_path_arg(Path::new("file:///C:/foo%20bar.op")).unwrap();
+        assert_eq!(p, PathBuf::from("C:/foo bar.op"));
+    }
+
     #[test]
     fn resolve_path_arg_rejects_jian_scheme() {
         let err = resolve_path_arg(Path::new("jian://app/path")).unwrap_err();
