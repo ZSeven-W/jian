@@ -29,8 +29,7 @@ pub fn run_set_state(
     // Read the previous value so the response includes a
     // before/after delta.
     let path = format!("{}.{}", scope, key);
-    let before = read_scope_key(runtime, scope, key)
-        .unwrap_or(serde_json::Value::Null);
+    let before = read_scope_key(runtime, scope, key).unwrap_or(serde_json::Value::Null);
     match scope {
         "$app" => runtime.state.app_set(key, value.clone()),
         "$vars" => runtime.state.vars_set(key, value.clone()),
@@ -95,15 +94,13 @@ pub fn run_navigate(runtime: &mut Runtime, path: &str, mode: Option<NavMode>) ->
         //      destination, no transition.
         // Surface all three in the hint so the agent picks the
         // likely cause from its own context.
-        payload = payload.with_hint(
-            format!(
-                "navigate {:?} did not change `$route.path`. \
+        payload = payload.with_hint(format!(
+            "navigate {:?} did not change `$route.path`. \
                  Possible causes: the host installed a no-op router (e.g. `NullRouter`); \
                  `pop` at stack depth 1 (already at root); \
                  or the requested path equals the current one.",
-                mode
-            ),
-        );
+            mode
+        ));
     }
     payload
 }
@@ -205,10 +202,7 @@ mod tests {
         let mut rt = rt_with(fixture());
         let out = run_set_state(&mut rt, "$vars", "flag", "true");
         assert!(out.ok);
-        let flag = rt
-            .state
-            .vars_get("flag")
-            .and_then(|v| v.0.as_bool());
+        let flag = rt.state.vars_get("flag").and_then(|v| v.0.as_bool());
         assert_eq!(flag, Some(true));
     }
 

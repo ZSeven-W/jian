@@ -68,7 +68,10 @@ impl<'a> Lexer<'a> {
         let lead = self.pos.saturating_sub(1);
         let end = (lead + 1 + cont).min(self.src.len());
         let slice = &self.src[lead..end];
-        match std::str::from_utf8(slice).ok().and_then(|s| s.chars().next()) {
+        match std::str::from_utf8(slice)
+            .ok()
+            .and_then(|s| s.chars().next())
+        {
             Some(ch) => {
                 buf.push(ch);
                 cont

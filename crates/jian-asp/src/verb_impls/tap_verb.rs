@@ -52,10 +52,9 @@ pub fn run_tap(runtime: &mut Runtime, sel: &Selector) -> OutcomePayload {
     // borrow `runtime` immutably for layout. After this call the
     // immutable borrows on `doc` / layout drop and we can take a
     // `&mut` to dispatch.
-    let summary: Option<NodeSummary> =
-        collect_node_summaries(doc, &[first_key], runtime, 1)
-            .into_iter()
-            .next();
+    let summary: Option<NodeSummary> = collect_node_summaries(doc, &[first_key], runtime, 1)
+        .into_iter()
+        .next();
     let Some(summary) = summary else {
         return OutcomePayload::error("tap", "could not summarise matched node");
     };
@@ -104,7 +103,10 @@ pub fn run_tap(runtime: &mut Runtime, sel: &Selector) -> OutcomePayload {
         "no handlers fired — confirm the node has `events.onTap` or a parent does (event bubbling)"
             .to_owned()
     } else {
-        format!("{} semantic event(s) propagated through the gesture arena", total_semantic)
+        format!(
+            "{} semantic event(s) propagated through the gesture arena",
+            total_semantic
+        )
     })
 }
 

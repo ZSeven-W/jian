@@ -195,10 +195,7 @@ mod tests {
         let a: AppConfig = serde_json::from_str(json).unwrap();
         let cfg = a.updater.unwrap();
         assert_eq!(cfg.kind, "sparkle");
-        assert_eq!(
-            cfg.params["feedUrl"],
-            "https://example.com/appcast.xml"
-        );
+        assert_eq!(cfg.params["feedUrl"], "https://example.com/appcast.xml");
         assert_eq!(cfg.params["publicEdKey"], "ABCD...");
     }
 

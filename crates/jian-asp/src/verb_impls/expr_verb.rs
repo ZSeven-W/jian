@@ -90,11 +90,7 @@ pub fn run_wait_for(runtime: &mut Runtime, expr: &str, timeout_ms: Option<u64>) 
             return OutcomePayload::ok(
                 "wait_for",
                 Some(expr.to_owned()),
-                format!(
-                    "`{}` became truthy after {} ms",
-                    expr,
-                    elapsed.as_millis()
-                ),
+                format!("`{}` became truthy after {} ms", expr, elapsed.as_millis()),
             );
         }
         if started.elapsed() >= timeout {

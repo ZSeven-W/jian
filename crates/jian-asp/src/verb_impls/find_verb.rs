@@ -25,11 +25,7 @@ pub fn collect_node_summaries(
         .collect()
 }
 
-fn node_summary(
-    doc: &RuntimeDocument,
-    runtime: &Runtime,
-    key: NodeKey,
-) -> Option<NodeSummary> {
+fn node_summary(doc: &RuntimeDocument, runtime: &Runtime, key: NodeKey) -> Option<NodeSummary> {
     let data = doc.tree.nodes.get(key)?;
     let id = node_schema_id(&data.schema).to_owned();
     // Prefer the author-supplied `semantics.role` when present
@@ -38,17 +34,12 @@ fn node_summary(
     // here so the agent's `find` / `inspect` payload agrees with
     // the selector that matched it. Falls back to the primitive
     // variant name when no semantic role is set.
-    let role = node_semantic_role(&data.schema)
-        .or_else(|| Some(role_for(&data.schema).to_owned()));
+    let role = node_semantic_role(&data.schema).or_else(|| Some(role_for(&data.schema).to_owned()));
     let text = visible_text(&data.schema);
-    let rect = runtime.layout.node_rect(key).map(|r| {
-        [
-            r.origin.x,
-            r.origin.y,
-            r.size.width,
-            r.size.height,
-        ]
-    });
+    let rect = runtime
+        .layout
+        .node_rect(key)
+        .map(|r| [r.origin.x, r.origin.y, r.size.width, r.size.height]);
     let visible = node_is_statically_visible(&data.schema);
     Some(NodeSummary {
         id,
@@ -66,10 +57,7 @@ fn node_summary(
 /// API just for one read site.
 fn node_semantic_role(node: &PenNode) -> Option<String> {
     let v = serde_json::to_value(node).ok()?;
-    v.get("semantics")?
-        .get("role")?
-        .as_str()
-        .map(str::to_owned)
+    v.get("semantics")?.get("role")?.as_str().map(str::to_owned)
 }
 
 pub(crate) fn role_for(node: &PenNode) -> &'static str {

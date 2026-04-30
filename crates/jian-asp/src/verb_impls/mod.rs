@@ -28,9 +28,7 @@
 //!   `&Runtime`), `navigate` / `set_state` / `snapshot` /
 //!   `inspect ax_tree | state`.
 
-use crate::protocol::{
-    DetailKind, InspectKind, NodeSummary, OutcomePayload, Verb,
-};
+use crate::protocol::{DetailKind, InspectKind, NodeSummary, OutcomePayload, Verb};
 use crate::selector::Selector;
 use crate::session::{Permission, Session};
 use jian_core::Runtime;
@@ -42,11 +40,11 @@ pub mod expr_verb;
 #[cfg(feature = "dev-asp")]
 pub mod find_verb;
 #[cfg(feature = "dev-asp")]
-pub mod state_verb;
-#[cfg(feature = "dev-asp")]
 pub mod scroll_verb;
 #[cfg(feature = "dev-asp")]
 pub mod snapshot_verb;
+#[cfg(feature = "dev-asp")]
+pub mod state_verb;
 #[cfg(feature = "dev-asp")]
 pub mod swipe_verb;
 #[cfg(feature = "dev-asp")]
@@ -252,11 +250,7 @@ mod tests {
             42,
             &OutcomePayload::ok("find", Some("save-btn".into()), "1 matches"),
         );
-        let (out, _) = dispatch(
-            &Verb::Audit { last_n: Some(5) },
-            &mut rt,
-            &mut session,
-        );
+        let (out, _) = dispatch(&Verb::Audit { last_n: Some(5) }, &mut rt, &mut session);
         assert!(out.ok);
         match out.detail {
             Some(DetailKind::Audit { entries }) => {
@@ -281,7 +275,10 @@ mod tests {
         let mut rt = make_runtime_with_doc(fixture_doc());
         let mut session = Session::new(Permission::Full, "test", "0.1");
         let (out, _) = dispatch(
-            &Verb::Inspect { selector: None, what: InspectKind::AxTree },
+            &Verb::Inspect {
+                selector: None,
+                what: InspectKind::AxTree,
+            },
             &mut rt,
             &mut session,
         );
@@ -359,19 +356,32 @@ pub fn dispatch(
             ),
             DispatchControl::Exit,
         ),
-        Verb::Find { selector, limit } => {
-            (run_find(runtime, selector, *limit), DispatchControl::Continue)
-        }
+        Verb::Find { selector, limit } => (
+            run_find(runtime, selector, *limit),
+            DispatchControl::Continue,
+        ),
         Verb::Tap { selector } => (run_tap(runtime, selector), DispatchControl::Continue),
-        Verb::Type { selector, text, clear } => (
+        Verb::Type {
+            selector,
+            text,
+            clear,
+        } => (
             type_verb::run_type(runtime, selector, text, *clear),
             DispatchControl::Continue,
         ),
-        Verb::Scroll { selector, direction, distance } => (
+        Verb::Scroll {
+            selector,
+            direction,
+            distance,
+        } => (
             scroll_verb::run_scroll(runtime, selector, *direction, *distance),
             DispatchControl::Continue,
         ),
-        Verb::Swipe { selector, direction, distance } => (
+        Verb::Swipe {
+            selector,
+            direction,
+            distance,
+        } => (
             swipe_verb::run_swipe(runtime, selector, *direction, *distance),
             DispatchControl::Continue,
         ),
@@ -379,9 +389,10 @@ pub fn dispatch(
             snapshot_verb::run_snapshot(runtime, *format),
             DispatchControl::Continue,
         ),
-        Verb::Navigate { path, mode } => {
-            (run_navigate(runtime, path, *mode), DispatchControl::Continue)
-        }
+        Verb::Navigate { path, mode } => (
+            run_navigate(runtime, path, *mode),
+            DispatchControl::Continue,
+        ),
         Verb::SetState {
             scope,
             key,
@@ -395,9 +406,10 @@ pub fn dispatch(
             run_wait_for(runtime, expr, *timeout_ms),
             DispatchControl::Continue,
         ),
-        Verb::Inspect { selector, what } => {
-            (run_inspect(runtime, selector.as_ref(), *what), DispatchControl::Continue)
-        }
+        Verb::Inspect { selector, what } => (
+            run_inspect(runtime, selector.as_ref(), *what),
+            DispatchControl::Continue,
+        ),
         Verb::Audit { last_n } => {
             let n = last_n.unwrap_or(32) as usize;
             let entries = session.audit_tail(n);
@@ -473,21 +485,14 @@ fn run_find(runtime: &Runtime, sel: &Selector, limit: Option<u32>) -> OutcomePay
         .with_detail(DetailKind::Node { node: first })
 }
 
-fn run_inspect(
-    runtime: &Runtime,
-    sel: Option<&Selector>,
-    what: InspectKind,
-) -> OutcomePayload {
+fn run_inspect(runtime: &Runtime, sel: Option<&Selector>, what: InspectKind) -> OutcomePayload {
     let Some(doc) = runtime.document.as_ref() else {
         return OutcomePayload::error("inspect", "no document loaded");
     };
     match what {
         InspectKind::NodeProps => {
             let Some(sel) = sel else {
-                return OutcomePayload::invalid(
-                    "inspect",
-                    "what=node_props requires a selector",
-                );
+                return OutcomePayload::invalid("inspect", "what=node_props requires a selector");
             };
             let hits = match sel.resolve(&doc.tree) {
                 Ok(h) => h,
@@ -541,9 +546,7 @@ fn run_inspect(
             // `inspect what=state` a richer parameter shape;
             // this scope-via-id pattern keeps the wire surface
             // backward-compatible until then.
-            let scope = sel
-                .and_then(|s| s.id.as_deref())
-                .unwrap_or("$app");
+            let scope = sel.and_then(|s| s.id.as_deref()).unwrap_or("$app");
             run_inspect_state(runtime, scope)
         }
         InspectKind::AxTree => ax_verb::run_inspect_ax_tree(runtime),

@@ -55,7 +55,11 @@ mod tests {
         let json = r#"{"id":0,"verb":"handshake","token":"abc","client":"agent","version":"0.1"}"#;
         let req: Request = serde_json::from_str(json).unwrap();
         match req.verb {
-            Verb::Handshake { token, client, version } => {
+            Verb::Handshake {
+                token,
+                client,
+                version,
+            } => {
                 assert_eq!(token, "abc");
                 assert_eq!(client, "agent");
                 assert_eq!(version, "0.1");

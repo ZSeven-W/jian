@@ -92,7 +92,7 @@ impl Style {
     }
 }
 
-/// Honour the de-facto `NO_COLOR` convention (https://no-color.org)
+/// Honour the de-facto `NO_COLOR` convention (<https://no-color.org>)
 /// and `TERM=dumb`. Either disables colour even on a TTY.
 fn env_allows_color() -> bool {
     if std::env::var_os("NO_COLOR").is_some() {
@@ -133,7 +133,11 @@ fn describe(source: &str, w: &LoadWarning) -> (Severity, String, Option<Span>) {
     match w {
         LoadWarning::UnknownField { path: _, field } => {
             let span = locate_quoted_key(source, field);
-            (Severity::Warning, format!("unknown field `{}`", field), span)
+            (
+                Severity::Warning,
+                format!("unknown field `{}`", field),
+                span,
+            )
         }
         LoadWarning::FutureFormatVersion {
             found,
@@ -294,7 +298,10 @@ fn nth_line(source: &str, line: usize) -> Option<&str> {
     if line == 0 {
         return None;
     }
-    source.split('\n').nth(line - 1).map(|l| l.trim_end_matches('\r'))
+    source
+        .split('\n')
+        .nth(line - 1)
+        .map(|l| l.trim_end_matches('\r'))
 }
 
 /// Find the byte offset of `"<key>"` in `source`. Returns `Span::NONE`

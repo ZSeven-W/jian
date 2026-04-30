@@ -18,9 +18,9 @@
 //! agent's view focused on the surface a screen-reader user
 //! would interact with.
 //!
-//! Truncation: the output text is hard-capped at
-//! [`MAX_AX_BYTES`] bytes. When the cap fires the rest of the
-//! tree is dropped and `truncated: true` is set on the detail.
+//! Truncation: the output text is hard-capped at `MAX_AX_BYTES`
+//! (16 KiB) bytes. When the cap fires the rest of the tree is
+//! dropped and `truncated: true` is set on the detail.
 //! Agents that hit the cap typically scope down by passing a
 //! selector to `inspect what=ax_tree` (Phase 4 — for now the
 //! verb walks every root).
@@ -30,9 +30,7 @@ use jian_core::Runtime;
 use jian_ops_schema::node::PenNode;
 
 use crate::protocol::{DetailKind, OutcomePayload};
-use crate::verb_impls::find_verb::{
-    node_is_statically_visible, role_for, visible_text,
-};
+use crate::verb_impls::find_verb::{node_is_statically_visible, role_for, visible_text};
 
 /// Hard cap on the text payload. Tightly-bounded: the ax_tree is
 /// a compressed view that an agent should be able to read in a
@@ -63,8 +61,12 @@ pub fn run_inspect_ax_tree(runtime: &Runtime) -> OutcomePayload {
         buf.push_str("...truncated (ax_tree byte budget exceeded)\n");
     }
     let line_count = buf.lines().count();
-    OutcomePayload::ok("inspect", None, format!("{} ax line(s)", line_count))
-        .with_detail(DetailKind::AxTree { text: buf, truncated })
+    OutcomePayload::ok("inspect", None, format!("{} ax line(s)", line_count)).with_detail(
+        DetailKind::AxTree {
+            text: buf,
+            truncated,
+        },
+    )
 }
 
 /// Recursive walk: print the node when ax-relevant, then recurse
@@ -125,8 +127,7 @@ fn push_ax_line(
     for _ in 0..depth {
         line.push_str("  ");
     }
-    let role = author_role(&data.schema)
-        .unwrap_or_else(|| role_for(&data.schema).to_owned());
+    let role = author_role(&data.schema).unwrap_or_else(|| role_for(&data.schema).to_owned());
     line.push_str(&role);
     if let Some(label) = label_for(&data.schema) {
         line.push_str(" \"");
@@ -191,10 +192,7 @@ fn is_ax_relevant_node(node: &PenNode) -> bool {
 /// Author-declared `semantics.role`.
 fn author_role(node: &PenNode) -> Option<String> {
     let v = serde_json::to_value(node).ok()?;
-    v.get("semantics")?
-        .get("role")?
-        .as_str()
-        .map(str::to_owned)
+    v.get("semantics")?.get("role")?.as_str().map(str::to_owned)
 }
 
 /// Author-declared `semantics.label` — the aria-label equivalent.
@@ -312,7 +310,11 @@ mod tests {
                 // The root frame has no role / handler / label and
                 // no visible text — it's decorative and should be
                 // collapsed out.
-                assert!(!text.contains("frame #root"), "decorative frame leaked into ax tree:\n{}", text);
+                assert!(
+                    !text.contains("frame #root"),
+                    "decorative frame leaked into ax tree:\n{}",
+                    text
+                );
             }
             other => panic!("expected AxTree, got {:?}", other),
         }
@@ -348,7 +350,11 @@ mod tests {
         // decorative frames. The surviving line is at depth 0.
         assert_eq!(text.lines().count(), 1, "got:\n{}", text);
         let line = text.lines().next().unwrap();
-        assert!(!line.starts_with("  "), "expected no indent, got: {:?}", line);
+        assert!(
+            !line.starts_with("  "),
+            "expected no indent, got: {:?}",
+            line
+        );
         assert!(line.contains("\"Hello\""));
     }
 
@@ -378,12 +384,20 @@ mod tests {
             .lines()
             .find(|l| l.contains("Cancel"))
             .expect("hidden button line present");
-        assert!(hidden_line.contains("hidden"), "expected hidden flag, got: {:?}", hidden_line);
+        assert!(
+            hidden_line.contains("hidden"),
+            "expected hidden flag, got: {:?}",
+            hidden_line
+        );
         let shown_line = text
             .lines()
             .find(|l| l.contains("Confirm"))
             .expect("shown button line present");
-        assert!(!shown_line.contains("hidden"), "shown button should not carry hidden, got: {:?}", shown_line);
+        assert!(
+            !shown_line.contains("hidden"),
+            "shown button should not carry hidden, got: {:?}",
+            shown_line
+        );
     }
 
     #[test]

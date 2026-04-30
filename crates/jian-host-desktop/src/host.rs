@@ -286,8 +286,8 @@ impl DesktopHost {
         path: impl AsRef<std::path::Path>,
     ) -> Result<std::path::PathBuf, String> {
         let path = path.as_ref();
-        let src = std::fs::read_to_string(path)
-            .map_err(|e| format!("read {}: {}", path.display(), e))?;
+        let src =
+            std::fs::read_to_string(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
         let schema = jian_ops_schema::load_str(&src)
             .map_err(|e| format!("parse {}: {}", path.display(), e))?
             .value;
@@ -296,11 +296,7 @@ impl DesktopHost {
         // so a downstream layout failure can roll the runtime back
         // to a consistent state rather than leaving it on the new
         // document with a stale layout / spatial index.
-        let prev_schema = self
-            .runtime
-            .document
-            .as_ref()
-            .map(|d| d.schema.clone());
+        let prev_schema = self.runtime.document.as_ref().map(|d| d.schema.clone());
         let viewport = self.runtime.viewport.size;
         let viewport_pair = (viewport.width, viewport.height);
 
@@ -529,11 +525,7 @@ mod tests {
         assert_eq!(new_id, Some("b"));
         // But the count signal survives — `replace_document` uses
         // `SeedMode::PreserveExisting` for the same key, so 7 stays.
-        let count = host
-            .runtime
-            .state
-            .app_get("count")
-            .and_then(|v| v.as_i64());
+        let count = host.runtime.state.app_get("count").and_then(|v| v.as_i64());
         assert_eq!(count, Some(7));
     }
 

@@ -108,9 +108,7 @@ pub fn run_type(
 /// "does this path exist" check; we don't second-guess it here.
 fn extract_state_path(node: &jian_ops_schema::node::PenNode) -> Result<String, &'static str> {
     let json = serde_json::to_value(node).map_err(|_| "node failed to serialise")?;
-    let bindings = json
-        .get("bindings")
-        .ok_or("node has no `bindings` block")?;
+    let bindings = json.get("bindings").ok_or("node has no `bindings` block")?;
     let raw = bindings
         .get("bind:value")
         .ok_or("node has no `bindings.bind:value` to write into")?
@@ -176,7 +174,10 @@ mod tests {
     #[test]
     fn type_appends_to_bound_state() {
         let mut rt = rt_with(input_doc());
-        let sel = Selector { id: Some("field".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("field".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "hi", None);
         assert!(out.ok, "expected ok, got {:?}", out);
         let v = rt.state.app_get("draft").map(|v| v.0).unwrap();
@@ -195,7 +196,10 @@ mod tests {
     fn type_clear_replaces_existing_value() {
         let mut rt = rt_with(input_doc());
         rt.state.app_set("draft", serde_json::json!("old"));
-        let sel = Selector { id: Some("field".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("field".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "new", Some(true));
         assert!(out.ok);
         let v = rt.state.app_get("draft").map(|v| v.0).unwrap();
@@ -205,7 +209,10 @@ mod tests {
     #[test]
     fn type_with_no_match_returns_not_found() {
         let mut rt = rt_with(input_doc());
-        let sel = Selector { id: Some("nope".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("nope".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "x", None);
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("NotFound"));
@@ -225,7 +232,10 @@ mod tests {
           ]
         }"##;
         let mut rt = rt_with(doc);
-        let sel = Selector { id: Some("plain".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("plain".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "hello", None);
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("Invalid"));
@@ -249,7 +259,10 @@ mod tests {
           ]
         }"##;
         let mut rt = rt_with(doc);
-        let sel = Selector { id: Some("f".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("f".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "x", None);
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("Invalid"));
@@ -275,7 +288,10 @@ mod tests {
           ]
         }"##;
         let mut rt = rt_with(doc);
-        let sel = Selector { id: Some("f".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("f".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "hello", Some(true));
         assert!(out.ok, "{:?}", out);
         let v = rt.state.app_get("items[0].title").map(|v| v.0).unwrap();
@@ -299,7 +315,10 @@ mod tests {
           ]
         }"##;
         let mut rt = rt_with(doc);
-        let sel = Selector { id: Some("f".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("f".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "x", None);
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("Invalid"));
@@ -322,7 +341,10 @@ mod tests {
           ]
         }"##;
         let mut rt = rt_with(doc);
-        let sel = Selector { id: Some("f".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("f".into()),
+            ..Default::default()
+        };
         let out = run_type(&mut rt, &sel, "+1", None);
         assert!(out.ok);
         let v = rt.state.app_get("draft").map(|v| v.0).unwrap();

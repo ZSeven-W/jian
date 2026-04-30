@@ -345,9 +345,10 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn resolve_path_arg_decodes_percent_escapes() {
-        let p =
-            resolve_path_arg(Path::new("file:///tmp/with%20space/CJ%E4%B8%AD%E6%96%87.op"))
-                .unwrap();
+        let p = resolve_path_arg(Path::new(
+            "file:///tmp/with%20space/CJ%E4%B8%AD%E6%96%87.op",
+        ))
+        .unwrap();
         assert_eq!(p, PathBuf::from("/tmp/with space/CJ中文.op"));
     }
 

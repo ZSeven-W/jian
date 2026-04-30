@@ -40,11 +40,11 @@
 
 mod raster;
 
-#[cfg(all(target_os = "macos", feature = "metal"))]
-pub mod metal;
 #[cfg(all(target_os = "windows", feature = "d3d"))]
 pub mod d3d;
 #[cfg(all(target_os = "linux", feature = "gl"))]
 pub mod gl;
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub mod metal;
 
 pub use raster::SkiaSurface;

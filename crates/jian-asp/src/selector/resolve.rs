@@ -246,10 +246,7 @@ fn matches_leaf_predicates(data: &NodeData, sel: &Selector) -> bool {
 /// times per second).
 fn node_semantic_role(node: &PenNode) -> Option<String> {
     let v = serde_json::to_value(node).ok()?;
-    v.get("semantics")?
-        .get("role")?
-        .as_str()
-        .map(str::to_owned)
+    v.get("semantics")?.get("role")?.as_str().map(str::to_owned)
 }
 
 /// Map a `PenNode` variant to its wire-shape role string. Mirrors

@@ -117,9 +117,7 @@ impl NetworkClient for DesktopNetworkClient {
         });
         match rx.await {
             Ok(r) => r,
-            Err(_canceled) => Err(
-                "network worker thread dropped before sending a response".into(),
-            ),
+            Err(_canceled) => Err("network worker thread dropped before sending a response".into()),
         }
     }
 }

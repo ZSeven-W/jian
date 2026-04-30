@@ -25,16 +25,16 @@ impl StdioTransport {
     /// Build the production transport reading `std::io::stdin()` and
     /// writing `std::io::stdout()`.
     pub fn on_stdio() -> Self {
-        Self::from_streams(BufReader::new(StdinReader(std::io::stdin())), Box::new(std::io::stdout()))
+        Self::from_streams(
+            BufReader::new(StdinReader(std::io::stdin())),
+            Box::new(std::io::stdout()),
+        )
     }
 
     /// Build from arbitrary boxed streams. Tests pair an
     /// `&[u8]`-backed `BufReader` with a `Vec<u8>` writer; the
     /// production caller hands in stdin / stdout.
-    pub fn from_streams(
-        reader: impl BufRead + 'static,
-        writer: Box<dyn Write>,
-    ) -> Self {
+    pub fn from_streams(reader: impl BufRead + 'static, writer: Box<dyn Write>) -> Self {
         Self {
             reader: Box::new(reader),
             writer,
@@ -180,8 +180,7 @@ mod tests {
         let (mut t, out) = rig(&input);
         let line = t.read_line().unwrap();
         assert_eq!(line, req);
-        t.write_line(r#"{"id":1,"ok":true,"body":"bye"}"#)
-            .unwrap();
+        t.write_line(r#"{"id":1,"ok":true,"body":"bye"}"#).unwrap();
         let written = String::from_utf8(out.borrow().clone()).unwrap();
         assert_eq!(written, "{\"id\":1,\"ok\":true,\"body\":\"bye\"}\n");
     }

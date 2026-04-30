@@ -282,7 +282,10 @@ impl Runtime {
     /// On a 1000-node document with ~100 visible nodes, this
     /// drops the first spatial build from O(1000 log 1000) to
     /// O(100 log 100) — the C19 measurement target.
-    pub fn rebuild_spatial_for_first_frame(&mut self, viewport: crate::geometry::Rect) -> Vec<NodeBBox> {
+    pub fn rebuild_spatial_for_first_frame(
+        &mut self,
+        viewport: crate::geometry::Rect,
+    ) -> Vec<NodeBBox> {
         let doc = self.document.as_ref().expect("no document loaded");
         let mut visible: Vec<NodeBBox> = Vec::new();
         let mut hidden: Vec<NodeBBox> = Vec::new();

@@ -111,11 +111,7 @@ fn startup_driver_runs_every_phase_exactly_once() {
     let report = futures::executor::block_on(driver.run(StartupConfig::default()))
         .expect("driver.run returns Ok");
     for phase in StartupPhase::ALL {
-        let timings: Vec<_> = report
-            .phases
-            .iter()
-            .filter(|t| t.phase == *phase)
-            .collect();
+        let timings: Vec<_> = report.phases.iter().filter(|t| t.phase == *phase).collect();
         assert_eq!(
             timings.len(),
             1,

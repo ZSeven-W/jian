@@ -168,10 +168,9 @@ mod tests {
 
     #[test]
     fn tap_verb_round_trips() {
-        let v: Verb = serde_json::from_str(
-            r#"{"verb":"tap","selector":{"role":"button","text":"Save"}}"#,
-        )
-        .unwrap();
+        let v: Verb =
+            serde_json::from_str(r#"{"verb":"tap","selector":{"role":"button","text":"Save"}}"#)
+                .unwrap();
         match v {
             Verb::Tap { selector } => {
                 assert_eq!(selector.role.as_deref(), Some("button"));

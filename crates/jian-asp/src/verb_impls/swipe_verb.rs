@@ -197,11 +197,22 @@ mod tests {
     #[test]
     fn swipe_left_emits_pan_start_and_end() {
         let mut rt = rt_with(pannable_doc());
-        let sel = Selector { id: Some("card".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("card".into()),
+            ..Default::default()
+        };
         let out = run_swipe(&mut rt, &sel, ScrollDir::Left, None);
         assert!(out.ok, "expected ok, got {:?}", out);
-        let started = rt.state.app_get("started").and_then(|v| v.as_i64()).unwrap_or(0);
-        let ended = rt.state.app_get("ended").and_then(|v| v.as_i64()).unwrap_or(0);
+        let started = rt
+            .state
+            .app_get("started")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let ended = rt
+            .state
+            .app_get("ended")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         assert!(started >= 1, "PanStart handler should run at least once");
         assert!(ended >= 1, "PanEnd handler should run at least once");
     }
@@ -209,7 +220,10 @@ mod tests {
     #[test]
     fn swipe_with_no_match_returns_not_found() {
         let mut rt = rt_with(pannable_doc());
-        let sel = Selector { id: Some("nope".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("nope".into()),
+            ..Default::default()
+        };
         let out = run_swipe(&mut rt, &sel, ScrollDir::Up, Some(80.0));
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("NotFound"));
@@ -231,13 +245,24 @@ mod tests {
     #[test]
     fn swipe_subthreshold_distance_returns_invalid() {
         let mut rt = rt_with(pannable_doc());
-        let sel = Selector { id: Some("card".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("card".into()),
+            ..Default::default()
+        };
         // 4 < pan threshold 8 — must reject so a tap doesn't slip through.
         let out = run_swipe(&mut rt, &sel, ScrollDir::Right, Some(4.0));
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("Invalid"));
-        let started = rt.state.app_get("started").and_then(|v| v.as_i64()).unwrap_or(0);
-        let ended = rt.state.app_get("ended").and_then(|v| v.as_i64()).unwrap_or(0);
+        let started = rt
+            .state
+            .app_get("started")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let ended = rt
+            .state
+            .app_get("ended")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
         assert_eq!(started, 0, "subthreshold swipe must not fire any handler");
         assert_eq!(ended, 0);
     }
@@ -245,7 +270,10 @@ mod tests {
     #[test]
     fn swipe_negative_distance_is_treated_as_magnitude() {
         let mut rt = rt_with(pannable_doc());
-        let sel = Selector { id: Some("card".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("card".into()),
+            ..Default::default()
+        };
         // Distance -50; direction picks the sign. Right swipe → x
         // increases by |-50| = 50 from the matched card's centre.
         let out = run_swipe(&mut rt, &sel, ScrollDir::Right, Some(-50.0));
@@ -256,7 +284,10 @@ mod tests {
         // schema's `x`/`y` here.
         let narrative = out.narrative.clone();
         let start_open = narrative.find(": (").expect("start position present") + 3;
-        let arrow = narrative[start_open..].find(") →").expect("start delimiter") + start_open;
+        let arrow = narrative[start_open..]
+            .find(") →")
+            .expect("start delimiter")
+            + start_open;
         let start = &narrative[start_open..arrow];
         let mut parts = start.split(", ");
         let sx: f32 = parts.next().unwrap().parse().unwrap();

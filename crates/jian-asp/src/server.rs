@@ -11,7 +11,7 @@
 //!    Anything else returns `Err` immediately so the host knows
 //!    the agent is misbehaving.
 //! 2. Validate the token via the host-supplied
-//!    [`session::TokenValidator`]. On success, build a
+//!    [`crate::session::TokenValidator`]. On success, build a
 //!    [`Session`] with the granted permission tier; on failure,
 //!    write a denied-response line and return.
 //! 3. Loop: read a line → parse a `Request` → dispatch →
@@ -81,9 +81,8 @@ pub fn run_session(
 ) -> Result<(), ServerError> {
     // 1. Handshake.
     let line = transport.read_line()?;
-    let req: Request = serde_json::from_str(&line).map_err(|e| {
-        ServerError::BadHandshake(format!("first line is not a Request: {}", e))
-    })?;
+    let req: Request = serde_json::from_str(&line)
+        .map_err(|e| ServerError::BadHandshake(format!("first line is not a Request: {}", e)))?;
     let (token, client, version) = match req.verb {
         Verb::Handshake {
             token,
@@ -138,10 +137,8 @@ pub fn run_session(
         let req: Request = match serde_json::from_str(&line) {
             Ok(r) => r,
             Err(e) => {
-                let payload = OutcomePayload::invalid(
-                    "request",
-                    &format!("could not parse request: {}", e),
-                );
+                let payload =
+                    OutcomePayload::invalid("request", &format!("could not parse request: {}", e));
                 // Use id=0 because we couldn't read the agent's
                 // intended id. Agents typically log the parse
                 // failure and resync from the next line.
@@ -180,9 +177,9 @@ mod tests {
     use crate::session::{Permission, StaticTokenValidator};
     use crate::transport::stdio::StdioTransport;
     use jian_ops_schema::document::PenDocument;
+    use std::cell::RefCell;
     use std::io::{Cursor, Write};
     use std::rc::Rc;
-    use std::cell::RefCell;
 
     /// In-memory `Write` impl that captures bytes into a shared
     /// `Rc<RefCell<Vec<u8>>>` so the test inspects what the
@@ -256,8 +253,8 @@ mod tests {
         let (mut transport, out) = rig(input);
         let validator = StaticTokenValidator::new("right", Permission::Observe);
         let mut runtime = make_runtime();
-        let err = run_session(&mut transport, &validator, &mut runtime, Instant::now())
-            .unwrap_err();
+        let err =
+            run_session(&mut transport, &validator, &mut runtime, Instant::now()).unwrap_err();
         assert!(matches!(err, ServerError::AuthFailed(_)));
         let lines = read_lines(&out);
         // One denied response was written before bailing.
@@ -273,8 +270,8 @@ mod tests {
         let (mut transport, _out) = rig(input);
         let validator = StaticTokenValidator::new("secret", Permission::Observe);
         let mut runtime = make_runtime();
-        let err = run_session(&mut transport, &validator, &mut runtime, Instant::now())
-            .unwrap_err();
+        let err =
+            run_session(&mut transport, &validator, &mut runtime, Instant::now()).unwrap_err();
         assert!(
             matches!(err, ServerError::BadHandshake(_)),
             "expected BadHandshake, got {:?}",

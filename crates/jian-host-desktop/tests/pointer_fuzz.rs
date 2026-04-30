@@ -73,7 +73,9 @@ const ITER: usize = 10_000;
 
 #[test]
 fn pointer_fuzz_does_not_panic() {
-    let schema = jian_ops_schema::load_str(FUZZ_OP).expect("FUZZ_OP parses").value;
+    let schema = jian_ops_schema::load_str(FUZZ_OP)
+        .expect("FUZZ_OP parses")
+        .value;
     let mut runtime = Runtime::new_from_document(schema).expect("runtime build");
     runtime.build_layout((800.0, 600.0)).expect("layout");
     runtime.rebuild_spatial();
@@ -234,11 +236,7 @@ fn pointer_fuzz_does_not_panic() {
 /// CursorMoved without position changes — return `None`). The
 /// fuzz body uses this to assert the run actually exercised the
 /// translator instead of dropping every event silently.
-fn drive(
-    translator: &mut PointerTranslator,
-    runtime: &mut Runtime,
-    ev: &WindowEvent,
-) -> bool {
+fn drive(translator: &mut PointerTranslator, runtime: &mut Runtime, ev: &WindowEvent) -> bool {
     match translator.translate(ev) {
         Some(pe) => {
             runtime.dispatch_pointer(pe);

@@ -17,7 +17,7 @@
 //!   so an agent can retry without round-tripping for help.
 //!
 //! Indentation is two spaces per depth level. Truncation: the
-//! tree is hard-capped at [`MAX_NODES`] to keep agent context
+//! tree is hard-capped at `MAX_NODES` (500) to keep agent context
 //! windows from blowing up on a tree with thousands of nodes;
 //! the trailing line includes `...truncated at N nodes...` when
 //! the cap fires so the agent knows the view is partial.
@@ -27,9 +27,7 @@ use jian_core::Runtime;
 use jian_ops_schema::node::PenNode;
 
 use crate::protocol::{DetailKind, OutcomePayload, SnapshotFormat};
-use crate::verb_impls::find_verb::{
-    node_is_statically_visible, role_for, visible_text,
-};
+use crate::verb_impls::find_verb::{node_is_statically_visible, role_for, visible_text};
 
 /// Hard cap on the snapshot's node count. Default budget — 500 is
 /// well past any realistic single-screen `.op` document while
@@ -73,10 +71,7 @@ pub fn run_snapshot(runtime: &Runtime, format: Option<SnapshotFormat>) -> Outcom
 /// — there are no pixel bytes to count without a renderer.
 fn snapshot_none(runtime: &Runtime) -> OutcomePayload {
     let Some(doc) = runtime.document.as_ref() else {
-        return OutcomePayload::error(
-            "snapshot",
-            "no document loaded — nothing to snapshot",
-        );
+        return OutcomePayload::error("snapshot", "no document loaded — nothing to snapshot");
     };
     let total = doc.tree.len();
     let laid_out = doc
@@ -100,10 +95,7 @@ fn snapshot_none(runtime: &Runtime) -> OutcomePayload {
     OutcomePayload::ok(
         "snapshot",
         None,
-        format!(
-            "render verified: {}/{} node(s) laid out",
-            laid_out, total
-        ),
+        format!("render verified: {}/{} node(s) laid out", laid_out, total),
     )
 }
 
@@ -119,7 +111,15 @@ fn snapshot_text_tree(runtime: &Runtime) -> OutcomePayload {
             truncated = true;
             break;
         }
-        write_subtree(&mut buf, &doc.tree, runtime, root, 0, &mut count, &mut truncated);
+        write_subtree(
+            &mut buf,
+            &doc.tree,
+            runtime,
+            root,
+            0,
+            &mut count,
+            &mut truncated,
+        );
     }
     if truncated {
         buf.push_str(&format!(
@@ -203,10 +203,7 @@ fn write_subtree(
 /// see the same value the resolver matches against.
 fn author_role(node: &PenNode) -> Option<String> {
     let v = serde_json::to_value(node).ok()?;
-    v.get("semantics")?
-        .get("role")?
-        .as_str()
-        .map(str::to_owned)
+    v.get("semantics")?.get("role")?.as_str().map(str::to_owned)
 }
 
 /// Collapse whitespace runs into a single space and cap to `cap`
@@ -273,7 +270,10 @@ mod tests {
         assert!(out.ok, "expected ok, got {:?}", out);
         let detail = out.detail.expect("detail present");
         match detail {
-            DetailKind::Snapshot { format, bytes_or_text } => {
+            DetailKind::Snapshot {
+                format,
+                bytes_or_text,
+            } => {
                 assert_eq!(format, "text_tree");
                 assert!(bytes_or_text.contains("frame #root"));
                 assert!(bytes_or_text.contains("rectangle #btn"));

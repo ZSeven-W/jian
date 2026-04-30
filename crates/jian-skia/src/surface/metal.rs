@@ -58,10 +58,8 @@ pub fn from_window(
     _width: i32,
     _height: i32,
 ) -> Result<SkiaSurface, &'static str> {
-    Err(
-        "jian-skia: Metal GPU surface not yet implemented; \
+    Err("jian-skia: Metal GPU surface not yet implemented; \
          `--features metal` enables the API surface but the platform \
          glue is a Plan 8 Task 2 follow-up. Hosts that hit this \
-         error should fall back to `SkiaSurface::new_raster`.",
-    )
+         error should fall back to `SkiaSurface::new_raster`.")
 }

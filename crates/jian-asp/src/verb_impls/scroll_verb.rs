@@ -7,7 +7,8 @@
 //! `events.onScroll` handler — no gesture-arena rivalry, so
 //! wheel doesn't compete with Tap/Swipe.
 //!
-//! Convention (matches [`crate::WheelEvent`] doc): positive `delta.y`
+//! Convention (matches `jian_core::gesture::pointer::WheelEvent`'s
+//! doc): positive `delta.y`
 //! means *content moves up* (i.e. the user scrolled up). To keep
 //! the verb's surface intuitive we mirror the OS convention —
 //! `direction: Up` produces `delta.y = +distance`, so a list
@@ -101,8 +102,7 @@ pub fn run_scroll(
         ),
     )
     .with_hint(if count == 0 {
-        "no handlers fired — confirm the target (or an ancestor) has `events.onScroll`"
-            .to_owned()
+        "no handlers fired — confirm the target (or an ancestor) has `events.onScroll`".to_owned()
     } else {
         format!("{} `onScroll` handler(s) fired", count)
     })
@@ -146,7 +146,10 @@ mod tests {
     #[test]
     fn scroll_down_fires_handler_on_target() {
         let mut rt = rt_with(scroll_doc());
-        let sel = Selector { id: Some("list".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("list".into()),
+            ..Default::default()
+        };
         let out = run_scroll(&mut rt, &sel, ScrollDir::Down, None);
         assert!(out.ok, "expected ok, got {:?}", out);
         let v = rt.state.app_get("y").and_then(|v| v.as_i64()).unwrap_or(-1);
@@ -156,7 +159,10 @@ mod tests {
     #[test]
     fn scroll_with_no_match_returns_not_found() {
         let mut rt = rt_with(scroll_doc());
-        let sel = Selector { id: Some("nope".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("nope".into()),
+            ..Default::default()
+        };
         let out = run_scroll(&mut rt, &sel, ScrollDir::Up, Some(80.0));
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("NotFound"));
@@ -176,7 +182,10 @@ mod tests {
           ]
         }"##;
         let mut rt = rt_with(doc);
-        let sel = Selector { id: Some("plain".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("plain".into()),
+            ..Default::default()
+        };
         let out = run_scroll(&mut rt, &sel, ScrollDir::Down, None);
         assert!(out.ok);
         assert!(
@@ -203,7 +212,10 @@ mod tests {
     #[test]
     fn scroll_zero_distance_returns_invalid() {
         let mut rt = rt_with(scroll_doc());
-        let sel = Selector { id: Some("list".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("list".into()),
+            ..Default::default()
+        };
         let out = run_scroll(&mut rt, &sel, ScrollDir::Up, Some(0.0));
         assert!(!out.ok);
         assert_eq!(out.error.as_deref(), Some("Invalid"));
@@ -217,7 +229,10 @@ mod tests {
         // backwards". We always interpret the sign via the
         // `direction` field — `distance` is a magnitude.
         let mut rt = rt_with(scroll_doc());
-        let sel = Selector { id: Some("list".into()), ..Default::default() };
+        let sel = Selector {
+            id: Some("list".into()),
+            ..Default::default()
+        };
         let out = run_scroll(&mut rt, &sel, ScrollDir::Up, Some(-50.0));
         assert!(out.ok);
         assert!(

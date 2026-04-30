@@ -172,11 +172,7 @@ impl Session {
         }
         let total = self.audit.len();
         let take = last_n.min(total);
-        self.audit
-            .iter()
-            .skip(total - take)
-            .cloned()
-            .collect()
+        self.audit.iter().skip(total - take).cloned().collect()
     }
 
     /// Convenience: derive an `AuditEntry` from the `OutcomePayload`
