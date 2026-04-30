@@ -8,11 +8,13 @@
 //! report. Later Plan 19 tasks register the real Runtime-coupled
 //! implementations on top.
 
+mod bootstrap;
 mod driver;
 mod phase;
 mod report;
 mod spawn;
 
+pub use bootstrap::{BootstrapHandles, BootstrapSource, HostAgnosticBootstrap};
 pub use driver::{PhaseResult, StartupConfig, StartupDriver, StartupError};
 pub use phase::{StartupPhase, StartupStage};
 pub use report::{MergeError, PhaseTiming, StartupReport};
