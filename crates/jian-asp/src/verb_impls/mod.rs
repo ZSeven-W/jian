@@ -38,10 +38,14 @@ use jian_core::Runtime;
 #[cfg(feature = "dev-asp")]
 pub mod find_verb;
 #[cfg(feature = "dev-asp")]
+pub mod state_verb;
+#[cfg(feature = "dev-asp")]
 pub mod tap_verb;
 
 #[cfg(feature = "dev-asp")]
 pub use find_verb::collect_node_summaries;
+#[cfg(feature = "dev-asp")]
+pub use state_verb::{run_inspect_state, run_navigate, run_set_state};
 #[cfg(feature = "dev-asp")]
 pub use tap_verb::run_tap;
 
@@ -260,13 +264,17 @@ mod tests {
 
     #[test]
     fn dispatch_unimplemented_verb_returns_error() {
+        // `wait_for` still falls through to the not-yet-impl
+        // arm — Phase 3 fills it in once the expression
+        // evaluator borrows are settled. Pin the placeholder
+        // shape so the agent gets a clear error rather than a
+        // silent ok.
         let mut rt = make_runtime_with_doc(fixture_doc());
         let mut session = Session::new(Permission::Full, "test", "0.1");
         let (out, _) = dispatch(
-            &Verb::SetState {
-                scope: "$app".into(),
-                key: "x".into(),
-                value_json: "1".into(),
+            &Verb::WaitFor {
+                expr: "$app.x == 1".into(),
+                timeout_ms: Some(1000),
             },
             &mut rt,
             &mut session,
@@ -347,6 +355,17 @@ pub fn dispatch(
             (run_find(runtime, selector, *limit), DispatchControl::Continue)
         }
         Verb::Tap { selector } => (run_tap(runtime, selector), DispatchControl::Continue),
+        Verb::Navigate { path, mode } => {
+            (run_navigate(runtime, path, *mode), DispatchControl::Continue)
+        }
+        Verb::SetState {
+            scope,
+            key,
+            value_json,
+        } => (
+            run_set_state(runtime, scope, key, value_json),
+            DispatchControl::Continue,
+        ),
         Verb::Inspect { selector, what } => {
             (run_inspect(runtime, selector.as_ref(), *what), DispatchControl::Continue)
         }
@@ -496,11 +515,23 @@ fn run_inspect(
             OutcomePayload::ok("inspect", None, "route inspected")
                 .with_detail(DetailKind::State { entries })
         }
-        // `state` and `ax_tree` need StateGraph + a11y-tree
-        // generators that don't exist yet. Defer to Phase 3.
+        InspectKind::State => {
+            // The agent's selector becomes a scope discriminator
+            // here: `selector.id` is interpreted as the scope
+            // name (`$app` / `$vars`). Phase 3.5 may give
+            // `inspect what=state` a richer parameter shape;
+            // this scope-via-id pattern keeps the wire surface
+            // backward-compatible until then.
+            let scope = sel
+                .and_then(|s| s.id.as_deref())
+                .unwrap_or("$app");
+            run_inspect_state(runtime, scope)
+        }
+        // `ax_tree` needs an a11y-tree generator that doesn't
+        // exist yet. Defer to Phase 4.
         _ => OutcomePayload::error(
             "inspect",
-            "inspect what=state | ax_tree not yet implemented",
+            "inspect what=ax_tree not yet implemented",
         ),
     }
 }
