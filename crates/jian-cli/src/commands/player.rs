@@ -103,9 +103,9 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
 ///
 /// `file://` handling: strip the scheme, percent-decode the rest.
 /// We don't pull in `url::Url` for this tiny case — desktop file
-/// managers emit ASCII-only URIs for the common case (`file:///`
-/// + an absolute path), and we percent-decode the handful of bytes
-/// (`%20`, `%2F`, …) inline.
+/// managers emit ASCII-only URIs for the common case
+/// (`file:///` + an absolute path), and we percent-decode the
+/// handful of bytes (`%20`, `%2F`, …) inline.
 ///
 /// `jian://` is rejected with a clear error: deep links need to
 /// route through the running runtime's URL handler, not the CLI's

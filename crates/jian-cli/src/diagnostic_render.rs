@@ -98,10 +98,7 @@ fn env_allows_color() -> bool {
     if std::env::var_os("NO_COLOR").is_some() {
         return false;
     }
-    match std::env::var("TERM") {
-        Ok(t) if t == "dumb" => false,
-        _ => true,
-    }
+    !matches!(std::env::var("TERM"), Ok(t) if t == "dumb")
 }
 
 /// Render every warning into `buf`. Caller decides where `buf` goes
