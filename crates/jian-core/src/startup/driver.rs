@@ -36,7 +36,7 @@
 //!   abstraction to let hosts plug in tokio / async-std / single-threaded
 //!   executors with their own priority semantics.
 
-use crate::startup::phase::StartupPhase;
+use crate::startup::phase::{StartupPhase, StartupStage};
 use crate::startup::report::{PhaseTiming, StartupReport};
 use futures::future::{FutureExt, LocalBoxFuture};
 use futures::stream::{FuturesUnordered, StreamExt};
@@ -140,14 +140,85 @@ impl StartupDriver {
         StartupPhase::ALL.iter().all(|p| self.impls.contains_key(p))
     }
 
-    /// Drive the pipeline. Per-completion topological execution; siblings
-    /// run concurrently and a slow sibling never blocks a downstream phase
-    /// whose own deps are already satisfied.
-    pub async fn run(mut self, _config: StartupConfig) -> Result<StartupReport, StartupError> {
+    /// Drive the entire pipeline (every phase in [`StartupPhase::ALL`]).
+    ///
+    /// Use [`Self::run_stage`] when the host needs to drive a single
+    /// [`StartupStage`] in isolation (the canonical Plan 19 host
+    /// integration: `DataPath` pre-window, `Visual` in-resumed,
+    /// `Background` post-interactive). `run` is kept as the convenience
+    /// shim for `jian perf startup` and tests that want one
+    /// end-to-end timing.
+    pub async fn run(self, config: StartupConfig) -> Result<StartupReport, StartupError> {
+        // `run` drives every phase in ALL, so the prior-done set is
+        // empty: nothing has run yet, every dep must be satisfied by
+        // an in-stage impl.
+        self.run_filtered(|_| true, HashSet::new(), config).await
+    }
+
+    /// Drive only the phases in `stage`.
+    ///
+    /// Cross-stage dependencies must be proven satisfied by `prior` —
+    /// a [`StartupReport`] accumulated from preceding stage runs. The
+    /// driver pre-seeds its `done` set from `prior.phases` so a
+    /// `RenderFirstFrame` (Visual) sees its `InitGpuContext` (DataPath)
+    /// dep as satisfied without the caller having to re-register
+    /// `InitGpuContext` for the visual driver.
+    ///
+    /// If a phase in this stage has cross-stage deps that are NOT in
+    /// `prior`, the driver returns `StartupError::NoProgress` with the
+    /// missing phase. This makes the contract auditable: a Visual run
+    /// without a preceding DataPath fails loudly instead of completing
+    /// against a phantom timeline (codex review round 3, HIGH).
+    ///
+    /// Per Plan 19 host integration:
+    /// 1. `let report = StartupReport::default();`
+    /// 2. `report.merge_into(driver1.run_stage(DataPath, &report, cfg).await?);`
+    /// 3. (open window)
+    /// 4. `report.merge_into(driver2.run_stage(Visual, &report, cfg).await?);`
+    /// 5. `report.merge_into(driver3.run_stage(Background, &report, cfg).await?);`
+    pub async fn run_stage(
+        self,
+        stage: StartupStage,
+        prior: &StartupReport,
+        config: StartupConfig,
+    ) -> Result<StartupReport, StartupError> {
+        let prior_done: HashSet<StartupPhase> = prior.phases.iter().map(|t| t.phase).collect();
+        self.run_filtered(move |p| p.stage() == stage, prior_done, config)
+            .await
+    }
+
+    /// Shared implementation behind `run` and `run_stage`. `selector`
+    /// returns `true` for phases this run should actually drive;
+    /// `prior_done` carries phases already completed by prior stages
+    /// (empty for `run`).
+    async fn run_filtered<F>(
+        mut self,
+        selector: F,
+        prior_done: HashSet<StartupPhase>,
+        _config: StartupConfig,
+    ) -> Result<StartupReport, StartupError>
+    where
+        F: Fn(StartupPhase) -> bool,
+    {
         let t0 = Instant::now();
         let mut report = StartupReport::default();
-        let mut pending: HashSet<StartupPhase> = StartupPhase::ALL.iter().copied().collect();
-        let mut done: HashSet<StartupPhase> = HashSet::with_capacity(StartupPhase::ALL.len());
+        // Pending = phases this stage owns and that prior stages
+        // haven't already completed. `done` only reflects phases
+        // proved completed by `prior_done`. Cross-stage deps that are
+        // neither in `done` nor in this stage's pending set will trip
+        // the dependency check below and surface as NoProgress.
+        let mut pending: HashSet<StartupPhase> = StartupPhase::ALL
+            .iter()
+            .copied()
+            .filter(|p| selector(*p) && !prior_done.contains(p))
+            .collect();
+        let mut done: HashSet<StartupPhase> = prior_done;
+        // Drop impls for phases we won't be driving so they're not
+        // accidentally invoked by `dispatch_phase` and so callers
+        // re-using a single driver across stages don't carry stale
+        // closures. (Hosts typically build a fresh driver per stage
+        // anyway.)
+        self.impls.retain(|p, _| selector(*p));
         let mut in_flight: FuturesUnordered<
             LocalBoxFuture<'static, Result<PhaseTiming, StartupError>>,
         > = FuturesUnordered::new();
@@ -584,5 +655,220 @@ mod tests {
         }
         block_on(d.run(StartupConfig::default())).expect("run ok");
         assert!(local.get(), "EventPumpReady should have flipped the flag");
+    }
+
+    fn register_for_stage(driver: &mut StartupDriver, stage: StartupStage) {
+        for p in StartupPhase::ALL {
+            if p.stage() == stage {
+                driver.register(*p, ok_phase());
+            }
+        }
+    }
+
+    /// Build a synthetic `StartupReport` whose `phases` cover every
+    /// phase in `stage` so a downstream `run_stage(later, &prior, ...)`
+    /// sees its cross-stage deps satisfied without re-registering them.
+    fn synthetic_report_for_stage(stage: StartupStage) -> StartupReport {
+        let phases: Vec<PhaseTiming> = StartupPhase::ALL
+            .iter()
+            .copied()
+            .filter(|p| p.stage() == stage)
+            .map(|phase| PhaseTiming {
+                phase,
+                started_at_ms: 0.0,
+                duration_ms: 0.0,
+                on_critical: phase.is_critical(),
+                notes: None,
+            })
+            .collect();
+        StartupReport {
+            phases,
+            first_interactive_ms: 0.0,
+        }
+    }
+
+    #[test]
+    fn run_stage_data_path_completes_with_only_data_phase_impls() {
+        // The host-agnostic case: DataPath has no cross-stage deps, so
+        // an empty `prior` works.
+        let mut d = StartupDriver::new();
+        register_for_stage(&mut d, StartupStage::DataPath);
+        let prior = StartupReport::default();
+        let report =
+            block_on(d.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+                .expect("data path run ok");
+        let names: HashSet<_> = report.phases.iter().map(|t| t.phase).collect();
+        let expected: HashSet<_> = StartupPhase::ALL
+            .iter()
+            .copied()
+            .filter(|p| p.stage() == StartupStage::DataPath)
+            .collect();
+        assert_eq!(
+            names, expected,
+            "DataPath stage should record exactly its phases"
+        );
+        // Visual phases must NOT appear in this report.
+        for p in StartupPhase::ALL
+            .iter()
+            .filter(|p| p.stage() == StartupStage::Visual)
+        {
+            assert!(
+                !names.contains(p),
+                "Visual phase {p:?} leaked into a DataPath report"
+            );
+        }
+    }
+
+    #[test]
+    fn run_stage_visual_requires_data_phase_completions_in_prior() {
+        // Visual phases' cross-stage deps (RenderSplash → InitGpuContext +
+        // ParseSchema; RenderFirstFrame → InitGpuContext + LoadCoreFonts +
+        // ComputeFirstLayout + SeedStateGraph) are proven satisfied by a
+        // non-empty `prior` covering DataPath.
+        let mut d = StartupDriver::new();
+        register_for_stage(&mut d, StartupStage::Visual);
+        let prior = synthetic_report_for_stage(StartupStage::DataPath);
+        let report = block_on(d.run_stage(StartupStage::Visual, &prior, StartupConfig::default()))
+            .expect("visual run ok");
+        assert_eq!(report.phases.len(), 4, "Visual stage = 4 phases");
+        assert!(report.first_interactive_ms > 0.0);
+    }
+
+    #[test]
+    fn run_stage_visual_with_partial_prior_missing_one_data_phase_fails() {
+        // Codex round 4 MEDIUM: a regression that treats *any* non-empty
+        // prior as satisfying the Visual stage's cross-stage deps would
+        // pass the all-or-empty tests. Pin the contract: a prior that
+        // covers DataPath EXCEPT one required phase (`InitGpuContext`,
+        // which RenderSplash + RenderFirstFrame both depend on) must
+        // fail with NoProgress naming the unmet dep.
+        let mut d = StartupDriver::new();
+        register_for_stage(&mut d, StartupStage::Visual);
+        let mut prior = synthetic_report_for_stage(StartupStage::DataPath);
+        prior
+            .phases
+            .retain(|t| t.phase != StartupPhase::InitGpuContext);
+        let err = block_on(d.run_stage(StartupStage::Visual, &prior, StartupConfig::default()))
+            .expect_err("partial prior must fail to satisfy Visual deps");
+        match err {
+            StartupError::NoProgress { remaining } => {
+                assert!(
+                    remaining.contains(&StartupPhase::RenderSplash)
+                        || remaining.contains(&StartupPhase::RenderFirstFrame),
+                    "expected RenderSplash / RenderFirstFrame in remaining (their \
+                     InitGpuContext dep is unmet), got: {remaining:?}"
+                );
+            }
+            other => panic!("expected NoProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_stage_visual_without_prior_data_path_fails_loudly() {
+        // Codex round 3 HIGH: a Visual run with no prior DataPath must
+        // NOT silently succeed. With the prior-report contract the
+        // dependency check fails to make progress.
+        let mut d = StartupDriver::new();
+        register_for_stage(&mut d, StartupStage::Visual);
+        let empty = StartupReport::default();
+        let err = block_on(d.run_stage(StartupStage::Visual, &empty, StartupConfig::default()))
+            .expect_err("visual run without prior must fail");
+        match err {
+            StartupError::NoProgress { remaining } => {
+                assert!(
+                    remaining.contains(&StartupPhase::RenderFirstFrame)
+                        || remaining.contains(&StartupPhase::RenderSplash),
+                    "expected unmet visual deps, got remaining={remaining:?}"
+                );
+            }
+            other => panic!("expected NoProgress, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_stage_background_independent_of_other_stages() {
+        // BuildFullSpatial / LoadRemainingFonts / DecodeImages depend
+        // on ComputeFirstLayout / ParseSchema (DataPath); the prior
+        // report supplies them.
+        let mut d = StartupDriver::new();
+        register_for_stage(&mut d, StartupStage::Background);
+        let prior = synthetic_report_for_stage(StartupStage::DataPath);
+        let report =
+            block_on(d.run_stage(StartupStage::Background, &prior, StartupConfig::default()))
+                .expect("background run ok");
+        let names: HashSet<_> = report.phases.iter().map(|t| t.phase).collect();
+        assert_eq!(
+            names,
+            [
+                StartupPhase::BuildFullSpatial,
+                StartupPhase::LoadRemainingFonts,
+                StartupPhase::DecodeImages,
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
+        );
+        // Background doesn't touch first_interactive — that's Visual's job.
+        assert_eq!(report.first_interactive_ms, 0.0);
+    }
+
+    #[test]
+    fn run_stage_then_merge_yields_full_report() {
+        // The canonical host integration: drive each stage with its own
+        // driver, threading the cumulative report as `prior` each time.
+        let mut combined = StartupReport::default();
+
+        let mut d_data = StartupDriver::new();
+        register_for_stage(&mut d_data, StartupStage::DataPath);
+        let r_data =
+            block_on(d_data.run_stage(StartupStage::DataPath, &combined, StartupConfig::default()))
+                .unwrap();
+        combined.merge_into(r_data).unwrap();
+
+        let mut d_visual = StartupDriver::new();
+        register_for_stage(&mut d_visual, StartupStage::Visual);
+        let r_visual =
+            block_on(d_visual.run_stage(StartupStage::Visual, &combined, StartupConfig::default()))
+                .unwrap();
+        combined.merge_into(r_visual).unwrap();
+
+        let mut d_bg = StartupDriver::new();
+        register_for_stage(&mut d_bg, StartupStage::Background);
+        let r_bg = block_on(d_bg.run_stage(
+            StartupStage::Background,
+            &combined,
+            StartupConfig::default(),
+        ))
+        .unwrap();
+        combined.merge_into(r_bg).unwrap();
+
+        assert_eq!(combined.phases.len(), StartupPhase::ALL.len());
+        assert!(combined.first_interactive_ms > 0.0);
+    }
+
+    #[test]
+    fn run_stage_drops_other_stage_impls_silently() {
+        let mut d = StartupDriver::new();
+        register_all_noop(&mut d);
+        let prior = synthetic_report_for_stage(StartupStage::DataPath);
+        let report =
+            block_on(d.run_stage(StartupStage::Visual, &prior, StartupConfig::default())).unwrap();
+        assert_eq!(report.phases.len(), 4);
+    }
+
+    #[test]
+    fn run_stage_fails_when_a_stage_phase_is_unregistered() {
+        let mut d = StartupDriver::new();
+        for p in StartupPhase::ALL {
+            if p.stage() == StartupStage::DataPath && *p != StartupPhase::ParseSchema {
+                d.register(*p, ok_phase());
+            }
+        }
+        let prior = StartupReport::default();
+        let err = block_on(d.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+            .expect_err("run should fail");
+        assert!(matches!(
+            err,
+            StartupError::Unregistered(StartupPhase::ParseSchema)
+        ));
     }
 }

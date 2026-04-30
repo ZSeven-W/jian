@@ -4,6 +4,32 @@
 //! See `superpowers/plans/2026-04-17-jian-plan-19-cold-start-optimization.md`
 //! for the design context (C19 budgets, parallelism rules).
 
+/// Coarse-grained execution stage. Used by
+/// [`crate::startup::StartupDriver::run_stage`] to drive a typed subset
+/// of [`StartupPhase`] variants — see [`StartupPhase::stage`] for the
+/// per-phase mapping and the rationale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StartupStage {
+    /// Pre-window critical work: file I/O, parse, seed, tree, GPU init,
+    /// fonts, layout, visible spatial.
+    DataPath,
+    /// Post-`resumed` critical work that needs a `Window`: splash,
+    /// first frame, present, `EventPumpReady` marker.
+    Visual,
+    /// Post-paint non-critical work: full spatial fill, remaining
+    /// fonts, image decodes. Host schedules these after first-interactive.
+    Background,
+}
+
+impl StartupStage {
+    /// Every stage in declaration order, useful for iteration.
+    pub const ALL: &'static [StartupStage] = &[
+        StartupStage::DataPath,
+        StartupStage::Visual,
+        StartupStage::Background,
+    ];
+}
+
 /// One named step in the cold-start pipeline.
 ///
 /// Variants are ordered roughly along the critical path; `deps()` is the
@@ -87,6 +113,53 @@ impl StartupPhase {
             LoadCoreFonts | LoadRemainingFonts | DecodeImages => &[ParseSchema],
             EventPumpReady => &[PresentToSurface, BuildVisibleSpatial],
         }
+    }
+
+    /// Which startup stage this phase belongs to. Stages partition every
+    /// phase in `ALL` and form the public contract for
+    /// [`crate::startup::StartupDriver::run_stage`]:
+    ///
+    /// - [`StartupStage::DataPath`] — pre-window critical work (file I/O,
+    ///   schema parse, state seeding, layout, visible spatial,
+    ///   GPU-context init). Safe to run on a worker thread before
+    ///   any winit lifecycle event has fired; the host typically
+    ///   `block_on`s a driver configured for this stage right before
+    ///   `event_loop.run_app`.
+    /// - [`StartupStage::Visual`] — post-resumed critical work that needs
+    ///   a real `Window` + draw surface (Splash / FirstFrame / Present /
+    ///   the `EventPumpReady` marker that closes first-interactive).
+    ///   Hosts run these on the winit thread inside
+    ///   `ApplicationHandler::resumed`.
+    /// - [`StartupStage::Background`] — non-critical post-paint work
+    ///   (full spatial fill, remaining-font + image decodes). The host
+    ///   schedules these after first-interactive without blocking the
+    ///   user-visible budget.
+    pub fn stage(self) -> StartupStage {
+        use StartupPhase::*;
+        match self {
+            ReadFile | ParseSchema | SeedStateGraph | BuildNodeTree | InitGpuContext
+            | LoadCoreFonts | ComputeFirstLayout | BuildVisibleSpatial => StartupStage::DataPath,
+            RenderSplash | RenderFirstFrame | PresentToSurface | EventPumpReady => {
+                StartupStage::Visual
+            }
+            BuildFullSpatial | LoadRemainingFonts | DecodeImages => StartupStage::Background,
+        }
+    }
+
+    /// Whether this phase can run on a worker thread before the host has
+    /// opened a winit window. `DataPath` phases (and `Background` phases,
+    /// which only consume already-built data) are pre-window safe;
+    /// `Visual` phases are not.
+    ///
+    /// **This is an informational query, not an enforced invariant.**
+    /// The driver does not refuse a phase impl that is "wrong" for its
+    /// stage — registration is intentionally permissive so hosts can
+    /// stub a window-bound phase with a no-op for headless tests, etc.
+    /// Call sites that decide what work to front-load (`jian player`'s
+    /// pre-window block, `jian perf startup --dry-run-visual`)
+    /// consult this method to pick a safe phase set.
+    pub fn is_pre_window_safe(self) -> bool {
+        !matches!(self.stage(), StartupStage::Visual)
     }
 
     /// Whether this phase is on the critical path to first-interactive.
@@ -209,6 +282,72 @@ mod tests {
                 "{p:?} should not depend on EventPumpReady"
             );
         }
+    }
+
+    #[test]
+    fn stages_partition_all_phases() {
+        // Every phase belongs to exactly one stage; the union is `ALL`.
+        let mut seen: HashSet<StartupPhase> = HashSet::new();
+        for stage in StartupStage::ALL {
+            for p in StartupPhase::ALL {
+                if p.stage() == *stage {
+                    assert!(seen.insert(*p), "{p:?} mapped to two stages");
+                }
+            }
+        }
+        let in_all: HashSet<_> = StartupPhase::ALL.iter().copied().collect();
+        assert_eq!(seen, in_all, "stages do not cover every phase in ALL");
+    }
+
+    #[test]
+    fn data_path_stage_is_pre_window_safe() {
+        for p in StartupPhase::ALL {
+            let safe = p.is_pre_window_safe();
+            let stage = p.stage();
+            match stage {
+                StartupStage::DataPath | StartupStage::Background => {
+                    assert!(safe, "{p:?} ({stage:?}) should be pre-window safe");
+                }
+                StartupStage::Visual => {
+                    assert!(!safe, "{p:?} ({stage:?}) should NOT be pre-window safe");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn visual_stage_contains_only_window_bound_phases() {
+        let visual: HashSet<_> = StartupPhase::ALL
+            .iter()
+            .copied()
+            .filter(|p| p.stage() == StartupStage::Visual)
+            .collect();
+        let expected: HashSet<_> = [
+            StartupPhase::RenderSplash,
+            StartupPhase::RenderFirstFrame,
+            StartupPhase::PresentToSurface,
+            StartupPhase::EventPumpReady,
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(visual, expected);
+    }
+
+    #[test]
+    fn background_stage_contains_only_post_paint_phases() {
+        let bg: HashSet<_> = StartupPhase::ALL
+            .iter()
+            .copied()
+            .filter(|p| p.stage() == StartupStage::Background)
+            .collect();
+        let expected: HashSet<_> = [
+            StartupPhase::BuildFullSpatial,
+            StartupPhase::LoadRemainingFonts,
+            StartupPhase::DecodeImages,
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(bg, expected);
     }
 
     #[test]

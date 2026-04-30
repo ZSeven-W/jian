@@ -70,6 +70,39 @@ impl StartupReport {
             .fold(0.0_f64, f64::max)
     }
 
+    /// Fold another report's phases into this one. Used by hosts that
+    /// drive multiple [`crate::startup::StartupStage`]s sequentially:
+    /// stage 1 produces a report (DataPath), stage 2 produces another
+    /// (Visual, recorded in-resumed), stage 3 produces a third
+    /// (Background, post-interactive). The host merges them as each
+    /// stage finishes so a single `StartupReport` represents the full
+    /// pipeline.
+    ///
+    /// Semantics:
+    /// - `phases` are appended verbatim, but ONLY after a duplicate
+    ///   check — if any phase in `other` is already present in `self`
+    ///   the merge is rejected with [`MergeError::DuplicatePhase`] and
+    ///   neither side is mutated. (Codex round 3 HIGH: the duplicate
+    ///   guard must be enforced in release, not just debug.)
+    /// - `first_interactive_ms` is taken from `other` when `other`'s
+    ///   value is greater than zero (only the visual stage records the
+    ///   `EventPumpReady` marker that closes first-interactive).
+    pub fn merge_into(&mut self, other: StartupReport) -> Result<(), MergeError> {
+        if let Some(dup) = other
+            .phases
+            .iter()
+            .map(|t| t.phase)
+            .find(|p| self.phases.iter().any(|existing| existing.phase == *p))
+        {
+            return Err(MergeError::DuplicatePhase(dup));
+        }
+        self.phases.extend(other.phases);
+        if other.first_interactive_ms > 0.0 {
+            self.first_interactive_ms = other.first_interactive_ms;
+        }
+        Ok(())
+    }
+
     /// Human-readable table — used by `jian perf startup` (Plan 19 Task 8) and
     /// in test snapshots. The Notes column only renders when at least one
     /// phase has notes attached.
@@ -153,6 +186,29 @@ impl StartupReport {
         out
     }
 }
+
+/// Errors [`StartupReport::merge_into`] can return.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MergeError {
+    /// `other` carried a phase already recorded in `self`. The most
+    /// common cause is a host re-running the same stage twice or
+    /// merging the same per-stage report into the cumulative one
+    /// twice.
+    DuplicatePhase(StartupPhase),
+}
+
+impl std::fmt::Display for MergeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MergeError::DuplicatePhase(p) => write!(
+                f,
+                "merge_into rejected: phase {p:?} already recorded in the target report"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for MergeError {}
 
 #[cfg(test)]
 mod tests {
@@ -273,6 +329,73 @@ mod tests {
         };
         let s = r.pretty();
         assert!(!s.contains("Notes"), "Notes column should be hidden:\n{s}");
+    }
+
+    #[test]
+    fn merge_into_appends_phases_and_picks_visual_first_interactive() {
+        let mut a = StartupReport {
+            phases: vec![
+                t(StartupPhase::ReadFile, 0.0, 1.5),
+                t(StartupPhase::ParseSchema, 1.5, 8.0),
+            ],
+            first_interactive_ms: 0.0,
+        };
+        let b = StartupReport {
+            phases: vec![
+                t(StartupPhase::RenderFirstFrame, 100.0, 12.0),
+                t(StartupPhase::PresentToSurface, 112.0, 3.0),
+                t(StartupPhase::EventPumpReady, 115.0, 0.1),
+            ],
+            first_interactive_ms: 115.1,
+        };
+        a.merge_into(b).expect("merge ok");
+        assert_eq!(a.phases.len(), 5);
+        assert_eq!(a.first_interactive_ms, 115.1);
+        // Order: original first, merged second.
+        assert_eq!(a.phases[0].phase, StartupPhase::ReadFile);
+        assert_eq!(a.phases[2].phase, StartupPhase::RenderFirstFrame);
+    }
+
+    #[test]
+    fn merge_into_keeps_existing_first_interactive_when_other_has_none() {
+        let mut a = StartupReport {
+            phases: vec![],
+            first_interactive_ms: 50.0,
+        };
+        a.merge_into(StartupReport {
+            phases: vec![t(StartupPhase::DecodeImages, 60.0, 200.0)],
+            first_interactive_ms: 0.0,
+        })
+        .expect("merge ok");
+        assert_eq!(a.first_interactive_ms, 50.0);
+    }
+
+    #[test]
+    fn merge_into_rejects_duplicate_phase_in_release_too() {
+        // Hard error in all build modes (codex round 3 HIGH): debug_assert
+        // alone would let release builds silently double-record phases.
+        let mut a = StartupReport {
+            phases: vec![t(StartupPhase::ReadFile, 0.0, 1.0)],
+            first_interactive_ms: 0.0,
+        };
+        let err = a
+            .merge_into(StartupReport {
+                phases: vec![t(StartupPhase::ReadFile, 100.0, 1.0)],
+                first_interactive_ms: 0.0,
+            })
+            .expect_err("duplicate phase must be rejected");
+        assert_eq!(err, MergeError::DuplicatePhase(StartupPhase::ReadFile));
+        // And the reject is atomic — `a` was not mutated.
+        assert_eq!(a.phases.len(), 1);
+    }
+
+    #[test]
+    fn merge_error_display_names_the_phase() {
+        let s = format!(
+            "{}",
+            MergeError::DuplicatePhase(StartupPhase::EventPumpReady)
+        );
+        assert!(s.contains("EventPumpReady"), "got: {s}");
     }
 
     #[test]
