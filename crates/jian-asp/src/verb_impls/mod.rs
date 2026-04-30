@@ -36,12 +36,16 @@ use crate::session::{Permission, Session};
 use jian_core::Runtime;
 
 #[cfg(feature = "dev-asp")]
+pub mod expr_verb;
+#[cfg(feature = "dev-asp")]
 pub mod find_verb;
 #[cfg(feature = "dev-asp")]
 pub mod state_verb;
 #[cfg(feature = "dev-asp")]
 pub mod tap_verb;
 
+#[cfg(feature = "dev-asp")]
+pub use expr_verb::{run_assert, run_wait_for};
 #[cfg(feature = "dev-asp")]
 pub use find_verb::collect_node_summaries;
 #[cfg(feature = "dev-asp")]
@@ -264,18 +268,14 @@ mod tests {
 
     #[test]
     fn dispatch_unimplemented_verb_returns_error() {
-        // `wait_for` still falls through to the not-yet-impl
-        // arm — Phase 3 fills it in once the expression
-        // evaluator borrows are settled. Pin the placeholder
-        // shape so the agent gets a clear error rather than a
-        // silent ok.
+        // `snapshot` is still in the not-yet-impl arm — needs a
+        // PNG encoder + text-tree formatter that the runtime
+        // doesn't expose yet. Pin the placeholder so the agent
+        // sees a clear error rather than a silent ok.
         let mut rt = make_runtime_with_doc(fixture_doc());
         let mut session = Session::new(Permission::Full, "test", "0.1");
         let (out, _) = dispatch(
-            &Verb::WaitFor {
-                expr: "$app.x == 1".into(),
-                timeout_ms: Some(1000),
-            },
+            &Verb::Snapshot { format: None },
             &mut rt,
             &mut session,
         );
@@ -364,6 +364,11 @@ pub fn dispatch(
             value_json,
         } => (
             run_set_state(runtime, scope, key, value_json),
+            DispatchControl::Continue,
+        ),
+        Verb::Assert { expr } => (run_assert(runtime, expr), DispatchControl::Continue),
+        Verb::WaitFor { expr, timeout_ms } => (
+            run_wait_for(runtime, expr, *timeout_ms),
             DispatchControl::Continue,
         ),
         Verb::Inspect { selector, what } => {
