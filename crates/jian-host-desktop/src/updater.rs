@@ -111,7 +111,7 @@ pub trait Updater {
 /// detects the host arch + OS and picks the matching release asset
 /// by file-extension convention (`*-aarch64-apple-darwin.tar.gz`,
 /// `*-x86_64-pc-windows-msvc.zip`, etc — the same names produced by
-/// `dist/install.sh` and the Homebrew formula).
+/// `packaging/install.sh` and the Homebrew formula).
 ///
 /// `check` invokes `self_update::backends::github::ReleaseList::fetch`
 /// synchronously (≤ a few seconds on a healthy network). `apply`
@@ -134,7 +134,7 @@ pub trait Updater {
 /// `event_loop.exit()`).
 ///
 /// **Tag convention**: this backend assumes GitHub tags use the
-/// `v<semver>` form (matching `dist/install.sh` + the Homebrew
+/// `v<semver>` form (matching `packaging/install.sh` + the Homebrew
 /// template). `Release.version` from `self_update` strips the `v`,
 /// so we re-add it whenever we need the canonical tag. If your
 /// release pipeline uses bare `0.1.0` tags instead, override via
@@ -160,7 +160,7 @@ pub struct GitHubReleasesUpdater {
     /// `std::env::consts::ARCH` + `OS`.
     target_substring: String,
     /// Name of the binary to swap inside the archive. Defaults to
-    /// `"jian"` (matches `dist/install.sh`'s expectation).
+    /// `"jian"` (matches `packaging/install.sh`'s expectation).
     bin_name: String,
 }
 

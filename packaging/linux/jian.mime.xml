@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   XDG MIME definition for the .op design file format. Pair with
-  `dist/linux/jian.desktop` so file double-click on a `.op` opens
+  `packaging/linux/jian.desktop` so file double-click on a `.op` opens
   in `jian player`. Installs into `~/.local/share/mime/packages/`
   (or `/usr/share/mime/packages/` for system-wide installs) and
   is picked up by `update-mime-database`.

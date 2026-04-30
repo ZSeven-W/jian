@@ -98,7 +98,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
 }
 
 /// Resolve a CLI argument that may be either a filesystem path or a
-/// `file://` / `jian://` URI (see `dist/linux/jian.desktop`'s
+/// `file://` / `jian://` URI (see `packaging/linux/jian.desktop`'s
 /// `Exec=jian player %U`). Returns the on-disk path to read.
 ///
 /// `file://` handling: strip the scheme, percent-decode the rest.

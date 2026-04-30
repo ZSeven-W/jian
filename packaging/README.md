@@ -1,4 +1,4 @@
-# `dist/` — distribution templates
+# `packaging/` — distribution templates
 
 Per-platform package templates for the `jian` CLI. Plan 9 Task 9
 completion: each template has a leading `# TEMPLATE:` comment block

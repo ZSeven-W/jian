@@ -2,9 +2,17 @@
 #
 # Triggered on push of a `v*` tag *or* manual workflow dispatch.
 # Builds an unsigned `jian` binary on each tier-1 target, packages it
-# in the same archive shape `dist/install.sh` and the Homebrew
+# in the same archive shape `packaging/install.sh` and the Homebrew
 # template expect (`jian-<version>-<target>.{tar.gz|zip}`), and
 # uploads the archive as a GitHub Release asset.
+#
+# Path conventions in this workflow:
+# - `packaging/`             → versioned source assets (Homebrew /
+#                              winget / .desktop / install.sh)
+# - `target/release-artifacts/` → transient build outputs the matrix
+#                              jobs stage + tarball before upload.
+#                              Lives under `target/` so Rust's
+#                              gitignore covers it without a new rule.
 #
 # Code-signing / notarisation lives in a follow-up — this workflow
 # produces the *unsigned* artefacts so the rest of the release
@@ -96,15 +104,16 @@ jobs:
         shell: bash
         run: |
           # Archive layout MUST be flat (no `<name>/` prefix) — the
-          # `dist/install.sh` extractor and the Homebrew formula
+          # `packaging/install.sh` extractor and the Homebrew formula
           # both expect `jian` at the archive root.
           name="jian-${{ steps.ver.outputs.version }}-${{ matrix.target }}"
-          rm -rf dist/staged
-          mkdir -p dist/staged
-          cp "target/${{ matrix.target }}/release/jian" dist/staged/
-          cp LICENSE README.md dist/staged/
-          tar -C dist/staged -czf "dist/$name.tar.gz" .
-          echo "ARTIFACT=dist/$name.tar.gz" >> "$GITHUB_ENV"
+          out="target/release-artifacts"
+          rm -rf "$out/staged"
+          mkdir -p "$out/staged"
+          cp "target/${{ matrix.target }}/release/jian" "$out/staged/"
+          cp LICENSE README.md "$out/staged/"
+          tar -C "$out/staged" -czf "$out/$name.tar.gz" .
+          echo "ARTIFACT=$out/$name.tar.gz" >> "$GITHUB_ENV"
           echo "ARTIFACT_NAME=$name.tar.gz" >> "$GITHUB_ENV"
 
       - name: package (windows)
@@ -115,12 +124,13 @@ jobs:
           # winget portable installer + curl|sh fallback both expect
           # `jian.exe` at the zip root.
           $name = "jian-${{ steps.ver.outputs.version }}-${{ matrix.target }}"
-          if (Test-Path dist/staged) { Remove-Item -Recurse -Force dist/staged }
-          New-Item -ItemType Directory -Force -Path dist/staged | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/jian.exe" dist/staged/
-          Copy-Item "LICENSE","README.md" dist/staged/
-          Compress-Archive -Path "dist/staged/*" -DestinationPath "dist/$name.zip"
-          "ARTIFACT=dist/$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
+          $out = "target/release-artifacts"
+          if (Test-Path "$out/staged") { Remove-Item -Recurse -Force "$out/staged" }
+          New-Item -ItemType Directory -Force -Path "$out/staged" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/jian.exe" "$out/staged/"
+          Copy-Item "LICENSE","README.md" "$out/staged/"
+          Compress-Archive -Path "$out/staged/*" -DestinationPath "$out/$name.zip"
+          "ARTIFACT=$out/$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
           "ARTIFACT_NAME=$name.zip" | Out-File -Append -FilePath $env:GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
@@ -137,7 +147,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: dist
+          path: target/release-artifacts
       - name: gh release upload
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -155,7 +165,7 @@ jobs:
               --draft
           fi
           shopt -s nullglob
-          for d in dist/*/; do
+          for d in target/release-artifacts/*/; do
             for f in "$d"*.tar.gz "$d"*.zip; do
               [ -e "$f" ] || continue
               gh release upload "$tag" "$f" --clobber --repo "$GITHUB_REPOSITORY"
