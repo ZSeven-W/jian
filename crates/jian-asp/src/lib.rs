@@ -47,29 +47,31 @@ pub mod protocol;
 #[cfg(feature = "dev-asp")]
 pub mod selector;
 
+// Plan 18 Tasks 3+4 — verb dispatch + per-verb handlers. Phase 2
+// ships `find` / `inspect` (node_props + route) / `audit` / `exit`;
+// remaining verbs return `OutcomePayload::error("not yet
+// implemented")` so the wire surface stays uniform while the
+// runtime-coupled work lands incrementally.
 #[cfg(feature = "dev-asp")]
-pub mod verb_impls {
-    //! Phase 2 placeholder — Plan 18 Tasks 3+4 fill in the verb
-    //! dispatch table and the individual handler bodies.
-}
+pub mod verb_impls;
 
+// Plan 18 Task 5 — transport layer. Phase 2 ships the trait
+// abstraction + stdio variant; Unix socket / Named Pipe /
+// WebSocket land additively behind the same trait.
 #[cfg(feature = "dev-asp")]
-pub mod transport {
-    //! Phase 2 placeholder — Plan 18 Task 5 fills in the
-    //! Unix-socket / Named-Pipe / WebSocket / stdio transports.
-}
+pub mod transport;
 
+// Plan 18 Task 6 — session state. Token validation is delegated
+// to a `TokenValidator` impl the host installs; this module owns
+// the permission tier, audit ring, and handshake handling.
 #[cfg(feature = "dev-asp")]
-pub mod session {
-    //! Phase 2 placeholder — Plan 18 Task 6 fills in token bootstrap +
-    //! per-session permission tier (`Observe` / `Act` / `Full`).
-}
+pub mod session;
 
+// Plan 18 Task 7 — server main loop. `run_session` accepts a
+// transport + validator + runtime borrow and drives the full
+// lifecycle (handshake → request loop → exit).
 #[cfg(feature = "dev-asp")]
-pub mod server {
-    //! Phase 2 placeholder — Plan 18 Task 7 fills in the main loop:
-    //! transport accept → handshake → verb dispatch → audit ring buffer.
-}
+pub mod server;
 
 #[cfg(test)]
 mod tests {
