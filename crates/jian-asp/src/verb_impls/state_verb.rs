@@ -56,6 +56,13 @@ pub fn run_set_state(
 /// (`Router` trait) — push / replace / pop / reset. The detail
 /// includes the new path so the agent can confirm the
 /// transition without a round-trip.
+///
+/// Delta + hint policy: emit the `$route.path` delta only when
+/// the path actually changed (the default `NullRouter` ignores
+/// the call, so a delta with `before == after` would be
+/// misleading audit noise). When the router was a no-op,
+/// surface a hint pointing the agent at the likely cause so it
+/// doesn't blame its own input.
 pub fn run_navigate(runtime: &mut Runtime, path: &str, mode: Option<NavMode>) -> OutcomePayload {
     let mode = mode.unwrap_or(NavMode::Push);
     let before = runtime.nav.current().path;
@@ -66,17 +73,24 @@ pub fn run_navigate(runtime: &mut Runtime, path: &str, mode: Option<NavMode>) ->
         NavMode::Reset => runtime.nav.reset(path),
     }
     let after = runtime.nav.current().path;
-    OutcomePayload::ok(
+    let mut payload = OutcomePayload::ok(
         "navigate",
         Some(after.clone()),
         format!("navigated {:?} → {}", mode, after),
-    )
-    .with_delta(
-        "$route.path",
-        serde_json::Value::String(before),
-        serde_json::Value::String(after),
-        Some(format!("navigate {:?}", mode)),
-    )
+    );
+    if before != after {
+        payload = payload.with_delta(
+            "$route.path",
+            serde_json::Value::String(before),
+            serde_json::Value::String(after),
+            Some(format!("navigate {:?}", mode)),
+        );
+    } else {
+        payload = payload.with_hint(
+            "router did not change `$route.path` — verify the host installed a real Router (e.g. HistoryRouter); the runtime's default NullRouter no-ops every navigate call".to_owned(),
+        );
+    }
+    payload
 }
 
 /// `inspect what=state` — return the named scope's key-value
@@ -200,27 +214,29 @@ mod tests {
     }
 
     #[test]
-    fn navigate_push_returns_ok_with_delta_entry() {
-        // The default `Runtime::new_from_document` uses a
-        // `NullRouter` placeholder that ignores the call —
-        // production hosts install `HistoryRouter`. The verb's
-        // contract is "dispatched the call against whatever
-        // router the runtime carries"; we can only verify the
-        // shape of the response here, not the state mutation.
-        // A host integration test (jian-host-desktop) covers
-        // the path-changes-after-push case.
+    fn navigate_push_with_null_router_emits_hint_no_delta() {
+        // Default Runtime carries a `NullRouter` that no-ops every
+        // call. Pre-fix the verb still emitted a misleading
+        // `$route.path` delta with `before == after`. Now: no
+        // delta, but a hint pointing at the missing real Router.
+        // Production hosts install `HistoryRouter` and the delta
+        // path lights up via integration tests.
         let mut rt = rt_with(fixture());
         let out = run_navigate(&mut rt, "/profile", Some(NavMode::Push));
         assert!(out.ok);
-        assert_eq!(out.deltas.len(), 1);
-        assert_eq!(out.deltas[0].path, "$route.path");
+        assert!(out.deltas.is_empty(), "no-op router should not emit delta");
+        assert!(
+            out.hints.iter().any(|h| h.contains("NullRouter")),
+            "expected hint pointing at NullRouter, got hints={:?}",
+            out.hints
+        );
     }
 
     #[test]
     fn navigate_default_mode_is_push() {
         // `mode: None` falls through to `NavMode::Push`. The
         // narrative includes the resolved mode for the agent's
-        // log.
+        // log even when the underlying router is a no-op.
         let mut rt = rt_with(fixture());
         let out = run_navigate(&mut rt, "/x", None);
         assert!(out.ok);

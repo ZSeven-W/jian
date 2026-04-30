@@ -23,6 +23,16 @@ use crate::protocol::{NodeSummary, OutcomePayload};
 use crate::selector::Selector;
 use crate::verb_impls::find_verb::collect_node_summaries;
 
+/// Reserved pointer id for ASP-synthesised events. Chosen at the
+/// top of u32 so a real mouse / touch id (typically 1..=N for a
+/// few simultaneous fingers) can't collide with the agent's
+/// taps. Hosts that bridge synthesised events into the gesture
+/// arena route them through the same `dispatch_pointer` call,
+/// but the unique id keeps the recogniser's per-arena state
+/// separate so a finger held down by the user during an agent
+/// tap doesn't get its arena state clobbered.
+const ASP_POINTER_ID: u32 = u32::MAX;
+
 /// Dispatch a synthesised tap on the first selector match. The
 /// pointer id is fixed at `1` — the runtime's gesture arena
 /// keys recognisers by id, and tap is single-pointer by
@@ -67,12 +77,12 @@ pub fn run_tap(runtime: &mut Runtime, sel: &Selector) -> OutcomePayload {
     let id = summary.id.clone();
     drop(doc);
     let down = PointerEvent::simple(
-        1,
+        ASP_POINTER_ID,
         PointerPhase::Down,
         jian_core::geometry::point(cx, cy),
     );
     let up = PointerEvent::simple(
-        1,
+        ASP_POINTER_ID,
         PointerPhase::Up,
         jian_core::geometry::point(cx, cy),
     );
