@@ -148,9 +148,16 @@ impl Session {
     }
 
     /// Append one audit entry, dropping the oldest if the ring
-    /// is at capacity.
+    /// is at capacity. A capacity of 0 is treated as "no audit"
+    /// — we drop the entry on the floor rather than violating
+    /// the bound (the previous draft always pushed and only
+    /// trimmed *next* time, so a zero-cap session retained the
+    /// most recent entry for one cycle).
     pub fn record(&mut self, entry: AuditEntry) {
-        if self.audit.len() >= self.audit_capacity {
+        if self.audit_capacity == 0 {
+            return;
+        }
+        while self.audit.len() >= self.audit_capacity {
             self.audit.pop_front();
         }
         self.audit.push_back(entry);
@@ -194,16 +201,27 @@ impl Session {
 /// Constant-time byte compare. Returns `true` only if `a` and `b`
 /// are byte-identical and the same length. The wall-clock cost
 /// is `O(max(a.len, b.len))` so a timing attacker can't recover
-/// the secret one byte at a time.
+/// the secret one byte at a time NOR the expected length.
+///
+/// Earlier draft short-circuited on length mismatch, which leaked
+/// `len(expected)` to a timing attacker that probes with various
+/// candidate lengths. The current form always loops to the
+/// longer of the two slices, treating missing bytes as `0` and
+/// folding the length difference into the same accumulator.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
+    let len = a.len().max(b.len());
+    let mut acc: u8 = 0;
+    for i in 0..len {
+        let ai = a.get(i).copied().unwrap_or(0);
+        let bi = b.get(i).copied().unwrap_or(0);
+        acc |= ai ^ bi;
     }
-    let mut acc = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        acc |= x ^ y;
-    }
-    acc == 0
+    // Fold the length difference into the result so two equal-
+    // prefixed slices of different lengths still compare unequal.
+    // Widen `acc` to usize so a 256-byte length diff (which
+    // truncates to 0 in a u8 cast) doesn't masquerade as
+    // matching.
+    ((acc as usize) | (a.len() ^ b.len())) == 0
 }
 
 #[cfg(test)]
@@ -286,6 +304,35 @@ mod tests {
         // Two most recent, oldest of those two first.
         let times: Vec<u64> = tail.iter().map(|e| e.at_ms).collect();
         assert_eq!(times, vec![20, 30]);
+    }
+
+    #[test]
+    fn audit_zero_capacity_drops_every_entry() {
+        // Pre-fix: `record` would push first then trim on the
+        // *next* call, so a zero-cap session retained one entry
+        // for one cycle. Now zero-cap drops on entry.
+        let mut s = Session::with_capacity(Permission::Observe, "c", "0.1", 0);
+        s.record(entry(1, "tap"));
+        s.record(entry(2, "tap"));
+        assert!(s.audit_tail(100).is_empty());
+    }
+
+    #[test]
+    fn constant_time_eq_does_not_short_circuit_on_length() {
+        // The new constant-time form folds the length difference
+        // into the same accumulator, so two slices that share a
+        // prefix but differ in length still compare unequal —
+        // and (more importantly) iterate to the same `max(len)`
+        // so a timing attacker can't recover the expected length.
+        assert!(!constant_time_eq(b"sec", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"sec"));
+        assert!(constant_time_eq(b"secret", b"secret"));
+        // 256-byte length difference: a previous draft that
+        // truncated `usize ^ usize` to u8 would have masked this
+        // and returned `true`.
+        let long = vec![0u8; 256];
+        let empty: &[u8] = &[];
+        assert!(!constant_time_eq(&long, empty));
     }
 
     #[test]

@@ -159,6 +159,29 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_find_with_zero_limit_returns_invalid() {
+        // Pre-fix: `limit: 0` truncated all summaries but the
+        // success branch fired anyway, returning `ok: true` with
+        // an empty payload. Now we surface `invalid` so the
+        // agent gets a clear "tighten the limit" signal.
+        let mut rt = make_runtime_with_doc(fixture_doc());
+        let mut session = Session::new(Permission::Observe, "test", "0.1");
+        let (out, _) = dispatch(
+            &Verb::Find {
+                selector: Selector {
+                    id: Some("save-btn".into()),
+                    ..Default::default()
+                },
+                limit: Some(0),
+            },
+            &mut rt,
+            &mut session,
+        );
+        assert!(!out.ok);
+        assert_eq!(out.error.as_deref(), Some("Invalid"));
+    }
+
+    #[test]
     fn dispatch_inspect_node_props_returns_node_detail() {
         let mut rt = make_runtime_with_doc(fixture_doc());
         let mut session = Session::new(Permission::Observe, "test", "0.1");
@@ -379,6 +402,15 @@ fn run_find(runtime: &Runtime, sel: &Selector, limit: Option<u32>) -> OutcomePay
     let n = summaries.len();
     if hits.is_empty() {
         return OutcomePayload::not_found("find", "selector matched zero nodes");
+    }
+    // `limit: 0` (or any cap that strands the resolver's matches)
+    // post-filters every summary out — surface that as `invalid`
+    // rather than a misleading `ok` with an empty payload.
+    if summaries.is_empty() {
+        return OutcomePayload::invalid(
+            "find",
+            "limit truncated all matches; use limit > 0 or omit the field",
+        );
     }
     // For now `find` reports the first match's summary as the
     // structured detail — the common case is "find a button, then
