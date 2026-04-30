@@ -86,8 +86,23 @@ pub fn run_navigate(runtime: &mut Runtime, path: &str, mode: Option<NavMode>) ->
             Some(format!("navigate {:?}", mode)),
         );
     } else {
+        // Three legitimate reasons `before == after`:
+        //   1. The host installed a no-op router (e.g. the
+        //      runtime's default `NullRouter`).
+        //   2. `Pop` at stack depth 1 — a real `HistoryRouter`
+        //      doesn't pop past the root.
+        //   3. `Replace` / `Push` to the current path — same
+        //      destination, no transition.
+        // Surface all three in the hint so the agent picks the
+        // likely cause from its own context.
         payload = payload.with_hint(
-            "router did not change `$route.path` — verify the host installed a real Router (e.g. HistoryRouter); the runtime's default NullRouter no-ops every navigate call".to_owned(),
+            format!(
+                "navigate {:?} did not change `$route.path`. \
+                 Possible causes: the host installed a no-op router (e.g. `NullRouter`); \
+                 `pop` at stack depth 1 (already at root); \
+                 or the requested path equals the current one.",
+                mode
+            ),
         );
     }
     payload
@@ -226,8 +241,10 @@ mod tests {
         assert!(out.ok);
         assert!(out.deltas.is_empty(), "no-op router should not emit delta");
         assert!(
-            out.hints.iter().any(|h| h.contains("NullRouter")),
-            "expected hint pointing at NullRouter, got hints={:?}",
+            out.hints
+                .iter()
+                .any(|h| h.contains("did not change `$route.path`")),
+            "expected hint mentioning unchanged route, got hints={:?}",
             out.hints
         );
     }
