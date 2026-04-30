@@ -72,7 +72,7 @@ fn node_semantic_role(node: &PenNode) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn role_for(node: &PenNode) -> &'static str {
+pub(crate) fn role_for(node: &PenNode) -> &'static str {
     match node {
         PenNode::Frame(_) => "frame",
         PenNode::Group(_) => "group",
@@ -89,7 +89,7 @@ fn role_for(node: &PenNode) -> &'static str {
     }
 }
 
-fn visible_text(node: &PenNode) -> Option<String> {
+pub(crate) fn visible_text(node: &PenNode) -> Option<String> {
     match node {
         PenNode::Text(t) => match &t.content {
             TextContent::Plain(s) => Some(s.clone()),
@@ -116,7 +116,7 @@ fn visible_text(node: &PenNode) -> Option<String> {
 /// once the verb-impls have access to the live `StateGraph` /
 /// `LayoutEngine` borrows; for the agent's `find` / `inspect`
 /// path the static value is the right level of detail.
-fn node_is_statically_visible(node: &PenNode) -> bool {
+pub(crate) fn node_is_statically_visible(node: &PenNode) -> bool {
     let Ok(json) = serde_json::to_value(node) else {
         return true;
     };

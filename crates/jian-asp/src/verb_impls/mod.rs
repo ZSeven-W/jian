@@ -36,13 +36,23 @@ use crate::session::{Permission, Session};
 use jian_core::Runtime;
 
 #[cfg(feature = "dev-asp")]
+pub mod ax_verb;
+#[cfg(feature = "dev-asp")]
 pub mod expr_verb;
 #[cfg(feature = "dev-asp")]
 pub mod find_verb;
 #[cfg(feature = "dev-asp")]
 pub mod state_verb;
 #[cfg(feature = "dev-asp")]
+pub mod scroll_verb;
+#[cfg(feature = "dev-asp")]
+pub mod snapshot_verb;
+#[cfg(feature = "dev-asp")]
+pub mod swipe_verb;
+#[cfg(feature = "dev-asp")]
 pub mod tap_verb;
+#[cfg(feature = "dev-asp")]
+pub mod type_verb;
 
 #[cfg(feature = "dev-asp")]
 pub use expr_verb::{run_assert, run_wait_for};
@@ -267,21 +277,19 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_unimplemented_verb_returns_error() {
-        // `snapshot` is still in the not-yet-impl arm — needs a
-        // PNG encoder + text-tree formatter that the runtime
-        // doesn't expose yet. Pin the placeholder so the agent
-        // sees a clear error rather than a silent ok.
+    fn dispatch_inspect_ax_tree_returns_detail() {
         let mut rt = make_runtime_with_doc(fixture_doc());
         let mut session = Session::new(Permission::Full, "test", "0.1");
         let (out, _) = dispatch(
-            &Verb::Snapshot { format: None },
+            &Verb::Inspect { selector: None, what: InspectKind::AxTree },
             &mut rt,
             &mut session,
         );
-        assert!(!out.ok);
-        assert_eq!(out.error.as_deref(), Some("RuntimeError"));
-        assert!(out.narrative.contains("not yet implemented"));
+        assert!(out.ok, "expected ax_tree to succeed, got {:?}", out);
+        match out.detail {
+            Some(DetailKind::AxTree { .. }) => {}
+            other => panic!("expected AxTree detail, got {:?}", other),
+        }
     }
 }
 
@@ -355,6 +363,22 @@ pub fn dispatch(
             (run_find(runtime, selector, *limit), DispatchControl::Continue)
         }
         Verb::Tap { selector } => (run_tap(runtime, selector), DispatchControl::Continue),
+        Verb::Type { selector, text, clear } => (
+            type_verb::run_type(runtime, selector, text, *clear),
+            DispatchControl::Continue,
+        ),
+        Verb::Scroll { selector, direction, distance } => (
+            scroll_verb::run_scroll(runtime, selector, *direction, *distance),
+            DispatchControl::Continue,
+        ),
+        Verb::Swipe { selector, direction, distance } => (
+            swipe_verb::run_swipe(runtime, selector, *direction, *distance),
+            DispatchControl::Continue,
+        ),
+        Verb::Snapshot { format } => (
+            snapshot_verb::run_snapshot(runtime, *format),
+            DispatchControl::Continue,
+        ),
         Verb::Navigate { path, mode } => {
             (run_navigate(runtime, path, *mode), DispatchControl::Continue)
         }
@@ -384,16 +408,6 @@ pub fn dispatch(
         Verb::Exit => (
             OutcomePayload::ok("exit", None, "session ended"),
             DispatchControl::Exit,
-        ),
-        // The "not yet implemented" verbs. Phase 3 fills each
-        // with the runtime integration work that PR-sized
-        // commits track separately.
-        _ => (
-            OutcomePayload::error(
-                verb_name(verb),
-                "not yet implemented in this Phase 2 build",
-            ),
-            DispatchControl::Continue,
         ),
     }
 }
@@ -532,11 +546,6 @@ fn run_inspect(
                 .unwrap_or("$app");
             run_inspect_state(runtime, scope)
         }
-        // `ax_tree` needs an a11y-tree generator that doesn't
-        // exist yet. Defer to Phase 4.
-        _ => OutcomePayload::error(
-            "inspect",
-            "inspect what=ax_tree not yet implemented",
-        ),
+        InspectKind::AxTree => ax_verb::run_inspect_ax_tree(runtime),
     }
 }
