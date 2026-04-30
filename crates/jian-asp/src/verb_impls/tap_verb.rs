@@ -74,8 +74,11 @@ pub fn run_tap(runtime: &mut Runtime, sel: &Selector) -> OutcomePayload {
     let cx = rect[0] + rect[2] / 2.0;
     let cy = rect[1] + rect[3] / 2.0;
     // Drop the immutable borrows before mutating the runtime.
+    // (`let _ = doc;` instead of `drop(doc)` — `doc` is a
+    // reference, and clippy warns on dropping references; the
+    // assignment-to-`_` form has the same end-of-scope effect.)
     let id = summary.id.clone();
-    drop(doc);
+    let _ = doc;
     let down = PointerEvent::simple(
         ASP_POINTER_ID,
         PointerPhase::Down,

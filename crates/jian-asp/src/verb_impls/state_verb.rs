@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn inspect_state_returns_app_scope_keys() {
-        let mut rt = rt_with(fixture());
+        let rt = rt_with(fixture());
         rt.state.app_set("count", serde_json::json!(7));
         let out = run_inspect_state(&rt, "$app");
         assert!(out.ok);

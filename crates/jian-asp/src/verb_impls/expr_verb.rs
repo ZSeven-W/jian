@@ -76,6 +76,12 @@ pub fn run_wait_for(runtime: &mut Runtime, expr: &str, timeout_ms: Option<u64>) 
             )
         }
     };
+    // Drained `BindingEffect` handles MUST stay alive for the
+    // wait — `effect.rs::Drop` deregisters the effect when its
+    // handle drops, which would unsubscribe the very bindings
+    // the expression is waiting on. Accumulate across iterations
+    // and let them all drop together at the end of the verb.
+    let mut alive_bindings: Vec<jian_core::binding::BindingEffect> = Vec::new();
     let started = Instant::now();
     loop {
         let (value, _warnings) = compiled.eval(&runtime.state, None, None);
@@ -99,9 +105,9 @@ pub fn run_wait_for(runtime: &mut Runtime, expr: &str, timeout_ms: Option<u64>) 
         // polls; `Runtime::tick` only ticks gestures and flushes
         // semantic-event-triggered scheduler work, so deferred
         // bindings need their own pump. Drain any that piled up
-        // before the previous poll so an expression depending on
-        // `bindings.<prop>` sees the latest value.
-        let _drained = runtime.drain_deferred_bindings();
+        // and stash the handles so they keep their subscriptions
+        // alive for the duration of the wait.
+        alive_bindings.extend(runtime.drain_deferred_bindings());
         runtime.tick(Instant::now());
         std::thread::sleep(Duration::from_millis(WAIT_FOR_POLL_MS));
     }
@@ -156,7 +162,7 @@ mod tests {
 
     #[test]
     fn assert_truthy_returns_ok() {
-        let mut rt = rt_with(fixture());
+        let rt = rt_with(fixture());
         rt.state.app_set("ready", serde_json::json!(true));
         let out = run_assert(&rt, "$app.ready == true");
         assert!(out.ok, "got {:?}", out);
@@ -164,7 +170,7 @@ mod tests {
 
     #[test]
     fn assert_falsy_returns_error() {
-        let mut rt = rt_with(fixture());
+        let rt = rt_with(fixture());
         rt.state.app_set("count", serde_json::json!(0));
         let out = run_assert(&rt, "$app.count > 5");
         assert!(!out.ok);

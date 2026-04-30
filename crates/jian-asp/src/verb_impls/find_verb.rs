@@ -32,7 +32,14 @@ fn node_summary(
 ) -> Option<NodeSummary> {
     let data = doc.tree.nodes.get(key)?;
     let id = node_schema_id(&data.schema).to_owned();
-    let role = Some(role_for(&data.schema).to_owned());
+    // Prefer the author-supplied `semantics.role` when present
+    // (matches the resolver's two-tier role match): a rectangle
+    // declared as `semantics.role: "button"` reports "button"
+    // here so the agent's `find` / `inspect` payload agrees with
+    // the selector that matched it. Falls back to the primitive
+    // variant name when no semantic role is set.
+    let role = node_semantic_role(&data.schema)
+        .or_else(|| Some(role_for(&data.schema).to_owned()));
     let text = visible_text(&data.schema);
     let rect = runtime.layout.node_rect(key).map(|r| {
         [
@@ -50,6 +57,19 @@ fn node_summary(
         visible,
         rect: rect.unwrap_or([0.0; 4]),
     })
+}
+
+/// Reads the author-declared `semantics.role` for any node
+/// variant via a serde-json round-trip. Mirrors the helper in
+/// `selector::resolve` — kept duplicated here to avoid
+/// publishing the resolver's private helpers as crate-level
+/// API just for one read site.
+fn node_semantic_role(node: &PenNode) -> Option<String> {
+    let v = serde_json::to_value(node).ok()?;
+    v.get("semantics")?
+        .get("role")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 fn role_for(node: &PenNode) -> &'static str {
