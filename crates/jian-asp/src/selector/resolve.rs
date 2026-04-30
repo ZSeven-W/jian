@@ -201,7 +201,17 @@ fn matches_leaf_predicates(data: &NodeData, sel: &Selector) -> bool {
         }
     }
     if let Some(want) = sel.role.as_deref() {
-        if node_role(&data.schema) != want {
+        // Two-tier role match (Phase 2.5):
+        //   1. Author-supplied `semantics.role` from the schema —
+        //      `button` / `link` / `heading` / etc — wins when
+        //      present. This is what an a11y tree exposes and
+        //      what an LLM-driven agent typically reasons over.
+        //   2. Fall back to the `PenNode` variant name
+        //      (`rectangle`, `text`, `frame`) so a selector that
+        //      omits the semantics layer still works.
+        let semantic = node_semantic_role(&data.schema);
+        let primitive = node_role(&data.schema);
+        if semantic.as_deref() != Some(want) && primitive != want {
             return false;
         }
     }
@@ -224,6 +234,22 @@ fn matches_leaf_predicates(data: &NodeData, sel: &Selector) -> bool {
     // a selector that only constrains those fields matches every
     // node, which is more useful than rejecting every node.
     true
+}
+
+/// Read the author-declared `semantics.role` for any node
+/// variant. Each `PenNode` variant has its own
+/// `semantics: Option<SemanticsMeta>` field; rather than match
+/// on twelve variants, serialise to JSON and read
+/// `semantics.role` (snake_case from the `SemanticRole` enum)
+/// directly. Cheap because the round-trip is per-resolve, and
+/// the resolver typically runs at agent-tick cadence (≤ a few
+/// times per second).
+fn node_semantic_role(node: &PenNode) -> Option<String> {
+    let v = serde_json::to_value(node).ok()?;
+    v.get("semantics")?
+        .get("role")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// Map a `PenNode` variant to its wire-shape role string. Mirrors
@@ -396,6 +422,38 @@ mod tests {
         let hits = s.resolve(&tree).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(tree.get("save-btn"), hits.first().copied());
+    }
+
+    #[test]
+    fn role_match_prefers_author_supplied_semantic_role() {
+        // A rectangle with `semantics.role: "button"` matches
+        // both `role: "rectangle"` (primitive fallback) and
+        // `role: "button"` (semantic role). Pre-fix only the
+        // primitive fallback was checked, so an agent expecting
+        // `role: "button"` got zero hits.
+        let tree = tree_from_json(serde_json::json!([
+            {
+                "type": "rectangle", "id": "save",
+                "semantics": { "role": "button" }
+            },
+            {
+                "type": "rectangle", "id": "frame-only"
+            }
+        ]));
+        let s = Selector {
+            role: Some("button".into()),
+            ..Default::default()
+        };
+        let hits = s.resolve(&tree).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(tree.get("save"), hits.first().copied());
+
+        let s2 = Selector {
+            role: Some("rectangle".into()),
+            ..Default::default()
+        };
+        let hits2 = s2.resolve(&tree).unwrap();
+        assert_eq!(hits2.len(), 2, "primitive role still matches both");
     }
 
     #[test]
