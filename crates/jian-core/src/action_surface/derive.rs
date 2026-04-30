@@ -11,7 +11,7 @@
 //! - `events.onLongPress` → `long_press_<slug>`
 //! - `events.onSubmit` → `submit_<slug>`
 //! - `bindings["bind:value"]` → `set_<slug>(value)` (input-style nodes)
-//! - `route.push` → `open_<slug>(p)` (route params from `RouteSpec.params`)
+//! - `route.push` / `route.replace` → `open_<slug>(p)` (route params from `RouteSpec.params`)
 //! - `events.onPanStart` + `events.onPanEnd` → 4 swipe actions
 //!   (`swipe_left_<slug>` / `swipe_right_<slug>` / `swipe_up_<slug>`
 //!   / `swipe_down_<slug>` — each is a discrete tool, no
@@ -448,12 +448,20 @@ fn emit_for_node(
         ));
     }
 
-    // --- route.push → open_<slug>(p₁: ..., p₂: ...)
-    let route_push = node
+    // --- route.push / route.replace → open_<slug>(p₁: ..., p₂: ...)
+    //
+    // Both verbs land on the same dispatch shape (the dispatcher
+    // routes through a single `OpenRoute` source kind regardless),
+    // so authors who set `route: { replace: "/foo" }` (e.g. for a
+    // login flow that should not stack on the back-stack) get an
+    // `open_<slug>` action just like `push` does. Pre-fix bug:
+    // only `push` was checked, so `replace`-style routes silently
+    // produced zero AI actions.
+    let route_path = node
         .get("route")
-        .and_then(|r| r.get("push"))
+        .and_then(|r| r.get("push").or_else(|| r.get("replace")))
         .and_then(|v| v.as_str());
-    if let Some(path_pattern) = route_push {
+    if let Some(path_pattern) = route_path {
         let params = route_param_specs(doc_json, path_pattern);
         let slug_v = format!("open_{}", suffixed);
         out.push(make_action(
@@ -1047,6 +1055,34 @@ mod tests {
         assert_eq!(acts[0].params.len(), 1);
         assert_eq!(acts[0].params[0].name, "value");
         assert_eq!(acts[0].params[0].ty, ParamTy::Int);
+    }
+
+    #[test]
+    fn route_replace_also_derives_open_action() {
+        // Pre-fix bug: only `route.push` was inspected, so a node
+        // declaring `route: { replace: "/foo" }` produced zero AI
+        // actions even though the dispatcher routes both push and
+        // replace through `OpenRoute`. This test pins the fix.
+        let doc = doc_from(
+            r#"{
+              "version":"0.8.0",
+              "routes":{
+                "entry":"/",
+                "routes":{
+                  "/login":{ "pageId":"login" }
+                }
+              },
+              "pages":[{ "id":"home","name":"Home","children":[
+                { "type":"frame","id":"login-link","semantics":{ "aiName":"go_login" },
+                  "route":{ "replace": "/login" } }
+              ]}],
+              "children":[]
+            }"#,
+        );
+        let acts = derive_actions(&doc, &[0u8; 16]);
+        assert_eq!(acts.len(), 1, "expected one OpenRoute action");
+        assert!(acts[0].name.full().starts_with("home.open_go_login"));
+        assert!(matches!(acts[0].source_kind, SourceKind::OpenRoute));
     }
 
     #[test]

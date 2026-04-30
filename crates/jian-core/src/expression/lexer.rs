@@ -35,6 +35,51 @@ impl<'a> Lexer<'a> {
         Some(c)
     }
 
+    /// Push the UTF-8 character whose **lead byte** is the just-`bump()`-ed
+    /// `c` into `buf`. Required because `buf.push(c as char)` truncates
+    /// any byte ≥ 0x80 to a Latin-1 char, which corrupts non-ASCII
+    /// literals like `"中文"` (six bytes E4 B8 AD E6 96 87 → six
+    /// `char`s instead of two CJK code points).
+    ///
+    /// The source is `&str` so the bytes are valid UTF-8 by
+    /// construction. `c` was already consumed; the continuation bytes
+    /// start at `self.pos`. Push the multi-byte slice as a real char
+    /// and advance `self.pos` past the continuation bytes. Lone
+    /// continuation bytes / unexpected leads fall back to the
+    /// `c as char` mapping (matches the pre-fix behaviour for ASCII).
+    fn push_lead_byte_into(&self, buf: &mut String, c: u8) -> usize {
+        if c < 0x80 {
+            buf.push(c as char);
+            return 0;
+        }
+        let cont = if c < 0xC0 {
+            // Lone continuation byte — never the start of a valid
+            // sequence in `&str`. Fall back so we still produce
+            // *some* char without panicking.
+            buf.push(c as char);
+            return 0;
+        } else if c < 0xE0 {
+            1
+        } else if c < 0xF0 {
+            2
+        } else {
+            3
+        };
+        let lead = self.pos.saturating_sub(1);
+        let end = (lead + 1 + cont).min(self.src.len());
+        let slice = &self.src[lead..end];
+        match std::str::from_utf8(slice).ok().and_then(|s| s.chars().next()) {
+            Some(ch) => {
+                buf.push(ch);
+                cont
+            }
+            None => {
+                buf.push(c as char);
+                0
+            }
+        }
+    }
+
     fn is_ident_start(c: u8) -> bool {
         c.is_ascii_alphabetic() || c == b'_'
     }
@@ -138,10 +183,16 @@ impl<'a> Lexer<'a> {
                     b'"' => buf.push('"'),
                     b'\'' => buf.push('\''),
                     b'`' => buf.push('`'),
-                    _ => buf.push(nxt as char),
+                    _ => {
+                        // Escaped non-ASCII byte: same UTF-8 join as
+                        // the literal-byte branch below.
+                        let advance = self.push_lead_byte_into(&mut buf, nxt);
+                        self.pos += advance;
+                    }
                 }
             } else {
-                buf.push(c as char);
+                let advance = self.push_lead_byte_into(&mut buf, c);
+                self.pos += advance;
             }
         }
         Ok(Token {
@@ -247,12 +298,21 @@ impl<'a> Lexer<'a> {
                     b'\\' => text_buf.push('\\'),
                     b'`' => text_buf.push('`'),
                     b'$' => text_buf.push('$'),
-                    _ => text_buf.push(nxt as char),
+                    _ => {
+                        let advance = self.push_lead_byte_into(&mut text_buf, nxt);
+                        self.pos += advance;
+                    }
                 }
                 continue;
             }
-            text_buf.push(c as char);
+            // Literal text byte. `bump`-equivalent: advance pos by 1
+            // first so `push_lead_byte_into` reads continuation bytes
+            // from the *new* pos (matching its `bump()`-then-call
+            // contract). The helper itself returns the additional
+            // bytes consumed.
             self.pos += 1;
+            let advance = self.push_lead_byte_into(&mut text_buf, c);
+            self.pos += advance;
         }
     }
 
@@ -484,6 +544,47 @@ mod tests {
         match &k[0] {
             TokenKind::String(s) => assert_eq!(s, "hello\n\"world\""),
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn string_preserves_non_ascii_characters() {
+        // Pre-fix bug: `c as char` truncated each UTF-8 byte to a
+        // Latin-1 char, so `"中文"` (bytes E4 B8 AD E6 96 87) became
+        // six garbled chars instead of two CJK code points. The
+        // helper now joins the multi-byte sequence back into one
+        // Unicode scalar each.
+        let k = kinds("\"中文\"");
+        match &k[0] {
+            TokenKind::String(s) => {
+                assert_eq!(s, "中文");
+                assert_eq!(s.chars().count(), 2);
+            }
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_preserves_emoji() {
+        // 4-byte UTF-8 sequences (`F0 9F 91 8B`) take the
+        // `c < 0xF0` branch's `else { 3 }` continuation count.
+        let k = kinds("\"hi 👋\"");
+        match &k[0] {
+            TokenKind::String(s) => assert_eq!(s, "hi 👋"),
+            other => panic!("expected String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn template_preserves_non_ascii_text() {
+        // Template-literal text mode has its own lex path; pin the
+        // same UTF-8-correct behaviour separately.
+        let k = kinds("`你好 ${1}`");
+        // Only check the first text segment; the expression body
+        // and end markers are exercised by other tests.
+        match &k[1] {
+            TokenKind::TemplateText(s) => assert_eq!(s, "你好 "),
+            other => panic!("expected TemplateText, got {other:?}"),
         }
     }
 
