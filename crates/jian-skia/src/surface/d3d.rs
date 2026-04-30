@@ -35,11 +35,15 @@
 use crate::SkiaSurface;
 use raw_window_handle::RawWindowHandle;
 
-pub fn from_window(_raw_handle: RawWindowHandle, _width: i32, _height: i32) -> SkiaSurface {
-    panic!(
+pub fn from_window(
+    _raw_handle: RawWindowHandle,
+    _width: i32,
+    _height: i32,
+) -> Result<SkiaSurface, &'static str> {
+    Err(
         "jian-skia: D3D12 GPU surface not yet implemented; \
          `--features d3d` enables the API surface but the platform \
-         glue is a Plan 8 Task 2 follow-up. Fall back to \
-         `SkiaSurface::new_raster` for now."
-    );
+         glue is a Plan 8 Task 2 follow-up. Hosts that hit this \
+         error should fall back to `SkiaSurface::new_raster`.",
+    )
 }

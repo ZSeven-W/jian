@@ -42,19 +42,26 @@ use crate::SkiaSurface;
 use raw_window_handle::RawWindowHandle;
 
 /// Build a Metal-backed `SkiaSurface` of `width × height` physical
-/// pixels for the supplied window handle. Currently panics — see
-/// the module docs for the implementation outline.
+/// pixels for the supplied window handle. Returns an `Err` while
+/// the platform glue is unimplemented so a host can fall back to
+/// the raster surface gracefully — earlier draft `panic!`-ed,
+/// which would crash any host that flipped on `--features metal`
+/// before the real impl lands.
 ///
-/// `raw_handle` is taken by value because the eventual implementation
-/// needs to retain Foundation references for the layer's lifetime;
-/// the caller passes a handle from
-/// `winit::window::Window::window_handle()` and surrenders ownership
-/// of the bridge.
-pub fn from_window(_raw_handle: RawWindowHandle, _width: i32, _height: i32) -> SkiaSurface {
-    panic!(
+/// `raw_handle` is taken by value because the eventual
+/// implementation needs to retain Foundation references for the
+/// layer's lifetime; the caller passes a handle from
+/// `winit::window::Window::window_handle()` and surrenders
+/// ownership of the bridge.
+pub fn from_window(
+    _raw_handle: RawWindowHandle,
+    _width: i32,
+    _height: i32,
+) -> Result<SkiaSurface, &'static str> {
+    Err(
         "jian-skia: Metal GPU surface not yet implemented; \
          `--features metal` enables the API surface but the platform \
-         glue is a Plan 8 Task 2 follow-up. Fall back to \
-         `SkiaSurface::new_raster` for now."
-    );
+         glue is a Plan 8 Task 2 follow-up. Hosts that hit this \
+         error should fall back to `SkiaSurface::new_raster`.",
+    )
 }
