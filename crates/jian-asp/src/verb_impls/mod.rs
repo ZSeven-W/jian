@@ -36,10 +36,14 @@ use crate::session::{Permission, Session};
 use jian_core::Runtime;
 
 #[cfg(feature = "dev-asp")]
-mod find_verb;
+pub mod find_verb;
+#[cfg(feature = "dev-asp")]
+pub mod tap_verb;
 
 #[cfg(feature = "dev-asp")]
 pub use find_verb::collect_node_summaries;
+#[cfg(feature = "dev-asp")]
+pub use tap_verb::run_tap;
 
 #[cfg(test)]
 mod tests {
@@ -342,6 +346,7 @@ pub fn dispatch(
         Verb::Find { selector, limit } => {
             (run_find(runtime, selector, *limit), DispatchControl::Continue)
         }
+        Verb::Tap { selector } => (run_tap(runtime, selector), DispatchControl::Continue),
         Verb::Inspect { selector, what } => {
             (run_inspect(runtime, selector.as_ref(), *what), DispatchControl::Continue)
         }
