@@ -273,6 +273,34 @@ impl Runtime {
         self.spatial.rebuild(items);
     }
 
+    /// Cold-start variant (Plan 19 Task 5): bulk-load only nodes
+    /// whose bbox intersects the supplied viewport. The off-
+    /// viewport remainder is returned so the host can fold it in
+    /// later via [`SpatialIndex::fill_rest`] once the
+    /// `EventPumpReady` startup phase has fired.
+    ///
+    /// On a 1000-node document with ~100 visible nodes, this
+    /// drops the first spatial build from O(1000 log 1000) to
+    /// O(100 log 100) — the C19 measurement target.
+    pub fn rebuild_spatial_for_first_frame(&mut self, viewport: crate::geometry::Rect) -> Vec<NodeBBox> {
+        let doc = self.document.as_ref().expect("no document loaded");
+        let mut visible: Vec<NodeBBox> = Vec::new();
+        let mut hidden: Vec<NodeBBox> = Vec::new();
+        for (key, _) in doc.tree.nodes.iter() {
+            let Some(rect) = self.layout.node_rect(key) else {
+                continue;
+            };
+            let bbox = NodeBBox { key, rect };
+            if rects_intersect(rect, viewport) {
+                visible.push(bbox);
+            } else {
+                hidden.push(bbox);
+            }
+        }
+        self.spatial.rebuild(visible);
+        hidden
+    }
+
     /// Feed a pointer event through the gesture pipeline; any emitted
     /// semantic events are routed to the matching `events.*` handlers.
     /// Returns the semantic events for host inspection/tests.
@@ -590,6 +618,19 @@ fn json_has_event_handler(node: &jian_ops_schema::node::PenNode, key: &str) -> b
         // treat as present so authored shorthand still routes.
         Some(_) => true,
     }
+}
+
+/// AABB-vs-AABB overlap test for the visible-set pre-filter on
+/// [`Runtime::rebuild_spatial_for_first_frame`]. Two rects
+/// intersect when their projected ranges overlap on both axes;
+/// rects sharing only an edge (`a.max == b.min`) are treated as
+/// intersecting so a node flush against the viewport's right
+/// edge is still hit-testable.
+fn rects_intersect(a: crate::geometry::Rect, b: crate::geometry::Rect) -> bool {
+    a.min_x() <= b.max_x()
+        && a.max_x() >= b.min_x()
+        && a.min_y() <= b.max_y()
+        && a.max_y() >= b.min_y()
 }
 
 #[cfg(test)]
