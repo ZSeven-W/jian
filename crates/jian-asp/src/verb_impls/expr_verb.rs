@@ -94,28 +94,36 @@ pub fn run_wait_for(runtime: &mut Runtime, expr: &str, timeout_ms: Option<u64>) 
         if started.elapsed() >= timeout {
             return OutcomePayload::timeout("wait_for", expr, timeout.as_millis() as u64);
         }
-        // Drive the scheduler so deferred work + recogniser
-        // timeouts can run between polls. `runtime.tick(now)`
-        // is the same hook the host's frame loop uses.
+        // Drive the scheduler so timer-based gesture recognisers
+        // (long-press, double-tap window, etc) can fire between
+        // polls; `Runtime::tick` only ticks gestures and flushes
+        // semantic-event-triggered scheduler work, so deferred
+        // bindings need their own pump. Drain any that piled up
+        // before the previous poll so an expression depending on
+        // `bindings.<prop>` sees the latest value.
+        let _drained = runtime.drain_deferred_bindings();
         runtime.tick(Instant::now());
         std::thread::sleep(Duration::from_millis(WAIT_FOR_POLL_MS));
     }
 }
 
-/// Truthiness rules: `false` / `null` / `0` / `""` are falsy;
-/// everything else (including `[]`, `{}`) is truthy. Matches
-/// the runtime's binding-evaluation truthiness for `visible` /
-/// `disabled` so an agent's `assert visible` / `wait_for
-/// disabled` agree with what the renderer sees.
+/// Truthiness rules — mirrors the jian-core expression VM
+/// (`expression/vm.rs::truthy`) and the action control flow
+/// (`action/actions/control.rs`'s `if`/`unless`) so an agent's
+/// `assert []` / `wait_for {}` agree with `!`, `&&`, `||`, and
+/// `if` semantics inside expressions.
+///
+/// Falsy: `null`, `false`, `0` / `NaN`, `""`, `[]`, `{}`.
+/// Truthy: everything else.
 fn is_truthy(v: &RuntimeValue) -> bool {
     use serde_json::Value;
     match &v.0 {
-        Value::Bool(b) => *b,
         Value::Null => false,
-        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0 && !f.is_nan()).unwrap_or(false),
         Value::String(s) => !s.is_empty(),
-        // arrays / objects are truthy regardless of contents
-        Value::Array(_) | Value::Object(_) => true,
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
     }
 }
 
@@ -202,6 +210,9 @@ mod tests {
 
     #[test]
     fn is_truthy_handles_jian_value_kinds() {
+        // Mirrors the jian-core VM's truthiness — empty array /
+        // empty object / NaN are falsy along with the obvious
+        // null / false / 0 / "".
         let t = RuntimeValue(serde_json::json!(true));
         let f = RuntimeValue(serde_json::json!(false));
         let zero = RuntimeValue(serde_json::json!(0));
@@ -209,8 +220,10 @@ mod tests {
         let empty = RuntimeValue(serde_json::json!(""));
         let s = RuntimeValue(serde_json::json!("x"));
         let null = RuntimeValue(serde_json::json!(null));
-        let arr = RuntimeValue(serde_json::json!([]));
-        let obj = RuntimeValue(serde_json::json!({}));
+        let arr_empty = RuntimeValue(serde_json::json!([]));
+        let arr_nonempty = RuntimeValue(serde_json::json!([1]));
+        let obj_empty = RuntimeValue(serde_json::json!({}));
+        let obj_nonempty = RuntimeValue(serde_json::json!({"k": 1}));
         assert!(is_truthy(&t));
         assert!(!is_truthy(&f));
         assert!(!is_truthy(&zero));
@@ -218,7 +231,9 @@ mod tests {
         assert!(!is_truthy(&empty));
         assert!(is_truthy(&s));
         assert!(!is_truthy(&null));
-        assert!(is_truthy(&arr));
-        assert!(is_truthy(&obj));
+        assert!(!is_truthy(&arr_empty), "empty array is falsy");
+        assert!(is_truthy(&arr_nonempty));
+        assert!(!is_truthy(&obj_empty), "empty object is falsy");
+        assert!(is_truthy(&obj_nonempty));
     }
 }
