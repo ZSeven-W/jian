@@ -34,6 +34,8 @@
 
 use crate::protocol::ActionRow;
 use jian_core::action_surface::{ActionDefinition, AvailabilityStatic, SourceKind};
+use jian_ops_schema::document::PenDocument;
+use std::collections::BTreeSet;
 
 /// Default page size when `limit` is omitted on the
 /// [`crate::protocol::Verb::ListActions`] request. Tighter than
@@ -55,6 +57,12 @@ pub const LIST_ACTIONS_DEFAULT_LIMIT: u32 = 200;
 ///   refactor that might let `StaticHidden` rows leak.
 /// - `ConfirmGated` actions are excluded by default. ASP prod's
 ///   policy mirrors MCP's `include_confirm_gated: false`.
+///
+/// **NOTE:** this overload doesn't have access to the `PenDocument`
+/// so it can only check status flags on each action. To also drop
+/// actions whose source node is inside an `aiHidden` subtree (Plan
+/// 18 §3 / C2 — required for prod mode), use
+/// [`project_actions_with_doc`].
 pub fn project_actions(actions: &[ActionDefinition]) -> Vec<ActionRow> {
     actions
         .iter()
@@ -64,6 +72,83 @@ pub fn project_actions(actions: &[ActionDefinition]) -> Vec<ActionRow> {
             events: source_kind_to_events(a.source_kind),
         })
         .collect()
+}
+
+/// Same as [`project_actions`] but additionally filters out any
+/// action whose `source_node_id` sits inside an `aiHidden: true`
+/// subtree (Plan 18 §3 / C2). This is the projection prod mode
+/// uses; spec §3 requires ASP prod's `list_actions` to omit rows
+/// whose source node is anywhere under an `aiHidden` ancestor —
+/// not just nodes flagged `aiHidden` themselves. `derive_actions`
+/// already marks node-level `aiHidden` as
+/// `AvailabilityStatic::StaticHidden`; the gap this function closes
+/// is "child of an aiHidden parent inherits the hidden boundary."
+pub fn project_actions_with_doc(actions: &[ActionDefinition], doc: &PenDocument) -> Vec<ActionRow> {
+    let hidden = collect_ai_hidden_subtree(doc);
+    actions
+        .iter()
+        .filter(|a| matches!(a.status, AvailabilityStatic::Available))
+        .filter(|a| !hidden.contains(&a.source_node_id))
+        .map(|a| ActionRow {
+            id: a.full_name(),
+            events: source_kind_to_events(a.source_kind),
+        })
+        .collect()
+}
+
+/// Walk `doc` and collect every node id that sits inside an
+/// `aiHidden: true` subtree — the aiHidden node itself plus every
+/// descendant. Implemented via `serde_json::to_value` traversal
+/// (consistent with `font_plan.rs` and the AOT writer's duplicate-
+/// id walker in `pack.rs`) so a future PenNode variant doesn't
+/// need a new arm here.
+pub fn collect_ai_hidden_subtree(doc: &PenDocument) -> BTreeSet<String> {
+    let mut hidden = BTreeSet::new();
+    let v = match serde_json::to_value(doc) {
+        Ok(v) => v,
+        Err(_) => return hidden,
+    };
+    // Spec walks `pages[*].children` AND root `children` — same
+    // shape derive_actions uses, so the hidden-subtree set covers
+    // every action-bearing root.
+    if let Some(pages) = v.get("pages").and_then(|p| p.as_array()) {
+        for page in pages {
+            if let Some(children) = page.get("children").and_then(|c| c.as_array()) {
+                for child in children {
+                    walk_for_hidden(child, false, &mut hidden);
+                }
+            }
+        }
+    }
+    if let Some(children) = v.get("children").and_then(|c| c.as_array()) {
+        for child in children {
+            walk_for_hidden(child, false, &mut hidden);
+        }
+    }
+    hidden
+}
+
+fn walk_for_hidden(node: &serde_json::Value, parent_hidden: bool, out: &mut BTreeSet<String>) {
+    let self_hidden = node
+        .get("semantics")
+        .and_then(|s| s.get("aiHidden"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let subtree_hidden = parent_hidden || self_hidden;
+    if subtree_hidden {
+        if let Some(id) = node.get("id").and_then(|v| v.as_str()) {
+            out.insert(id.to_owned());
+        }
+    }
+    // Recurse into container children. PenNode container variants
+    // are Frame / Group / Rectangle / Ref; the JSON walk doesn't
+    // need to enumerate them because the `children` field shape
+    // is consistent across variants and absent on leaves.
+    if let Some(children) = node.get("children").and_then(|c| c.as_array()) {
+        for child in children {
+            walk_for_hidden(child, subtree_hidden, out);
+        }
+    }
 }
 
 /// Map [`SourceKind`] → spec §12 `events` strings. The mapping is
@@ -378,5 +463,123 @@ mod tests {
         }];
         let (page, _) = paginate(rows, Some(""), 4).expect("empty cursor ok");
         assert_eq!(page.len(), 1);
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // C2 — aiHidden subtree filtering (Plan 18 §3)
+    // ──────────────────────────────────────────────────────────
+
+    fn doc_from_json(s: &str) -> PenDocument {
+        jian_ops_schema::load_str(s).expect("schema parse").value
+    }
+
+    #[test]
+    fn collect_ai_hidden_subtree_finds_node_flagged_directly() {
+        let doc = doc_from_json(
+            r##"{
+              "formatVersion": "1.0", "version": "1.0.0", "id": "h",
+              "app": { "name": "h", "version": "1", "id": "h" },
+              "children": [
+                { "type": "frame", "id": "secret", "x": 0, "y": 0, "width": 10, "height": 10,
+                  "semantics": { "aiHidden": true } },
+                { "type": "frame", "id": "public", "x": 0, "y": 20, "width": 10, "height": 10 }
+              ]
+            }"##,
+        );
+        let hidden = collect_ai_hidden_subtree(&doc);
+        assert!(hidden.contains("secret"));
+        assert!(!hidden.contains("public"));
+    }
+
+    #[test]
+    fn collect_ai_hidden_subtree_descends_into_children() {
+        // Plan 18 §3 / C2: a child of an aiHidden parent inherits
+        // the hidden boundary, even if the child itself doesn't
+        // declare `aiHidden`.
+        let doc = doc_from_json(
+            r##"{
+              "formatVersion": "1.0", "version": "1.0.0", "id": "h",
+              "app": { "name": "h", "version": "1", "id": "h" },
+              "children": [
+                { "type": "frame", "id": "private-section", "x": 0, "y": 0, "width": 100, "height": 100,
+                  "semantics": { "aiHidden": true },
+                  "children": [
+                    { "type": "rectangle", "id": "private-button", "x": 0, "y": 0, "width": 50, "height": 20 },
+                    { "type": "frame", "id": "private-row", "x": 0, "y": 30, "width": 100, "height": 30,
+                      "children": [
+                        { "type": "rectangle", "id": "deeply-hidden", "x": 0, "y": 0, "width": 50, "height": 20 }
+                      ]
+                    }
+                  ]
+                },
+                { "type": "rectangle", "id": "public-button", "x": 0, "y": 100, "width": 50, "height": 20 }
+              ]
+            }"##,
+        );
+        let hidden = collect_ai_hidden_subtree(&doc);
+        assert!(hidden.contains("private-section"));
+        assert!(hidden.contains("private-button"));
+        assert!(hidden.contains("private-row"));
+        assert!(hidden.contains("deeply-hidden"));
+        assert!(!hidden.contains("public-button"));
+    }
+
+    #[test]
+    fn collect_ai_hidden_subtree_returns_empty_for_doc_with_no_aihidden() {
+        let doc = doc_from_json(
+            r##"{
+              "formatVersion": "1.0", "version": "1.0.0", "id": "h",
+              "app": { "name": "h", "version": "1", "id": "h" },
+              "children": [
+                { "type": "rectangle", "id": "a", "x": 0, "y": 0, "width": 10, "height": 10 },
+                { "type": "rectangle", "id": "b", "x": 20, "y": 0, "width": 10, "height": 10 }
+              ]
+            }"##,
+        );
+        let hidden = collect_ai_hidden_subtree(&doc);
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn project_actions_with_doc_drops_actions_whose_source_is_in_hidden_subtree() {
+        // Two actions: one in a hidden subtree, one outside.
+        // `derive_actions` marks the inner-flagged-aiHidden as
+        // StaticHidden (handled by project_actions filter), but a
+        // child of an aiHidden ancestor stays Available — only the
+        // doc-walking projector catches that.
+        let doc = doc_from_json(
+            r##"{
+              "formatVersion": "1.0", "version": "1.0.0", "id": "h",
+              "app": { "name": "h", "version": "1", "id": "h" },
+              "children": [
+                { "type": "frame", "id": "private", "x": 0, "y": 0, "width": 100, "height": 100,
+                  "semantics": { "aiHidden": true },
+                  "children": [
+                    { "type": "rectangle", "id": "private-btn", "x": 0, "y": 0, "width": 50, "height": 20,
+                      "events": { "onTap": [{ "set": { "$state.x": "1" } }] } }
+                  ]
+                },
+                { "type": "rectangle", "id": "public-btn", "x": 0, "y": 120, "width": 50, "height": 20,
+                  "events": { "onTap": [{ "set": { "$state.y": "1" } }] } }
+              ],
+              "state": { "x": { "type": "int", "default": 0 }, "y": { "type": "int", "default": 0 } }
+            }"##,
+        );
+        let derived = jian_core::action_surface::derive_actions(&doc, &[0u8; 16]);
+        let rows_loose = project_actions(&derived);
+        let rows_strict = project_actions_with_doc(&derived, &doc);
+        // Loose projection sees both actions because neither is
+        // flagged StaticHidden.
+        assert!(
+            rows_loose.iter().any(|r| r.id.contains("public_btn")),
+            "loose projection should include public-btn"
+        );
+        // Strict projection drops the action under the aiHidden
+        // ancestor.
+        assert!(rows_strict.iter().all(|r| !r.id.contains("private_btn")));
+        assert!(
+            rows_strict.iter().any(|r| r.id.contains("public_btn")),
+            "strict projection should keep public-btn"
+        );
     }
 }

@@ -427,6 +427,56 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_list_actions_drops_actions_under_aihidden_ancestor() {
+        // Plan 18 §3 / C2 end-to-end: an action whose source node
+        // sits inside an aiHidden subtree must not appear in
+        // list_actions, even when the source node itself isn't
+        // flagged aiHidden directly. `derive_actions` already drops
+        // node-level aiHidden as StaticHidden; this test pins the
+        // ancestor-walking gap project_actions_with_doc closes.
+        let doc = r##"{
+          "formatVersion": "1.0", "version": "1.0.0", "id": "h",
+          "app": { "name": "h", "version": "1", "id": "h" },
+          "children": [
+            { "type": "frame", "id": "private", "x": 0, "y": 0, "width": 200, "height": 100,
+              "semantics": { "aiHidden": true },
+              "children": [
+                { "type": "rectangle", "id": "private-btn", "x": 0, "y": 0, "width": 100, "height": 40,
+                  "events": { "onTap": [{ "set": { "$state.x": "1" } }] } }
+              ]
+            },
+            { "type": "rectangle", "id": "public-btn", "x": 0, "y": 120, "width": 100, "height": 40,
+              "events": { "onTap": [{ "set": { "$state.y": "1" } }] } }
+          ],
+          "state": { "x": { "type": "int", "default": 0 }, "y": { "type": "int", "default": 0 } }
+        }"##;
+        let mut rt = make_runtime_with_doc(doc);
+        let mut session = Session::new(Permission::Observe, "test", "0.1");
+        let (out, _) = dispatch(
+            &Verb::ListActions {
+                cursor: None,
+                limit: None,
+            },
+            &mut rt,
+            &mut session,
+        );
+        match out.detail {
+            Some(DetailKind::ActionList { actions, .. }) => {
+                let ids: Vec<_> = actions.iter().map(|a| a.id.clone()).collect();
+                assert!(
+                    ids.iter().any(|id| id.contains("public_btn")),
+                    "expected public-btn in {ids:?}"
+                );
+                assert!(
+                    !ids.iter().any(|id| id.contains("private_btn")),
+                    "private-btn under aiHidden ancestor should NOT appear: {ids:?}"
+                );
+            }
+            other => panic!("expected ActionList, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn dispatch_list_actions_respects_pagination() {
         // Build a 250-action fixture by replicating buttons; pin
         // that `limit: 100` returns 100 rows + a non-None cursor,
@@ -1141,7 +1191,11 @@ fn run_list_actions(runtime: &Runtime, cursor: Option<&str>, limit: Option<u32>)
         );
     };
     let derived = derive_actions(&doc.schema, &BUILD_SALT);
-    let rows = list_actions::project_actions(&derived);
+    // C2: project_actions_with_doc filters out rows whose source
+    // node sits inside an `aiHidden` subtree, not just nodes
+    // flagged aiHidden directly (which `derive_actions` already
+    // marks `StaticHidden` for the projector to drop).
+    let rows = list_actions::project_actions_with_doc(&derived, &doc.schema);
     let total = rows.len();
     let (page, next_cursor) = match list_actions::paginate(rows, cursor, limit) {
         Ok(p) => p,
