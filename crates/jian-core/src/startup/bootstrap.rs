@@ -32,7 +32,7 @@
 //! | `SeedStateGraph`      | `Runtime::new_from_document` (state + tree atomic)   |
 //! | `BuildNodeTree`       | no-op (covered by `SeedStateGraph`)                  |
 //! | `InitGpuContext`      | host-agnostic no-op (host overrides per backend)     |
-//! | `LoadCoreFonts`       | host-agnostic no-op (real subset → Plan 19 D2)       |
+//! | `LoadCoreFonts`       | first-frame `FontPlan::scan_subtrees` (Plan 19 D2)   |
 //! | `ComputeFirstLayout`  | `Runtime::build_layout(viewport)`                    |
 //! | `BuildVisibleSpatial` | `Runtime::rebuild_spatial_for_first_frame(viewport)` |
 //!
@@ -70,6 +70,8 @@ use crate::startup::driver::StartupDriver;
 use crate::startup::phase::StartupPhase;
 use crate::Runtime;
 use jian_ops_schema::document::PenDocument;
+use jian_ops_schema::font_plan::FontPlan;
+use jian_ops_schema::node::PenNode;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -118,6 +120,30 @@ impl BootstrapHandles {
     pub fn take_hidden_bboxes(&self) -> Option<Vec<NodeBBox>> {
         self.shared.hidden_bboxes.borrow_mut().take()
     }
+
+    /// Take the [`FontPlan`] the `LoadCoreFonts` phase scanned out of
+    /// the schema's first-frame subtree. The host's font provider
+    /// can iterate `plan.families()` and request a per-family
+    /// codepoint subset for first-paint, then schedule the remaining
+    /// glyphs from the Background stage's `LoadRemainingFonts` phase.
+    ///
+    /// Returns `None` if `LoadCoreFonts` hasn't run yet, or if
+    /// `take_core_font_plan` was already called. Empty plan (no text
+    /// nodes anywhere on the first frame) is still `Some` — `is_empty`
+    /// on the plan distinguishes "ran but found nothing" from "didn't
+    /// run".
+    ///
+    /// First-frame heuristic: when the doc declares explicit `pages`,
+    /// scan the first page; otherwise scan every root child. This
+    /// mirrors the same heuristic the player / perf / budget tests use
+    /// for first-frame root selection so the plan covers what the
+    /// renderer is about to paint. (Codex review of D2: a viewport-
+    /// aware scan would need a layout-pass dep that defeats the
+    /// LoadCoreFonts ⫶ SeedStateGraph parallelism — Plan 19 §C19
+    /// explicitly accepts the wider page-scan trade-off here.)
+    pub fn take_core_font_plan(&self) -> Option<FontPlan> {
+        self.shared.core_font_plan.borrow_mut().take()
+    }
 }
 
 /// Internal cells the phase impls read / write through `Rc`.
@@ -135,6 +161,11 @@ struct BootstrapShared {
     /// `SpatialIndex::fill_rest` without re-walking every node.
     /// `None` until visible spatial runs.
     hidden_bboxes: RefCell<Option<Vec<NodeBBox>>>,
+    /// Filled by `LoadCoreFonts` — the per-family codepoint plan a
+    /// host's font provider uses to request first-paint subsets via
+    /// [`BootstrapHandles::take_core_font_plan`]. `None` until the
+    /// phase runs.
+    core_font_plan: RefCell<Option<FontPlan>>,
     /// Caller-supplied first-frame viewport, in logical pixels.
     viewport: (f32, f32),
 }
@@ -162,6 +193,7 @@ impl HostAgnosticBootstrap {
             schema: RefCell::new(None),
             runtime: RefCell::new(None),
             hidden_bboxes: RefCell::new(None),
+            core_font_plan: RefCell::new(None),
             viewport,
             source,
         });
@@ -184,7 +216,7 @@ impl HostAgnosticBootstrap {
         register_seed_state_graph(driver, &shared);
         register_build_node_tree(driver, &shared);
         register_init_gpu_context(driver);
-        register_load_core_fonts(driver);
+        register_load_core_fonts(driver, &shared);
         register_compute_first_layout(driver, &shared);
         register_build_visible_spatial(driver, &shared);
 
@@ -238,10 +270,18 @@ fn register_seed_state_graph(driver: &mut StartupDriver, shared: &Rc<BootstrapSh
             // Idempotent if a host re-runs the data stage.
             return Ok(());
         }
+        // Clone (was `take`) so the schema cell stays populated for
+        // `LoadCoreFonts`, which depends on `ParseSchema` and runs in
+        // parallel with this phase under the dep graph (codex review
+        // of D2: a `.take()` here races the font-plan scan and leaves
+        // it without a schema in 50% of poll orders). The clone is
+        // bounded by document size and avoids draining the schema for
+        // parallel phases.
         let schema = shared
             .schema
-            .borrow_mut()
-            .take()
+            .borrow()
+            .as_ref()
+            .cloned()
             .ok_or_else(|| "ParseSchema produced no schema".to_owned())?;
         let runtime = Runtime::new_from_document(schema)
             .map_err(|e| format!("Runtime::new_from_document: {e}"))?;
@@ -270,11 +310,48 @@ fn register_init_gpu_context(driver: &mut StartupDriver) {
     driver.register(StartupPhase::InitGpuContext, || async move { Ok(()) });
 }
 
-fn register_load_core_fonts(driver: &mut StartupDriver) {
-    // Plan 19 D2 (font subsetter wiring) lands the real body — until
-    // then this records its timing as a no-op so the report still
-    // covers every DataPath phase.
-    driver.register(StartupPhase::LoadCoreFonts, || async move { Ok(()) });
+fn register_load_core_fonts(driver: &mut StartupDriver, shared: &Rc<BootstrapShared>) {
+    // Scan the first-frame subtree for the per-family codepoints the
+    // first paint will need. Stores a `FontPlan` in
+    // `BootstrapShared::core_font_plan` for the host to take via
+    // `BootstrapHandles::take_core_font_plan` and feed into its
+    // platform-specific font loader. The actual font I/O / subsetting
+    // happens host-side (skia-safe + ttf-parser on desktop, CanvasKit
+    // on web, etc.) — jian-core stays host-agnostic per Plan 19's
+    // separation of concerns, the same pattern used for
+    // `InitGpuContext`. Plan 19 §C19 D2.
+    let shared = Rc::clone(shared);
+    driver.register(StartupPhase::LoadCoreFonts, move || async move {
+        let schema_ref = shared.schema.borrow();
+        let schema = schema_ref
+            .as_ref()
+            .ok_or_else(|| "ParseSchema produced no schema".to_owned())?;
+        let plan = scan_first_frame_font_plan(schema);
+        // End the schema borrow before publishing the plan. The next
+        // write is to a different `RefCell` (`core_font_plan`), so
+        // this isn't strictly required for borrow-rule correctness —
+        // it's tidy hygiene that scopes the read narrowly.
+        drop(schema_ref);
+        *shared.core_font_plan.borrow_mut() = Some(plan);
+        Ok(())
+    });
+}
+
+/// First-frame font-plan scan: when the doc declares explicit `pages`,
+/// scan the first page's children; otherwise scan every root child.
+/// Mirrors the same first-frame-root heuristic the player / perf /
+/// budget tests use, so the plan covers the first page / root set the
+/// runtime seeds — and may over-include off-viewport text until layout
+/// exists. A truly viewport-aware scan would need layout output, but
+/// `LoadCoreFonts` runs in parallel with `ComputeFirstLayout` under
+/// the Plan 19 dep graph; the page-level approximation is the
+/// price of that parallelism (Plan 19 §C19 D2 explicitly accepts it).
+fn scan_first_frame_font_plan(schema: &PenDocument) -> FontPlan {
+    let roots: &[PenNode] = match (&schema.pages, &schema.children) {
+        (Some(pages), _) if !pages.is_empty() => &pages[0].children,
+        _ => schema.children.as_slice(),
+    };
+    FontPlan::scan_subtrees(roots.iter())
 }
 
 fn register_compute_first_layout(driver: &mut StartupDriver, shared: &Rc<BootstrapShared>) {
@@ -482,5 +559,198 @@ mod tests {
             }
             other => panic!("expected PhaseFailed, got {other:?}"),
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Plan 19 D2 — font plan exposed via BootstrapHandles
+    // ──────────────────────────────────────────────────────────────
+
+    fn doc_with_text(content: &str) -> String {
+        format!(
+            r##"{{
+              "formatVersion": "1.0", "version": "1.0.0", "id": "ft",
+              "app": {{ "name": "ft", "version": "1", "id": "ft" }},
+              "children": [
+                {{ "type": "frame", "id": "root", "width": 320, "height": 240, "x": 0, "y": 0,
+                  "children": [
+                    {{ "type": "text", "id": "t1", "fontFamily": "Inter",
+                       "x": 10, "y": 10, "content": {content:?} }}
+                  ]
+                }}
+              ]
+            }}"##
+        )
+    }
+
+    #[test]
+    fn load_core_fonts_populates_per_family_codepoints() {
+        // The runtime side of Plan 19 §C19 D2: after `LoadCoreFonts`
+        // runs, the host can take a `FontPlan` mapping `Inter` to the
+        // codepoints in the first-frame's text content. Hosts then
+        // request a per-family subset before first paint.
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::String(doc_with_text("Hi! 你好")),
+            (320.0, 240.0),
+        );
+        let prior = StartupReport::default();
+        let _report =
+            block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+                .expect("data path run ok");
+        let plan = handles
+            .take_core_font_plan()
+            .expect("LoadCoreFonts populated plan");
+        let inter = plan.for_family("Inter").expect("Inter family scanned");
+        // ASCII + CJK codepoints — the scan walks `Plain(String)`
+        // content under the text node's `font_family`.
+        assert!(inter.codepoints.contains(&u32::from('H')));
+        assert!(inter.codepoints.contains(&u32::from('i')));
+        // Mandarin "你" / "好" both appear.
+        assert!(inter.codepoints.contains(&u32::from('你')));
+        assert!(inter.codepoints.contains(&u32::from('好')));
+    }
+
+    #[test]
+    fn load_core_fonts_returns_empty_plan_when_no_text() {
+        // counter_doc has no text nodes — the plan still exists but
+        // is empty. This distinguishes "phase ran, no glyphs needed"
+        // from "phase didn't run" (which returns `None`).
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::String(counter_doc().to_owned()),
+            (320.0, 240.0),
+        );
+        let prior = StartupReport::default();
+        let _report =
+            block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+                .expect("data path run ok");
+        let plan = handles.take_core_font_plan().expect("LoadCoreFonts ran");
+        assert!(plan.is_empty(), "no text nodes -> empty plan");
+    }
+
+    #[test]
+    fn take_core_font_plan_is_idempotent_take_returns_none_second_call() {
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::String(doc_with_text("X")),
+            (320.0, 240.0),
+        );
+        let prior = StartupReport::default();
+        let _ =
+            block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+                .expect("data path run ok");
+        assert!(handles.take_core_font_plan().is_some());
+        // Second take drains nothing (mirror of `take_runtime` /
+        // `take_hidden_bboxes` semantics — Box::take returns None).
+        assert!(handles.take_core_font_plan().is_none());
+    }
+
+    #[test]
+    fn take_core_font_plan_is_none_before_run_stage() {
+        // Codex round 1 MEDIUM: explicit guard for the "phase didn't
+        // run yet" path. Calling `take_core_font_plan` on a freshly
+        // installed bootstrap (no `run_stage` yet) must return `None`
+        // — distinct from "ran, no glyphs" which returns `Some(empty)`.
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::String(doc_with_text("X")),
+            (320.0, 240.0),
+        );
+        // Don't drive the driver — the LoadCoreFonts phase never fires.
+        let _ = driver;
+        assert!(
+            handles.take_core_font_plan().is_none(),
+            "no run_stage → no plan"
+        );
+    }
+
+    fn two_page_doc() -> String {
+        // First page uses `Inter`; second page uses `Roboto`. The
+        // first-frame heuristic should see only `Inter` after running.
+        // Root `children` is required by the schema even when pages
+        // are set; it stays empty so the page-branch is what drives
+        // the scan.
+        r##"{
+          "formatVersion": "1.0", "version": "1.0.0", "id": "tp",
+          "app": { "name": "tp", "version": "1", "id": "tp" },
+          "pages": [
+            { "id": "p1", "name": "Page 1", "children": [
+              { "type": "text", "id": "t_p1", "fontFamily": "Inter",
+                "x": 0, "y": 0, "content": "First" }
+            ]},
+            { "id": "p2", "name": "Page 2", "children": [
+              { "type": "text", "id": "t_p2", "fontFamily": "Roboto",
+                "x": 0, "y": 0, "content": "Second" }
+            ]}
+          ],
+          "children": []
+        }"##
+        .to_owned()
+    }
+
+    #[test]
+    fn first_frame_scan_only_covers_first_page_when_pages_declared() {
+        // Codex round 1 MEDIUM: a multi-page doc tests the
+        // `pages[0].children` branch. The font plan must only include
+        // families used on the first page; second-page-only families
+        // are deferred to LoadRemainingFonts (host-side, future).
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::String(two_page_doc()),
+            (320.0, 240.0),
+        );
+        let prior = StartupReport::default();
+        let _ =
+            block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+                .expect("data path run ok");
+        let plan = handles.take_core_font_plan().expect("LoadCoreFonts ran");
+        assert!(
+            plan.for_family("Inter").is_some(),
+            "first page family present"
+        );
+        assert!(
+            plan.for_family("Roboto").is_none(),
+            "second-page-only family must not appear in the first-frame plan"
+        );
+    }
+
+    #[test]
+    fn empty_pages_list_falls_back_to_root_children() {
+        // Codex round 1 MEDIUM: the `(Some(pages), _) if !pages.is_empty()`
+        // guard means an empty `pages: []` falls through to scanning
+        // root `children`. Without the guard a doc declaring
+        // `"pages": []` alongside root `children` would produce an
+        // empty plan even though the renderer would paint the root
+        // children. Not a realistic doc shape, but the guard exists
+        // explicitly so the test pins it.
+        let body = r##"{
+          "formatVersion": "1.0", "version": "1.0.0", "id": "ep",
+          "app": { "name": "ep", "version": "1", "id": "ep" },
+          "pages": [],
+          "children": [
+            { "type": "text", "id": "t1", "fontFamily": "Inter",
+              "x": 0, "y": 0, "content": "Hello" }
+          ]
+        }"##;
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::String(body.to_owned()),
+            (320.0, 240.0),
+        );
+        let prior = StartupReport::default();
+        let _ =
+            block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+                .expect("data path run ok");
+        let plan = handles.take_core_font_plan().expect("LoadCoreFonts ran");
+        assert!(
+            plan.for_family("Inter").is_some(),
+            "empty pages list must fall back to root children, not produce empty plan"
+        );
     }
 }
