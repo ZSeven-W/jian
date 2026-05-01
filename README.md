@@ -10,10 +10,11 @@ DOM, without an Electron tax.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Rust](https://img.shields.io/badge/rust-1.78%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-750%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-1014%20passing-brightgreen.svg)
 ![Workspace](https://img.shields.io/badge/version-0.0.1-purple.svg)
 ![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-success)
 ![MCP](https://img.shields.io/badge/MCP-rmcp%20stdio-9cf)
+![Cold start](https://img.shields.io/badge/cold%20start-typed%20stages-success)
 ![Status](https://img.shields.io/badge/status-pre--release-yellow.svg)
 
 [**Quick start**](#-quick-start) ·
@@ -34,9 +35,11 @@ DOM, without an Electron tax.
 - 🎯 **Real gesture arena** — Tap · LongPress · Swipe · Scroll · multi-pointer **Pinch & Rotate**, with bubble-style hit dispatch.
 - 🎨 **Pixel-stable rendering** — Skia raster, per-corner radii, gradients, shadows, image cache, Lucide icons; opt-in `textlayout` for full Paragraph shaping.
 - 🤖 **AI-native by design** — every interactive node derives a `<scope>.<slug>_<hash4>` action (Tap stays unprefixed; DoubleTap / LongPress / Submit / Set / Open / LoadMore / Swipe* / Confirm / Dismiss carry verb prefixes); `jian dev --mcp` exposes them over a real MCP stdio server.
+- 🚀 **Typed cold-start pipeline** — three-stage `StartupDriver` (`DataPath` pre-window · `Visual` first-redraw · `Background` post-paint), per-platform budget tests, `jian perf startup` + `jian perf compare` regression gate, and AOT initial-layout pre-bake via `jian pack --aot`.
 - 🔁 **Hot reload that keeps state** — `jian dev app.op` reparses on save without losing your counter / form / scroll position.
 - 🛡️ **Capability-gated I/O** — declared up-front in `app.capabilities`; the gate refuses anything the document didn't ask for.
-- 🧪 **750 tests, 0 failures** — `cargo test --workspace` is the source of truth; CI matrix covers macOS / Linux / Windows + the `textlayout` build path.
+- 🤝 **Agent Shell Protocol (dev-only)** — `jian-asp` ships verbs (Tap / Type / Scroll / Swipe / Snapshot / Inspect ax_tree) for AI-driven UI testing; physically isolated from release builds via the `dev-asp` cargo feature.
+- 🧪 **1014 tests, 0 failures** — `cargo test --workspace` is the source of truth; CI matrix covers macOS / Linux / Windows + the `textlayout` build path + a per-platform `startup-budget` regression gate (15% threshold, 1 ms noise floor).
 
 ## 🎬 Hello, Counter
 
@@ -186,12 +189,13 @@ rt.build_layout_with(SkiaMeasure::new(), (800.0, 600.0))?;
 
 | Crate                     | What it does |
 | ------------------------- | ------------ |
-| **`jian-ops-schema`**     | Canonical Pen Schema for `.op` / `.op.pack`. Round-trips legacy v0.x byte-for-byte; ships v1.0 additive Jian extensions. Generates `bindings/ops.schema.json` (Draft 2020-12) + `bindings/ops.ts` consumed by OpenPencil and other editors. |
-| **`jian-core`** | Runtime kernel. `Runtime` composition root, `Signal<T>` + `Effect`, `StateGraph` (`$app` / `$page` / `$self` / `$route` / `$storage` / `$vars`), Tier-1 expressions, Tier-2 Action DSL, capability gate, gesture arena, taffy flexbox, R-tree spatial index, `MeasureBackend` trait. |
+| **`jian-ops-schema`**     | Canonical Pen Schema for `.op` / `.op.pack`. Round-trips legacy v0.x byte-for-byte; ships v1.0 additive Jian extensions. Generates `bindings/ops.schema.json` (Draft 2020-12) + `bindings/ops.ts` consumed by OpenPencil and other editors. Hosts the `pack::initial_layout` AOT format (Plan 19 D1) + `font_plan` codepoint scanner (D2). |
+| **`jian-core`** | Runtime kernel. `Runtime` composition root, `Signal<T>` + `Effect`, `StateGraph` (`$app` / `$page` / `$self` / `$route` / `$storage` / `$vars`), Tier-1 expressions, Tier-2 Action DSL, capability gate, gesture arena, taffy flexbox, R-tree spatial index, `MeasureBackend` trait, **typed three-stage `StartupDriver`** + `HostAgnosticBootstrap` for the DataPath cold-start phases. |
 | **`jian-skia`** | `RenderBackend` over `skia-safe`. Raster + per-corner radii + linear gradients + shadows + image cache + Lucide icons. Optional `textlayout` feature wires real `Paragraph` shaping pinned by a 1 px drift gate. |
-| **`jian-host-desktop`** | `winit` 0.30 + `softbuffer` 0.4 host. Scale-factor-aware pointer / key translators, in-memory router + storage, `arboard` clipboard, `muda` native menus, binding-aware scene walker. |
+| **`jian-host-desktop`** | `winit` 0.30 + `softbuffer` 0.4 host. Scale-factor-aware pointer / key translators, in-memory router + storage, `arboard` clipboard, `muda` native menus, binding-aware scene walker. **Visual-stage bootstrap** runs Splash / FirstFrame / Present / EventPumpReady inside the first `RedrawRequested` after `resumed()` (Plan 19 capstone B2.2 / B4). Per-platform deep-link trait-routing seams ship in `app_delegate` (macOS) / `win_deeplink` (Windows). |
+| **`jian-asp`** *(dev-only)* | Agent Shell Protocol verb registry: Tap / Type / Scroll / Swipe / Snapshot / Inspect `ax_tree`. Physically isolated from release builds via the `dev-asp` cargo feature (CI assertion enforces no `jian-asp` in release `cargo tree`). Plan 18 Phase 3. |
 | **`jian-action-surface`** | AI Action Surface (spec §3–§10). Derives stable `<scope>.<verb>_<slug>` actions, evaluates `RuntimeStateGate` against live bindings, dispatches synthesised pointer events, and serves `list_available_actions` / `execute_action` over an `rmcp` stdio bridge. Audit + rate limit + concurrency caps + swipe throttle baked in. |
-| **`jian` (CLI)** | `check` · `pack` · `unpack` · `new` · `player` · `dev` (+`--mcp`). |
+| **`jian` (CLI)** | `check` · `pack [--aot] [--aot-viewport WxH]` · `unpack` · `new` · `player` · `dev` (+`--mcp`) · `perf startup [--runs N] [--format json]` · `perf compare BASELINE CURRENT [--threshold 0.15] [--noise-floor-ms 1.0] [--format markdown]`. |
 
 ## 🤖 AI Action Surface
 
@@ -253,16 +257,28 @@ and [`openpencil-docs/superpowers/notes/2026-04-24-ai-action-surface-client-guid
 ## 🛠 Development
 
 ```bash
-cargo test --workspace                  # 750 tests, 0 failures
-cargo test --workspace --all-features   # adds the mcp + textlayout paths
+cargo test --workspace                  # 1014 tests, 0 failures
+cargo test --workspace --all-features   # adds the mcp + textlayout + dev-asp paths
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 cargo run -p jian-ops-schema --bin export_schema
 cargo run -p jian-ops-schema --features export-ts --bin export_ts
+
+# Cold-start instrumentation
+cargo run --release -p jian -- perf startup app.op --runs 20
+cargo run --release -p jian -- perf startup app.op --runs 20 --format json > current.json
+cargo run --release -p jian -- perf compare baseline.json current.json \
+    --threshold 0.15 --noise-floor-ms 1.0 --label macos-aarch64
+
+# AOT pre-bake (writes aot/initial_layout.bin into the .op.pack)
+cargo run --release -p jian -- pack --aot --aot-viewport 800x600 app.op out.op.pack
 ```
 
 CI runs on macOS / Linux / Windows; the `textlayout` job needs Python 3.11
-because Skia's text shaping build pulls it in.
+because Skia's text shaping build pulls it in. The `startup-budget` workflow
+collects per-platform `jian perf startup` JSON on every push and gates PRs
+against `main`'s most recent green baseline (15% regression threshold,
+1 ms noise floor, single rolling PR comment with the diff table).
 
 ## 🗺 Roadmap
 
@@ -273,8 +289,12 @@ because Skia's text shaping build pulls it in.
 - ✅ Plan 6 capability gate (dev-asp gated)
 - ✅ Plan 7 `jian-skia` (raster + gradients + image cache + `ParagraphBuilder` feature)
 - ✅ Plan 8 desktop host (winit / softbuffer / muda menu spec)
-- ✅ Plan 9 CLI (six subcommands incl. `dev` hot-reload)
+- ✅ Plan 9 CLI (eight subcommands incl. `dev` hot-reload + `perf startup` / `perf compare`)
 - ✅ Plan 22 `jian-action-surface` Phase 1 + MCP stdio server (`rmcp`) + `jian dev --mcp`
+- ✅ Plan 18 Agent Shell Protocol Phase 3 verbs — Tap / Type / Scroll / Swipe / Snapshot / Inspect `ax_tree` (`jian-asp`, dev-only via the `dev-asp` cargo feature, CI-asserted off the release path)
+- ✅ Plan 19 cold-start capstone — typed three-stage `StartupDriver` (`DataPath` / `Visual` / `Background`), `HostAgnosticBootstrap` for DataPath, visual-stage runner for the first `RedrawRequested` after `resumed()`, `jian player` two-stage launch with unified-launch-epoch report timeline
+- ✅ Plan 19 D1 `.op.pack` AOT initial-layout writer + reader (`OPL1` little-endian SoA format, `jian pack --aot`); D2 font subsetter wiring (`FontPlan::scan_subtrees` populates `BootstrapHandles::take_core_font_plan`); D3 per-platform startup budget tests; D4 `jian perf compare` CI diff bot + 15% threshold gate + single rolling PR comment
+- ✅ Plan 8 §T7 native menu bar · §T8 deep-link trait-routing seam (`app_delegate.rs` macOS / `win_deeplink.rs` Windows) · §T9 updater trait + `selfupdate` feature · §T10 packaging configs (`cargo bundle` macOS .app · `cargo wix` Windows MSI · `cargo deb` + AppImage Linux · `.icns` generator · Sparkle appcast template · AppImageUpdate metadata)
 - ✅ §3.3 CJK transliteration · §3.4 collision detection · §6.3 swipe throttle · §8.1 AuditLog
 - ✅ §3.1 `BUILD_SALT` build-time injection (`crates/jian-core/build.rs` — env override → git+semver → semver fallback; mac `.git` worktree resolved; FNV-1a double-hash → 16 bytes)
 - ✅ Bubble-style event dispatch · binding-aware scene walker
@@ -283,8 +303,8 @@ because Skia's text shaping build pulls it in.
 
 **Up next (each warrants its own session):**
 
-- ⏳ Plan 19 — cold-start optimisation (Desktop 400 ms / iOS 800 ms / Android 1 s / Web 1.5 s)
-- ⏳ Plan 8 T7-T10 — deeplinks · auto-updater (Sparkle / Squirrel / AppImageUpdate) · packaging
+- ⏳ Plan 19 follow-ups — runtime preload of `aot/initial_layout.bin` (skip `ComputeFirstLayout` via `LayoutEngine::preload_initial`); `aot/expressions.bin` precompiled bytecode; `aot/default_state.bin` serialised initial state
+- ⏳ Plan 8 §T8 platform receivers — macOS `NSApplicationDelegate` Apple-Event subclass; Windows `WM_COPYDATA` hidden-window `WindowProc`; single-instance forwarding so `jian://` URL-scheme registration can flip back on across all three platforms
 - ⏳ Plan 8 / 11 / 12 — GPU surface factories (Metal · D3D12 · OpenGL / WebGL · Vulkan)
 - ⏳ Plan 11 — OpenPencil canvas swap (replace `pen-renderer` via `napi-rs`)
 - ⏳ Plan 13 — Electron → Tauri migration
