@@ -70,6 +70,28 @@ impl StartupReport {
             .fold(0.0_f64, f64::max)
     }
 
+    /// Shift every phase's `started_at_ms` by `offset_ms`. Used by
+    /// hosts that drive multiple [`crate::startup::StartupStage`]s
+    /// from different `Instant` epochs (e.g. stage 1 starts when
+    /// `block_on(driver.run_stage(DataPath, ...))` is called on a
+    /// worker thread; stage 2 starts when the winit thread enters
+    /// `run_visual_stage` after window creation). Each `run_stage`
+    /// records `started_at_ms` relative to its own t0; the host
+    /// shifts the per-stage report by `(stage_t0 - launch_epoch)`
+    /// before [`StartupReport::merge_into`] so the cumulative
+    /// report reads as a single timeline.
+    ///
+    /// `first_interactive_ms` is shifted too — it's measured from
+    /// the same t0 the phase entries are.
+    pub fn shift_started_at_by_ms(&mut self, offset_ms: f64) {
+        for phase in &mut self.phases {
+            phase.started_at_ms += offset_ms;
+        }
+        if self.first_interactive_ms > 0.0 {
+            self.first_interactive_ms += offset_ms;
+        }
+    }
+
     /// Fold another report's phases into this one. Used by hosts that
     /// drive multiple [`crate::startup::StartupStage`]s sequentially:
     /// stage 1 produces a report (DataPath), stage 2 produces another
@@ -387,6 +409,41 @@ mod tests {
         assert_eq!(err, MergeError::DuplicatePhase(StartupPhase::ReadFile));
         // And the reject is atomic — `a` was not mutated.
         assert_eq!(a.phases.len(), 1);
+    }
+
+    #[test]
+    fn shift_started_at_by_ms_offsets_every_phase_and_first_interactive() {
+        let mut r = StartupReport {
+            phases: vec![
+                t(StartupPhase::RenderSplash, 0.0, 4.0),
+                t(StartupPhase::RenderFirstFrame, 4.0, 12.0),
+                t(StartupPhase::PresentToSurface, 16.0, 1.5),
+                t(StartupPhase::EventPumpReady, 17.5, 0.1),
+            ],
+            first_interactive_ms: 17.6,
+        };
+        r.shift_started_at_by_ms(50.0);
+        assert_eq!(r.phases[0].started_at_ms, 50.0);
+        assert_eq!(r.phases[1].started_at_ms, 54.0);
+        assert_eq!(r.phases[3].started_at_ms, 67.5);
+        assert_eq!(r.first_interactive_ms, 67.6);
+        // Durations are NOT shifted — they're spans, not offsets.
+        assert_eq!(r.phases[1].duration_ms, 12.0);
+    }
+
+    #[test]
+    fn shift_started_at_leaves_zero_first_interactive_alone() {
+        // Stage reports that don't include the EventPumpReady marker
+        // (DataPath / Background) carry first_interactive_ms = 0.
+        // Shifting that by an offset would lie about a measurement
+        // that was never taken.
+        let mut r = StartupReport {
+            phases: vec![t(StartupPhase::ReadFile, 0.0, 1.0)],
+            first_interactive_ms: 0.0,
+        };
+        r.shift_started_at_by_ms(100.0);
+        assert_eq!(r.phases[0].started_at_ms, 100.0);
+        assert_eq!(r.first_interactive_ms, 0.0);
     }
 
     #[test]

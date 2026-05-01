@@ -113,46 +113,145 @@ pub struct VisualHandles {
     pub splash_timer: Option<SplashTimer>,
 }
 
+/// Error returned when the visual stage fails. Carries both the
+/// underlying [`StartupError`] AND the [`VisualInputs`] reclaimed
+/// from the internal `VisualShared` cells, so the host can
+/// transactionally restore the surfaces it handed in: the runtime
+/// goes back where it came from, the Skia surface is reusable for
+/// the next steady-state redraw (which will overwrite any
+/// partially-applied splash paint), and the launch can either
+/// abort cleanly or attempt a recovery flow.
+///
+/// Surfaces may be partially mutated by phases that ran
+/// successfully *before* the failing one (e.g. `RenderSplash`
+/// painted before `RenderFirstFrame` errored). "Restored" therefore
+/// means "ownership returned and the resource is usable", not
+/// "byte-exact original". The host's next redraw clears + repaints
+/// the canvas, so partial paint state is acceptable for an
+/// abort-and-log launch policy.
+///
+/// `Debug` is implemented manually because [`VisualInputs`]'s
+/// `Runtime` + `SkiaSurface` fields are not themselves `Debug`;
+/// the impl prints the underlying [`StartupError`] cause plus a
+/// stripped placeholder for the carried inputs (the host doesn't
+/// need to print them — they're meant to be re-installed).
+pub struct VisualStageError {
+    /// Inputs reclaimed from the internal cells. Boxed so the
+    /// `Result` return value stays small — `VisualInputs` itself
+    /// owns a `Runtime` (several Rcs) and a raster `SkiaSurface`,
+    /// putting it inline would inflate every Ok path's stack
+    /// frame. Codex round 3 of the B4 design explicitly flagged
+    /// the named struct over a bare tuple for readability.
+    pub inputs: Box<VisualInputs>,
+    /// Underlying driver error. `Display` prints only this cause's
+    /// message verbatim; host call sites annotate with their own
+    /// prefix (e.g. `"jian player: visual stage failed: {err}"`)
+    /// to avoid double-tagging.
+    pub cause: StartupError,
+}
+
+impl std::fmt::Debug for VisualStageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VisualStageError")
+            .field("cause", &self.cause)
+            .field("inputs", &"<restored: Runtime + SkiaSurface>")
+            .finish()
+    }
+}
+
+impl std::fmt::Display for VisualStageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Do NOT prepend "visual stage failed: " — host-side error
+        // logging adds its own context prefix.
+        std::fmt::Display::fmt(&self.cause, f)
+    }
+}
+
+impl std::error::Error for VisualStageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // The reclaimed `inputs` is incidental data, not a causal
+        // source. Chain through to the StartupError.
+        Some(&self.cause)
+    }
+}
+
 /// Drive the visual stage synchronously on the calling thread. Called
-/// from `ApplicationHandler::resumed` after the window + Skia surface
-/// are available.
+/// from `ApplicationHandler::resumed` (or the first redraw after
+/// surface creation) by the host crate.
 ///
 /// `prior` is the cumulative report from stage 1 (DataPath). The
 /// driver pre-seeds its `done` set from `prior.phases` so the
 /// visual stage's cross-stage deps (e.g. `RenderFirstFrame`'s
 /// `InitGpuContext` / `LoadCoreFonts` / `ComputeFirstLayout` /
 /// `SeedStateGraph`) are proven satisfied. A `prior` missing any of
-/// those surfaces as `StartupError::NoProgress`.
+/// those surfaces as [`VisualStageError`] wrapping
+/// [`StartupError::NoProgress`].
+///
+/// Ownership: on `Ok`, the runtime + surfaces flow out via
+/// [`VisualHandles`]. On `Err`, [`VisualStageError::inputs`] carries
+/// them back so the host can restore atomically — see the type doc
+/// for the partial-paint caveat.
 pub fn run_visual_stage(
     inputs: VisualInputs,
     prior: &StartupReport,
-) -> Result<VisualHandles, StartupError> {
+) -> Result<VisualHandles, VisualStageError> {
     let shared = Rc::new(VisualShared::new(inputs));
     let mut driver = StartupDriver::new();
     register_render_splash(&mut driver, &shared);
     register_render_first_frame(&mut driver, &shared);
     register_present_to_surface(&mut driver, &shared);
     register_event_pump_ready(&mut driver);
-    let report = driver.run_stage_sync(StartupStage::Visual, prior, StartupConfig::default())?;
+    let drive_outcome =
+        driver.run_stage_sync(StartupStage::Visual, prior, StartupConfig::default());
     let shared = Rc::try_unwrap(shared).unwrap_or_else(|_| {
         unreachable!("VisualShared has only one Rc (no clones leaked from phase impls)")
     });
-    Ok(VisualHandles {
-        runtime: shared
-            .runtime
-            .into_inner()
-            .expect("RenderFirstFrame should not move the runtime"),
-        skia: shared
-            .skia
-            .into_inner()
-            .expect("Skia surface still present"),
-        framebuffer: shared
-            .framebuffer
-            .into_inner()
-            .expect("PresentToSurface should populate framebuffer"),
-        splash_timer: shared.splash_timer.into_inner(),
-        report,
-    })
+    match drive_outcome {
+        Ok(report) => Ok(VisualHandles {
+            runtime: shared
+                .runtime
+                .into_inner()
+                .expect("RenderFirstFrame should not move the runtime"),
+            skia: shared
+                .skia
+                .into_inner()
+                .expect("Skia surface still present"),
+            framebuffer: shared
+                .framebuffer
+                .into_inner()
+                .expect("PresentToSurface should populate framebuffer"),
+            splash_timer: shared.splash_timer.into_inner(),
+            report,
+        }),
+        Err(cause) => {
+            // Take everything back out of the cells. Phases that
+            // already ran may have mutated the surfaces (a partial
+            // splash paint, a populated framebuffer); the type doc
+            // on `VisualStageError` explains why that's acceptable.
+            let runtime = shared.runtime.into_inner().unwrap_or_else(|| {
+                unreachable!(
+                    "VisualShared::new always seeds the runtime cell; a phase \
+                     must not move it out before completion"
+                )
+            });
+            let skia = shared.skia.into_inner().unwrap_or_else(|| {
+                unreachable!(
+                    "VisualShared::new always seeds the skia cell; a phase \
+                     must not move it out before completion"
+                )
+            });
+            let _framebuffer = shared.framebuffer.into_inner();
+            let inputs = Box::new(VisualInputs {
+                runtime,
+                skia,
+                physical_size: shared.physical_size,
+                scale: shared.scale,
+                debug_overlay: shared.debug_overlay,
+                splash: shared.splash,
+            });
+            Err(VisualStageError { inputs, cause })
+        }
+    }
 }
 
 /// Internal cells the phase impls read / write through `Rc`.
@@ -517,10 +616,53 @@ mod tests {
         // the Result manually instead.
         let result = run_visual_stage(inputs, &empty_prior);
         match result {
-            Err(StartupError::NoProgress { .. }) => {}
-            Err(other) => panic!("expected NoProgress, got {other:?}"),
+            Err(VisualStageError {
+                cause: StartupError::NoProgress { .. },
+                inputs: _restored,
+            }) => {
+                // Codex round 1 BLOCKER: the failing stage MUST hand
+                // the VisualInputs back so the host can restore. The
+                // restored runtime is reachable here.
+            }
+            Err(other) => panic!("expected NoProgress, got {:?}", other.cause),
             Ok(_handles) => panic!("expected error, got Ok"),
         }
+    }
+
+    #[test]
+    fn visual_stage_returns_inputs_on_phase_failure() {
+        // Codex round 2 final-LGTM ask: confirm a registered phase
+        // that errors mid-stage drops the originals back to the
+        // host instead of consuming them. We can't easily inject a
+        // failing visual phase impl from here (run_visual_stage
+        // owns its driver registration), so we trigger the "empty
+        // prior" path which produces NoProgress + a populated
+        // restored-inputs box.
+        let inputs = VisualInputs {
+            runtime: counter_runtime(),
+            skia: SkiaSurface::new_raster(120, 80),
+            physical_size: (120, 80),
+            scale: 1.0,
+            debug_overlay: false,
+            splash: None,
+        };
+        let original_doc_present = inputs.runtime.document.is_some();
+        assert!(
+            original_doc_present,
+            "test fixture seeded a runtime document"
+        );
+        let result = run_visual_stage(inputs, &StartupReport::default());
+        let Err(err) = result else {
+            panic!("expected Err");
+        };
+        // Restored runtime carries the same document we seeded.
+        assert!(
+            err.inputs.runtime.document.is_some(),
+            "restored runtime should still have its document"
+        );
+        // Source error chain works.
+        use std::error::Error as _;
+        assert!(err.source().is_some());
     }
 
     #[test]

@@ -142,6 +142,22 @@ struct RunApp {
     /// menu bar.
     #[cfg(feature = "menus")]
     menu: Option<muda::Menu>,
+    /// Plan 19 capstone B4: `true` until the first redraw drives the
+    /// visual stage successfully. The first `RedrawRequested` after
+    /// `resumed()` (which we explicitly request) hands the runtime
+    /// and Skia surface to `run_visual_stage`, packs the framebuffer
+    /// into softbuffer, and merges the per-phase timings into
+    /// `host.startup_report`. Steady-state redraws then take over.
+    /// Idempotent: only flips `true → false` on Ok; on Err the host
+    /// restores originals and aborts the launch via `event_loop.exit()`.
+    pending_visual_stage: bool,
+    /// Splash timer the visual stage produced, when `app.splash`
+    /// was set. The run loop's cross-fade path reads
+    /// `is_elapsed` / `remaining` to drive the fade-out — preserved
+    /// here so the timer's render-start `Instant` survives the
+    /// transition out of `run_visual_stage`. (B4 stashes it; the
+    /// cross-fade animation itself is a follow-up commit.)
+    splash_timer: Option<crate::startup::splash::SplashTimer>,
 }
 
 struct SoftbufferState {
@@ -154,6 +170,12 @@ struct SoftbufferState {
 impl RunApp {
     fn new(host: DesktopHost) -> Self {
         let initial = host.config.initial_size;
+        // The visual stage only runs when a real data-path bootstrap
+        // pre-populated the host's startup_report; otherwise the
+        // visual stage's cross-stage deps would fail (NoProgress).
+        // Hosts constructed without a bootstrap (existing tests,
+        // programmatic embedders) skip the typed-staging path.
+        let pending_visual_stage = !host.startup_report.phases.is_empty();
         Self {
             host,
             translator: PointerTranslator::new(),
@@ -166,6 +188,8 @@ impl RunApp {
             scale_factor: 1.0,
             #[cfg(feature = "menus")]
             menu: None,
+            pending_visual_stage,
+            splash_timer: None,
         }
     }
 
@@ -190,7 +214,20 @@ impl RunApp {
         }
     }
 
-    fn redraw(&mut self) {
+    fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // Plan 19 capstone B4: first redraw drives the visual stage
+        // when a data-path bootstrap was wired through the host. On
+        // success the framebuffer reaches softbuffer + the report's
+        // first_interactive_ms is closed; the steady-state path
+        // takes over from the next redraw onward. On failure we
+        // restore the runtime + Skia surface from
+        // `VisualStageError::inputs` and abort the launch via
+        // `event_loop.exit()` (codex review of B4 design, round 1
+        // BLOCKER + round 2: hard error rather than silent fallback).
+        if self.pending_visual_stage {
+            self.run_first_paint_visual_stage(event_loop);
+            return;
+        }
         let Some(state) = self.softbuffer.as_mut() else {
             return;
         };
@@ -248,6 +285,151 @@ impl RunApp {
         }
         let _ = buf.present();
     }
+
+    /// Plan 19 capstone B4 — first-paint trigger that runs the
+    /// host-desktop visual stage atomically, then transitions to
+    /// the steady-state redraw path.
+    ///
+    /// Ownership flow:
+    /// 1. Capture by-value inputs (sizes, scale, splash config).
+    /// 2. `mem::replace` the runtime out of `host.runtime` with a
+    ///    sentinel `Runtime::new()`. The sentinel is unobservable
+    ///    under single-threaded winit dispatch (no nested
+    ///    `window_event` callback fires while `redraw` runs).
+    /// 3. `softbuffer.take()` claims the SkiaSurface + softbuffer
+    ///    surface. `Option::None` during the stage; ensure_surface
+    ///    won't recreate while we hold the take (single-thread).
+    /// 4. Run the stage. On Ok, install handles back + present the
+    ///    framebuffer. On Err, restore the originals from
+    ///    `VisualStageError::inputs` and call `event_loop.exit()`
+    ///    so the launch fails fast with the cause logged.
+    fn run_first_paint_visual_stage(&mut self, event_loop: &ActiveEventLoop) {
+        // Capture launch-epoch offset BEFORE the visual stage's t0
+        // is established inside `run_stage_sync`. Each stage records
+        // phase `started_at_ms` relative to its own t0; we shift by
+        // this offset before merging so the cumulative report reads
+        // as a single timeline rooted at `host.launch_epoch`.
+        // (Codex round 1 of the B4 implementation review, HIGH:
+        // without the offset, `first_interactive_ms` only covered
+        // the visual stage in isolation.)
+        let stage_t0_offset_ms = self.host.launch_epoch.elapsed().as_secs_f64() * 1000.0;
+
+        // Step 1: capture by-value inputs before any state move.
+        let physical_size = self.last_size;
+        let scale = self.scale_factor as f32;
+        let debug_overlay = self.host.config.debug_overlay;
+        let splash = splash_config_from_runtime(&self.host.runtime);
+
+        // Step 2 + 3: atomic swap-out.
+        let runtime = std::mem::replace(&mut self.host.runtime, jian_core::Runtime::new());
+        let Some(SoftbufferState {
+            surface: mut sb_surface,
+            skia,
+        }) = self.softbuffer.take()
+        else {
+            // resumed() ensured the surface; missing it here is a
+            // host-bug. Put runtime back + abort.
+            self.host.runtime = runtime;
+            eprintln!(
+                "jian-host-desktop: visual stage aborted — softbuffer state \
+                 missing on first redraw (resumed() should have created it)"
+            );
+            event_loop.exit();
+            return;
+        };
+
+        let inputs = crate::startup_visual::VisualInputs {
+            runtime,
+            skia,
+            physical_size,
+            scale,
+            debug_overlay,
+            splash,
+        };
+
+        // Step 4: run the stage with the cumulative report as `prior`.
+        match crate::startup_visual::run_visual_stage(inputs, &self.host.startup_report) {
+            Ok(handles) => {
+                // Re-install runtime, present the rendered framebuffer.
+                self.host.runtime = handles.runtime;
+                present_framebuffer(&mut sb_surface, &handles.framebuffer);
+                if let Some(window) = self.window.as_ref() {
+                    window.pre_present_notify();
+                }
+                self.softbuffer = Some(SoftbufferState {
+                    surface: sb_surface,
+                    skia: handles.skia,
+                });
+                // Shift the visual stage's timings into the
+                // launch-epoch frame before merging so the
+                // cumulative report's `started_at_ms` values stay
+                // monotonic across stages. The shift moves
+                // `first_interactive_ms` too — that's the value
+                // operators read as "ms from launch to first
+                // interactive frame" — exactly what we want.
+                let mut visual_report = handles.report;
+                visual_report.shift_started_at_by_ms(stage_t0_offset_ms);
+                // Merge stage report into the cumulative one. A
+                // duplicate-phase guard is the only failure mode and
+                // it would mean the host already merged a Visual
+                // report in the same launch — log + ignore so the
+                // app keeps running.
+                if let Err(e) = self.host.startup_report.merge_into(visual_report) {
+                    eprintln!("jian-host-desktop: startup-report merge skipped: {e}");
+                }
+                self.splash_timer = handles.splash_timer;
+                self.pending_visual_stage = false;
+            }
+            Err(err) => {
+                // Restore originals atomically + abort. Surfaces
+                // may be partially mutated by phases that ran
+                // successfully before the failing one — VisualStageError's
+                // type doc explains why "restore" doesn't mean
+                // byte-exact restore. The next steady-state redraw
+                // would clear + repaint, but we exit before it fires.
+                let cause = err.cause;
+                let restored = *err.inputs;
+                self.host.runtime = restored.runtime;
+                self.softbuffer = Some(SoftbufferState {
+                    surface: sb_surface,
+                    skia: restored.skia,
+                });
+                eprintln!("jian player: visual stage failed: {}", cause);
+                event_loop.exit();
+            }
+        }
+    }
+}
+
+/// Pull the document's `app.splash` config out of the runtime, if
+/// declared. Used by the visual-stage trigger to initialise the
+/// splash phase before the runtime ownership transfer.
+fn splash_config_from_runtime(
+    runtime: &jian_core::Runtime,
+) -> Option<jian_ops_schema::app::SplashConfig> {
+    runtime
+        .document
+        .as_ref()
+        .and_then(|d| d.schema.app.as_ref())
+        .and_then(|a| a.splash.clone())
+}
+
+/// Pack RGBA8888 bytes from the visual stage's framebuffer into the
+/// softbuffer surface's `0x00RRGGBB` u32 pixel format and present.
+/// Mirrors the steady-state present logic in `redraw` so the visual
+/// stage's first paint is byte-equal to what a steady-state pass
+/// over the same canvas would produce.
+fn present_framebuffer(surface: &mut softbuffer::Surface<Rc<Window>, Rc<Window>>, rgba: &[u8]) {
+    let Ok(mut buf) = surface.buffer_mut() else {
+        return;
+    };
+    for (i, pixel) in buf.iter_mut().enumerate() {
+        let r = rgba[i * 4] as u32;
+        let g = rgba[i * 4 + 1] as u32;
+        let b = rgba[i * 4 + 2] as u32;
+        *pixel = (r << 16) | (g << 8) | b;
+    }
+    let _ = buf.present();
 }
 
 impl ApplicationHandler for RunApp {
@@ -351,6 +533,23 @@ impl ApplicationHandler for RunApp {
         let _ = self.host.runtime.build_layout(logical);
         self.host.runtime.viewport.size = make_size(logical.0, logical.1);
         self.host.runtime.rebuild_spatial();
+
+        // Plan 19 capstone B4: when a data-path bootstrap pre-populated
+        // the host's startup_report, ask winit for an immediate
+        // `RedrawRequested` so the visual stage's first-paint trigger
+        // fires deterministically rather than relying on the OS to
+        // happen to send one. The redraw handler picks up
+        // `pending_visual_stage`, drives Splash → FirstFrame →
+        // Present → EventPumpReady through `run_visual_stage`, then
+        // hands control to the steady-state path. Codex review of
+        // the B4 design (round 1, HIGH): an explicit request_redraw
+        // here closes the gap where the first redraw could be
+        // missed or arbitrarily delayed.
+        if self.pending_visual_stage {
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+        }
     }
 
     fn window_event(
@@ -434,7 +633,7 @@ impl ApplicationHandler for RunApp {
                 return;
             }
             WindowEvent::RedrawRequested => {
-                self.redraw();
+                self.redraw(event_loop);
                 return;
             }
             WindowEvent::MouseWheel { delta, .. } => {

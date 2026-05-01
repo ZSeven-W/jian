@@ -9,6 +9,10 @@
 use crate::PlayerArgs;
 use anyhow::{anyhow, Context, Result};
 use jian_core::geometry::size;
+use jian_core::startup::{
+    BootstrapSource, HostAgnosticBootstrap, StartupConfig, StartupDriver, StartupReport,
+    StartupStage,
+};
 use jian_core::Runtime;
 use jian_host_desktop::host::HostConfig;
 use jian_host_desktop::DesktopHost;
@@ -60,25 +64,66 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // Runtime constructor takes ownership.
     let icon = crate::icon_loader::resolve_app_icon(&resolved_path, args.icon.as_deref(), &schema);
 
-    let mut rt = Runtime::new_from_document(schema)
-        .with_context(|| format!("build runtime from {}", resolved_path.display()))?;
-    rt.build_layout((w, h)).with_context(|| "layout")?;
-
-    // When auto-sizing, grow the window to cover any content that our
-    // heuristic text measurement pushed below the declared height —
-    // Sign Up-style bottom rows shouldn't clip.
+    // Auto-size detection runs BEFORE the bootstrap so the recorded
+    // `ComputeFirstLayout` / `BuildVisibleSpatial` timings describe
+    // the FINAL geometry the visual stage paints into. (Codex round
+    // 1 of the B4 implementation review, HIGH: a post-bootstrap
+    // re-layout would leave the report describing the first
+    // attempt's geometry while the runtime used a second.)
+    //
+    // The probe `Runtime::new_from_document` runs in O(seedStateGraph
+    // + buildNodeTree + buildLayout) cost; that's ~30 ms in the
+    // worst case the perf harness has measured. The cost is paid
+    // outside the bootstrap's recorded timeline because we drop the
+    // probe runtime immediately after measuring — the bootstrap
+    // re-constructs the runtime for real against the corrected
+    // viewport.
     if args.size.is_none() {
-        if let Some((mw, mh)) = measured_content_bounds(&rt) {
+        let mut probe = Runtime::new_from_document(schema.clone())
+            .with_context(|| format!("probe runtime for {}", resolved_path.display()))?;
+        probe.build_layout((w, h)).with_context(|| "probe layout")?;
+        if let Some((mw, mh)) = measured_content_bounds(&probe) {
             if mw > w {
                 w = mw.ceil();
             }
             if mh > h {
                 h = (mh + 12.0).ceil(); // small safety margin
             }
-            rt.build_layout((w, h)).with_context(|| "re-layout")?;
         }
+        drop(probe);
     }
-    rt.rebuild_spatial();
+
+    // Plan 19 capstone B4: drive stage 1 (DataPath) through the
+    // host-agnostic bootstrap. Records real SeedStateGraph /
+    // ComputeFirstLayout / BuildVisibleSpatial costs against the
+    // user's `.op` at the **final auto-sized viewport**. ReadFile /
+    // ParseSchema short-circuit because the schema was pre-parsed
+    // for the title / size / icon resolution above. The cumulative
+    // report flows into `DesktopHost`; the visual stage's first
+    // redraw merges its own per-phase timings into the same report
+    // on the winit thread (after a launch-epoch shift so the
+    // timeline is monotonic).
+    let launch_epoch = std::time::Instant::now();
+    let mut driver = StartupDriver::new();
+    let bootstrap = HostAgnosticBootstrap::install_data_path(
+        &mut driver,
+        BootstrapSource::Schema(Box::new(schema)),
+        (w, h),
+    );
+    let stage1_report = futures::executor::block_on(driver.run_stage(
+        StartupStage::DataPath,
+        &StartupReport::default(),
+        StartupConfig::default(),
+    ))
+    .map_err(|e| anyhow!("data-path stage failed: {e}"))?;
+    let mut startup_report = StartupReport::default();
+    startup_report
+        .merge_into(stage1_report)
+        .map_err(|e| anyhow!("{e}"))?;
+    let rt = bootstrap
+        .take_runtime()
+        .ok_or_else(|| anyhow!("data-path bootstrap did not produce a runtime"))?;
+    let hidden_bboxes = bootstrap.take_hidden_bboxes();
 
     // `--dpi`'s clap value_parser already filters out 0 / negative /
     // NaN / Inf, so the host-side fallback is just a straight pass-through.
@@ -91,7 +136,13 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         dpi_override: args.dpi,
         debug_overlay: args.debug_overlay,
     };
-    let host = DesktopHost::with_config(rt, cfg).with_default_menu();
+    let mut host = DesktopHost::with_config(rt, cfg)
+        .with_default_menu()
+        .with_startup_report(startup_report)
+        .with_launch_epoch(launch_epoch);
+    if let Some(bboxes) = hidden_bboxes {
+        host = host.with_pending_hidden_bboxes(bboxes);
+    }
     let host = install_updater_from_doc(host);
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)

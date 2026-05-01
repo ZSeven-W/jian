@@ -6,10 +6,13 @@
 //! and unit tests can still construct a host without a display.
 
 use jian_core::geometry::{size, Size};
+use jian_core::spatial::NodeBBox;
+use jian_core::startup::StartupReport;
 use jian_core::Runtime;
 use jian_ops_schema::document::PenDocument;
 use jian_skia::SkiaBackend;
 use std::sync::mpsc::Receiver;
+use std::time::Instant;
 
 #[cfg(feature = "mcp")]
 use jian_action_surface::mcp::Drain as McpDrain;
@@ -114,6 +117,35 @@ pub struct DesktopHost {
     /// hot-reload, matching designer expectations for `jian dev`).
     #[cfg(feature = "mcp")]
     pub mcp_audit: Option<Rc<ActionAuditLog>>,
+    /// Cumulative startup report from the data-path bootstrap
+    /// (Plan 19 capstone B4). Defaults to `StartupReport::default()`
+    /// when the host is constructed without a bootstrap (existing
+    /// tests, programmatic embedders) — that case skips the typed
+    /// staging entirely and the visual stage's `prior` argument
+    /// will fail-loudly via `StartupError::NoProgress` if invoked.
+    /// `jian player` populates this before opening the window.
+    pub startup_report: StartupReport,
+    /// Off-viewport bbox set the data-path bootstrap returned. Held
+    /// here as the carry-forward target for Plan 19 D1 (background
+    /// stage's `BuildFullSpatial` consumes via
+    /// `SpatialIndex::fill_rest`). **No path in B4 reads this
+    /// field** — it's wired through so the follow-up commit can
+    /// pick it up without re-walking the scene tree. `None` when
+    /// the host wasn't constructed from a bootstrap.
+    pub pending_hidden_bboxes: Option<Vec<NodeBBox>>,
+    /// Launch epoch for the cumulative `startup_report`. Each per-
+    /// stage `run_stage` records phase timings relative to its OWN
+    /// t0 (worker-thread `block_on` for DataPath, winit-thread
+    /// `run_stage_sync` for Visual); the host shifts each stage's
+    /// `started_at_ms` by `(stage_t0 - launch_epoch)` before
+    /// `merge_into` so the cumulative timeline is monotonic.
+    /// (Codex review of B4 implementation, round 1, HIGH: without
+    /// the epoch the merged report's `first_interactive_ms` only
+    /// covered the visual stage in isolation.) Defaults to
+    /// `Instant::now()` at host construction; embedders that
+    /// want finer control can rebuild the host with a specific
+    /// epoch via `with_launch_epoch`.
+    pub launch_epoch: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +226,9 @@ impl DesktopHost {
             mcp_salt: [0u8; 16],
             #[cfg(feature = "mcp")]
             mcp_audit: None,
+            startup_report: StartupReport::default(),
+            pending_hidden_bboxes: None,
+            launch_epoch: Instant::now(),
         }
     }
 
@@ -214,7 +249,42 @@ impl DesktopHost {
             mcp_salt: [0u8; 16],
             #[cfg(feature = "mcp")]
             mcp_audit: None,
+            startup_report: StartupReport::default(),
+            pending_hidden_bboxes: None,
+            launch_epoch: Instant::now(),
         }
+    }
+
+    /// Install the cumulative startup report from a successful
+    /// data-path bootstrap run (Plan 19 capstone B4). The first
+    /// redraw on the winit thread reads this as the `prior` argument
+    /// to `run_visual_stage`, and merges the visual stage's
+    /// per-phase timings back into it. Idempotent — calling more
+    /// than once replaces the prior report, useful when an embedder
+    /// re-runs stage 1.
+    pub fn with_startup_report(mut self, report: StartupReport) -> Self {
+        self.startup_report = report;
+        self
+    }
+
+    /// Stash the off-viewport bbox set the data-path bootstrap
+    /// produced. Carry-forward for Plan 19 D1's background-stage
+    /// `BuildFullSpatial`; **no path in B4 consumes it**. Idempotent.
+    pub fn with_pending_hidden_bboxes(mut self, bboxes: Vec<NodeBBox>) -> Self {
+        self.pending_hidden_bboxes = Some(bboxes);
+        self
+    }
+
+    /// Override the launch epoch. The default `Instant::now()` set
+    /// in `new()` / `with_config()` is correct for the typical case
+    /// (host constructed at the start of the launch sequence), but
+    /// embedders that capture the epoch earlier (before the schema
+    /// parse, before the DataPath stage) can pass it explicitly so
+    /// the cumulative `startup_report` covers everything from the
+    /// process's first relevant `Instant`.
+    pub fn with_launch_epoch(mut self, epoch: Instant) -> Self {
+        self.launch_epoch = epoch;
+        self
     }
 
     /// Install a handler that fires whenever a `muda` menu item
