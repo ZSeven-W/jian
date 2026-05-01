@@ -123,8 +123,9 @@ pub enum Verb {
     /// server's per-response cap (default 200, max 1000). Cursors
     /// are opaque, short-lived, and scoped to the current session +
     /// app revision; clients that hold a cursor across an app
-    /// hot-reload should expect `invalid_cursor` and re-issue
-    /// without one.
+    /// hot-reload get `OutcomePayload { error: Some("Invalid"),
+    /// narrative: "invalid cursor", … }` and should re-issue without
+    /// the cursor to refetch from page 0.
     ListActions {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cursor: Option<String>,

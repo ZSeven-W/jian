@@ -39,6 +39,16 @@ pub mod ax_verb;
 pub mod expr_verb;
 #[cfg(feature = "dev-asp")]
 pub mod find_verb;
+/// Production-mode discovery verb projection (Plan 18 ASP prod
+/// mode / C1). Currently still gated to `dev-asp` because the
+/// dispatch table itself is dev-asp-only — C3 splits the gate
+/// into `dev-asp` (full surface) + `prod-asp` (lean surface,
+/// `list_actions` + ops verbs only) and at that point this
+/// module's gate broadens to `cfg(any(feature = "dev-asp",
+/// feature = "prod-asp"))`. The spec's portable-client policy
+/// (§7) says `list_actions` must be reachable in both modes.
+#[cfg(feature = "dev-asp")]
+pub mod list_actions;
 #[cfg(feature = "dev-asp")]
 pub mod scroll_verb;
 #[cfg(feature = "dev-asp")]
@@ -318,12 +328,12 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_list_actions_returns_empty_action_list_today() {
-        // C0 stub: the projection is intentionally empty until C1
-        // wires the jian-action-surface derivation. The wire shape
-        // must already match the spec — `ActionList { actions:[],
-        // next_cursor: None }` so client integration can land
-        // without waiting on the full pipeline.
+    fn dispatch_list_actions_returns_empty_action_list_for_doc_with_no_handlers() {
+        // The fixture doc has a rectangle + text label but no
+        // `events.onTap` / `bind:value` / `route:` etc., so the
+        // derived action set is empty and `list_actions` returns a
+        // well-formed empty page (C1 keeps C0's stub-shape contract
+        // for the no-actions case).
         let mut rt = make_runtime_with_doc(fixture_doc());
         let mut session = Session::new(Permission::Observe, "test", "0.1");
         let (out, ctl) = dispatch(
@@ -341,11 +351,149 @@ mod tests {
                 actions,
                 next_cursor,
             }) => {
-                assert!(actions.is_empty(), "C0 stub returns no rows yet");
+                assert!(
+                    actions.is_empty(),
+                    "fixture has no event handlers → empty projection"
+                );
                 assert!(next_cursor.is_none());
             }
             other => panic!("expected ActionList detail, got {:?}", other),
         }
+    }
+
+    fn fixture_doc_with_actions() -> &'static str {
+        // Shape: a frame containing a tap-able button, a text-input
+        // with `bind:value`, and a "delete" rectangle with a
+        // confirm-gated handler (must drop out of the projection).
+        r##"{
+          "formatVersion": "1.0", "version": "1.0.0", "id": "fa",
+          "app": { "name": "fa", "version": "1", "id": "fa" },
+          "children": [
+            {
+              "type": "frame", "id": "root", "width": 480, "height": 320, "x": 0, "y": 0,
+              "children": [
+                { "type": "rectangle", "id": "save-btn", "x": 100, "y": 200, "width": 100, "height": 40,
+                  "events": { "onTap": [{ "set": { "$app.saved": "true" } }] } },
+                { "type": "text_input", "id": "email", "x": 0, "y": 0, "width": 200, "height": 30,
+                  "bindings": { "bind:value": "$state.email" } }
+              ]
+            }
+          ],
+          "state": { "saved": { "type": "bool", "default": false }, "email": { "type": "string", "default": "" } }
+        }"##
+    }
+
+    #[test]
+    fn dispatch_list_actions_projects_jian_action_surface_ids() {
+        // Plan 18 §C1: `list_actions` returns the same
+        // `scope.verb_slug_hash4` ids `jian-action-surface` emits.
+        // Two actions in the fixture: tap on save-btn + set on email.
+        let mut rt = make_runtime_with_doc(fixture_doc_with_actions());
+        let mut session = Session::new(Permission::Observe, "test", "0.1");
+        let (out, _) = dispatch(
+            &Verb::ListActions {
+                cursor: None,
+                limit: None,
+            },
+            &mut rt,
+            &mut session,
+        );
+        assert!(out.ok, "expected ok, got: {:?}", out);
+        match out.detail {
+            Some(DetailKind::ActionList { actions, .. }) => {
+                assert!(!actions.is_empty(), "expected non-empty projection");
+                // Every id must follow the scope.slug_hash4 shape.
+                for row in &actions {
+                    assert!(
+                        row.id.contains('.'),
+                        "id {:?} should follow scope.slug shape",
+                        row.id
+                    );
+                    assert!(!row.events.is_empty());
+                }
+                // Hex hash4 suffix → ids end with `_<4 hex chars>`.
+                // We assert at least one tap event and at least one set event.
+                assert!(
+                    actions.iter().any(|r| r.events.iter().any(|e| e == "tap")),
+                    "expected at least one tap event in {actions:?}"
+                );
+                assert!(
+                    actions.iter().any(|r| r.events.iter().any(|e| e == "set")),
+                    "expected at least one set event in {actions:?}"
+                );
+            }
+            other => panic!("expected ActionList, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dispatch_list_actions_respects_pagination() {
+        // Build a 250-action fixture by replicating buttons; pin
+        // that `limit: 100` returns 100 rows + a non-None cursor,
+        // and a follow-up call with that cursor returns the next
+        // page deterministically.
+        let mut buttons = String::new();
+        for i in 0..250 {
+            if i > 0 {
+                buttons.push(',');
+            }
+            buttons.push_str(&format!(
+                r#"{{ "type":"rectangle","id":"btn{i}","x":0,"y":{},"width":50,"height":20,
+                "events": {{ "onTap": [{{ "set": {{ "$app.n": "$app.n + 1" }} }}] }} }}"#,
+                i * 25
+            ));
+        }
+        let doc = format!(
+            r##"{{
+              "formatVersion":"1.0","version":"1.0.0","id":"big",
+              "app":{{"name":"big","version":"1","id":"big"}},
+              "state":{{"n":{{"type":"int","default":0}}}},
+              "children":[
+                {{"type":"frame","id":"root","width":480,"height":6500,"x":0,"y":0,
+                "children":[{buttons}]}}
+              ]
+            }}"##
+        );
+        let mut rt = make_runtime_with_doc(&doc);
+        let mut session = Session::new(Permission::Observe, "test", "0.1");
+        let (out1, _) = dispatch(
+            &Verb::ListActions {
+                cursor: None,
+                limit: Some(100),
+            },
+            &mut rt,
+            &mut session,
+        );
+        let (page1, next1) = match out1.detail {
+            Some(DetailKind::ActionList {
+                actions,
+                next_cursor,
+            }) => (actions, next_cursor),
+            other => panic!("expected ActionList, got {other:?}"),
+        };
+        assert_eq!(page1.len(), 100);
+        let next1 = next1.expect("250 > 100 → cursor must be Some");
+        let (out2, _) = dispatch(
+            &Verb::ListActions {
+                cursor: Some(next1),
+                limit: Some(100),
+            },
+            &mut rt,
+            &mut session,
+        );
+        let (page2, next2) = match out2.detail {
+            Some(DetailKind::ActionList {
+                actions,
+                next_cursor,
+            }) => (actions, next_cursor),
+            other => panic!("expected ActionList, got {other:?}"),
+        };
+        assert_eq!(page2.len(), 100);
+        // Page 2 is disjoint from page 1.
+        let p1: std::collections::HashSet<_> = page1.iter().map(|r| r.id.clone()).collect();
+        let p2: std::collections::HashSet<_> = page2.iter().map(|r| r.id.clone()).collect();
+        assert!(p1.is_disjoint(&p2));
+        assert!(next2.is_some(), "still 50 more rows after page 2");
     }
 
     #[test]
@@ -942,50 +1090,70 @@ pub fn dispatch_with_mode(
 }
 
 /// Maximum `limit` accepted by `list_actions`. Spec §12 says 1000;
-/// pinned here so C1's projection inherits the cap without
-/// re-reading the doc.
+/// pinned here so the projection in [`list_actions`] inherits the
+/// cap without re-reading the doc.
 pub const LIST_ACTIONS_MAX_LIMIT: u32 = 1000;
 
-/// `list_actions` handler (Plan 18 ASP prod mode / C0).
+/// `list_actions` handler (Plan 18 ASP prod mode / C0 + C1).
 ///
-/// **Today (C0):** returns an empty action list after validating
-/// pagination input. The real projection from the runtime's
-/// interactive nodes lands in C1 alongside `jian-action-surface`
-/// integration. The empty projection is intentional, not a stub:
-/// it lets the wire surface stabilize + lets `dispatch_with_mode`'s
-/// prod-mode rejection be tested end-to-end before the action-
-/// derivation logic introduces its own surface area.
+/// C0 stubbed this to an empty array; C1 wires the real projection
+/// off [`jian_core::action_surface::derive_actions`], reusing the
+/// same `<scope>.<verb-prefix-slug>_<hash4>` ids `jian-action-surface`
+/// emits over MCP so a single agent client can switch transport
+/// without re-learning ids.
 ///
-/// Validation enforced today (codex round 1 MEDIUM):
+/// Validation enforced (codex round 1 MEDIUM):
 /// - `limit == 0` → `Invalid` ("limit must be > 0").
 /// - `limit > LIST_ACTIONS_MAX_LIMIT` → `Invalid` ("limit exceeds
-///   max"). Surface the cap now so C1 inherits it.
-/// - Any non-empty `cursor` → `Invalid` ("invalid cursor"). C0
-///   never issues cursors, so any value the client supplies is by
-///   definition stale or fabricated.
-fn run_list_actions(
-    _runtime: &Runtime,
-    cursor: Option<&str>,
-    limit: Option<u32>,
-) -> OutcomePayload {
+///   max"). Surface the cap explicitly so a client can adjust
+///   before re-issuing.
+/// - Malformed cursor → `Invalid` ("invalid cursor"). Empty
+///   cursor (`Some("")`) is treated as `None` — same as the
+///   pagination boundary docs.
+///
+/// `aiHidden` filtering: `derive_actions` already excludes nodes
+/// whose source author flipped `semantics.aiHidden = true`
+/// (`AvailabilityStatic::StaticHidden` never reaches the projector).
+/// Dynamic state-gating against `bindings.visible` /
+/// `bindings.disabled` is C2's job.
+#[cfg(feature = "dev-asp")]
+fn run_list_actions(runtime: &Runtime, cursor: Option<&str>, limit: Option<u32>) -> OutcomePayload {
+    use jian_core::action_surface::{derive_actions, BUILD_SALT};
     if let Some(0) = limit {
         return OutcomePayload::invalid("list_actions", "limit must be > 0");
     }
-    if let Some(n) = limit {
-        if n > LIST_ACTIONS_MAX_LIMIT {
-            return OutcomePayload::invalid(
-                "list_actions",
-                &format!("limit {n} exceeds max ({LIST_ACTIONS_MAX_LIMIT})"),
-            );
-        }
+    let limit = limit.unwrap_or(list_actions::LIST_ACTIONS_DEFAULT_LIMIT);
+    if limit > LIST_ACTIONS_MAX_LIMIT {
+        return OutcomePayload::invalid(
+            "list_actions",
+            &format!("limit {limit} exceeds max ({LIST_ACTIONS_MAX_LIMIT})"),
+        );
     }
-    if cursor.is_some_and(|c| !c.is_empty()) {
-        return OutcomePayload::invalid("list_actions", "invalid cursor");
-    }
-    OutcomePayload::ok("list_actions", None, "0 actions").with_detail(DetailKind::ActionList {
-        actions: Vec::new(),
-        next_cursor: None,
-    })
+    let Some(doc) = runtime.document.as_ref() else {
+        // No document loaded — well-formed empty response. The
+        // session is still usable; the agent can re-issue once
+        // the host hot-reloads or attaches a doc.
+        return OutcomePayload::ok("list_actions", None, "0 actions").with_detail(
+            DetailKind::ActionList {
+                actions: Vec::new(),
+                next_cursor: None,
+            },
+        );
+    };
+    let derived = derive_actions(&doc.schema, &BUILD_SALT);
+    let rows = list_actions::project_actions(&derived);
+    let total = rows.len();
+    let (page, next_cursor) = match list_actions::paginate(rows, cursor, limit) {
+        Ok(p) => p,
+        Err(msg) => return OutcomePayload::invalid("list_actions", msg),
+    };
+    let n = page.len();
+    OutcomePayload::ok("list_actions", None, format!("{n} of {total} action(s)")).with_detail(
+        DetailKind::ActionList {
+            actions: page,
+            next_cursor,
+        },
+    )
 }
 
 /// Stable name used in `OutcomePayload.verb` / audit ring entries.
