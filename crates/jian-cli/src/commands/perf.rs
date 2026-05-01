@@ -1,25 +1,26 @@
 //! `jian perf startup` — measure cold-start phase timings (Plan 19 Task 8).
 //!
-//! Loads the `.op`, builds a [`StartupDriver`] with no-op phase impls
-//! for every variant in [`StartupPhase::ALL`], runs it N times, and
-//! prints a per-phase aggregated table (or JSON when `--format json`).
+//! Loads the `.op`, builds a [`StartupDriver`] with the host-agnostic
+//! [`HostAgnosticBootstrap`] DataPath impls (Plan 19 capstone B1), runs
+//! it N times, and prints a per-phase aggregated table (or JSON when
+//! `--format json`).
 //!
 //! ### What this measures today
 //!
-//! Phase impls are currently `futures::future::ready(Ok(()))` placeholders
-//! — Plan 19 Tasks 2-7 land the real Runtime-coupled implementations
-//! (eager GPU init, lazy expression compile, font subset, visible-only
-//! spatial, etc.) over multiple commits. Until each phase has a real
-//! impl, the column shows the **framework's own overhead** — the cost
-//! of the layered `FuturesUnordered` dispatch, the per-phase
-//! `PhaseTiming` allocation, and the `Instant::now()` deltas. That's
-//! genuinely useful as a regression guard (a sudden 10× jump signals a
-//! scheduler bug) but it is not yet a representative cold-start cost.
+//! `DataPath` phases (ReadFile / ParseSchema / SeedStateGraph /
+//! BuildNodeTree / InitGpuContext / LoadCoreFonts /
+//! ComputeFirstLayout / BuildVisibleSpatial) record real Runtime-
+//! coupled work since B1 — file I/O, schema parsing, state seeding,
+//! layout, visible-only spatial. The numbers are representative of a
+//! single-process headless cold-start.
 //!
-//! When real phase impls are registered, this command's output becomes
-//! the canonical "did we hit the C19 budget?" answer. The CLI surface
-//! and the aggregator are stable; only the registered phase closures
-//! change.
+//! `Visual` phases (RenderSplash / RenderFirstFrame / PresentToSurface
+//! / EventPumpReady) and `Background` phases (BuildFullSpatial /
+//! LoadRemainingFonts / DecodeImages) stay no-op'd in this command:
+//! `jian perf startup` is intentionally headless (no winit, no real
+//! draw surface) and Background phases need data the Visual stage
+//! produces. Their entries surface in the report so the column shape
+//! is stable, but the timings reflect framework overhead only.
 //!
 //! ### Aggregation across N runs
 //!
@@ -33,25 +34,60 @@ use crate::{PerfFormat, PerfStartupArgs};
 use anyhow::{Context, Result};
 #[cfg(test)]
 use jian_core::startup::PhaseTiming;
-use jian_core::startup::{PhaseResult, StartupConfig, StartupDriver, StartupPhase, StartupReport};
+use jian_core::startup::{
+    BootstrapSource, HostAgnosticBootstrap, PhaseResult, StartupConfig, StartupDriver,
+    StartupPhase, StartupReport, StartupStage,
+};
+use jian_ops_schema::document::PenDocument;
 use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 pub fn run(args: PerfStartupArgs) -> Result<ExitCode> {
-    // Verify the .op parses up-front so a typo doesn't waste N runs of
-    // measurement before erroring out. We don't actually use the loaded
-    // document yet — phase impls are no-ops — but the parse cost is on
-    // the cold-start critical path so it's the right thing to check.
+    // Parse once up front so a typo doesn't waste N runs of
+    // measurement. The parsed schema is reused across runs to keep
+    // the harness focused on the runtime-coupled cost rather than
+    // re-paying the disk-read tax every iteration. (`ReadFile` /
+    // `ParseSchema` still record measurable timings inside the
+    // bootstrap because the `BootstrapSource::Schema` short-circuit
+    // is the *correct* answer for the perf harness — it skips disk
+    // I/O the user already paid for once and surfaces the rest of
+    // the data path's cost honestly.)
     let src = std::fs::read_to_string(&args.path)
         .with_context(|| format!("read {}", args.path.display()))?;
-    jian_ops_schema::load_str(&src).with_context(|| format!("parse {}", args.path.display()))?;
+    let schema: PenDocument = jian_ops_schema::load_str(&src)
+        .with_context(|| format!("parse {}", args.path.display()))?
+        .value;
+
+    // Viewport: prefer the schema's root-frame extents (same heuristic
+    // `jian player` uses) so different fixtures are measured under
+    // their representative dimensions. Falls back to 800×600 when the
+    // root node has no explicit size — picks a reasonable default
+    // rather than zero rects that would skew layout / spatial timings.
+    // (Codex review of B3, MEDIUM: a hardcoded viewport biases
+    // ComputeFirstLayout / BuildVisibleSpatial across diverse fixtures.)
+    let viewport = root_frame_size(&schema).unwrap_or((800.0, 600.0));
 
     let runs = args.runs.max(1);
     let mut reports: Vec<StartupReport> = Vec::with_capacity(runs);
     for _ in 0..runs {
         let mut driver = StartupDriver::new();
+        // DataPath: real impls via the bootstrap. The handles are
+        // dropped at end-of-iteration — the perf harness measures
+        // the construction cost, not the ongoing runtime.
+        let _handles = HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::Schema(Box::new(schema.clone())),
+            viewport,
+        );
+        // Visual + Background: no-ops for headless measurement.
+        // The perf command intentionally skips real visual work
+        // (Plan 19 capstone B2.2 / B4 ship those for the desktop
+        // host); their timing entries record framework overhead so
+        // the report's column shape stays uniform across runs.
         for phase in StartupPhase::ALL {
-            driver.register(*phase, || async { PhaseResult::Ok(()) });
+            if phase.stage() != StartupStage::DataPath {
+                driver.register(*phase, || async { PhaseResult::Ok(()) });
+            }
         }
         let report = futures::executor::block_on(driver.run(StartupConfig::default()))
             .map_err(|e| anyhow::anyhow!("startup driver run: {e}"))?;
@@ -115,6 +151,40 @@ impl PhaseAgg {
         let mut sorted = self.durations_ms.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         sorted[nearest_rank_index(sorted.len(), 0.95)]
+    }
+}
+
+/// Read the first root-node's declared `width` × `height` from the
+/// parsed schema. Mirrors `jian player`'s `root_frame_size` so the
+/// perf harness measures `ComputeFirstLayout` / `BuildVisibleSpatial`
+/// under each fixture's intended dimensions. Falls back to `None`
+/// when the root has no explicit numeric size (the caller picks a
+/// platform default in that case).
+fn root_frame_size(schema: &PenDocument) -> Option<(f32, f32)> {
+    use jian_ops_schema::node::PenNode;
+    use jian_ops_schema::sizing::SizingBehavior;
+
+    fn pick(s: &Option<SizingBehavior>) -> Option<f32> {
+        match s {
+            Some(SizingBehavior::Number(n)) => Some(*n as f32),
+            _ => None,
+        }
+    }
+
+    let roots = match (&schema.pages, &schema.children) {
+        (Some(pages), _) if !pages.is_empty() => &pages[0].children,
+        _ => schema.children.as_slice(),
+    };
+    let first = roots.first()?;
+    let (w, h) = match first {
+        PenNode::Frame(f) => (pick(&f.container.width), pick(&f.container.height)),
+        PenNode::Group(g) => (pick(&g.container.width), pick(&g.container.height)),
+        PenNode::Rectangle(r) => (pick(&r.container.width), pick(&r.container.height)),
+        _ => (None, None),
+    };
+    match (w, h) {
+        (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some((w, h)),
+        _ => None,
     }
 }
 
