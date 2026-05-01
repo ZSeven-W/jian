@@ -38,6 +38,7 @@ pub mod pointer;
 pub mod scene;
 pub mod services;
 pub mod startup;
+pub mod startup_visual;
 pub mod updater;
 
 #[cfg(feature = "run")]
