@@ -216,6 +216,17 @@ pub struct PackArgs {
     /// so consumers can rewrite document references at load time.
     #[arg(long)]
     pub include_images: bool,
+    /// Pre-compute the first-frame layout for `--aot-viewport` and
+    /// embed it as `aot/initial_layout.bin` (Plan 19 D1 / Task 6).
+    /// A reader that opens the pack at the same viewport can preload
+    /// the rects and skip the runtime's `ComputeFirstLayout` pass.
+    /// Off by default — AOT bytes only land when authors opt in.
+    #[arg(long)]
+    pub aot: bool,
+    /// Default viewport for AOT-baked layout, in `WxH` form. Defaults
+    /// to `800x600`. Ignored when `--aot` is unset.
+    #[arg(long, default_value = "800x600")]
+    pub aot_viewport: String,
 }
 
 #[derive(Parser, Debug)]

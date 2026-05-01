@@ -22,22 +22,35 @@
 //!     └── <module-id>.wasm
 //! ```
 //!
-//! Plan 19 Task 6 spec (lines 326-426 of the cold-start plan) calls for
-//! both writer and reader. **This module ships the format types only.**
-//! The actual byte-level serializers for `aot/expressions.bin`,
-//! `aot/initial_layout.bin`, and `aot/default_state.bin` need
-//! `jian_core::expression::Chunk` and the layout / state types to derive
-//! `Serialize`, which is a touchier refactor that lands in a follow-up
-//! commit alongside the bincode-based serializer. The font subset entries
-//! depend on the subsetter wiring (Plan 19 Task 4 follow-up).
+//! Plan 19 Task 6 spec (lines 326-426 of the cold-start plan) calls
+//! for writer + reader for three AOT assets. Status:
 //!
-//! Until those follow-ups land, the existing `jian-cli` `pack` command
-//! continues to emit a JSON-only `.op.pack` (its own `manifest.json`
-//! shape in `crates/jian-cli/src/commands/pack.rs`). Migrating that
-//! command to the typed [`AotManifest`] in this module is mechanical and
-//! tracked alongside the AOT serializer follow-up — the format constants
-//! below are deliberately wire-compatible with the current MVP schema.
+//! - `aot/initial_layout.bin` — **shipped** (Plan 19 D1). Byte-level
+//!   serializer + decoder live in [`initial_layout`]; `jian pack
+//!   --aot` wires it through. The runtime preload path that consumes
+//!   the snapshot to skip `ComputeFirstLayout` is a follow-up — it
+//!   needs a `LayoutEngine::preload_initial` method that bypasses
+//!   taffy's compute step.
+//! - `aot/expressions.bin` — **deferred**. Needs `jian_core::expression::Chunk`
+//!   to derive `Serialize`, a touchier refactor.
+//! - `aot/default_state.bin` — **deferred**. Same reason — state-graph
+//!   serialisation isn't in shape yet.
+//!
+//! The font subset entries depend on the subsetter wiring (Plan 19
+//! D2 — runtime side shipped, AOT side waits on D1's expression
+//! follow-up because both go in the same pack writer pass).
+//!
+//! Migrating the existing `jian-cli` `pack` command from its untyped
+//! `serde_json::Value` manifest to the typed [`AotManifest`] in this
+//! module is mechanical and tracked separately; the format constants
+//! below stay wire-compatible with the current MVP schema so the
+//! migration lands without touching `manifest.json` consumers.
 
+pub mod initial_layout;
 pub mod manifest;
 
+pub use initial_layout::{
+    InitialLayoutError, InitialLayoutSnapshot, PackedRect, INITIAL_LAYOUT_MAGIC,
+    INITIAL_LAYOUT_VERSION,
+};
 pub use manifest::*;

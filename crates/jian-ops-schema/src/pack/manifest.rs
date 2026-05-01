@@ -150,6 +150,20 @@ pub struct AotInventory {
     /// runtime falls back to a fresh layout pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_viewport: Option<DefaultViewport>,
+    /// Identifier of the layout-engine [`MeasureBackend`][1] the
+    /// writer used. Today's pack writer emits `"estimate"` for
+    /// `jian_core::layout::measure::EstimateBackend`; a future writer
+    /// using `jian-skia`'s `SkiaMeasure` (under the `textlayout`
+    /// feature) emits `"skia"`. A runtime-preload reader MUST reject
+    /// the snapshot when its host's backend tag doesn't match —
+    /// text-bearing rects baked under a different shaper would
+    /// disagree with the live render. Plan 19 §C19 D1 / codex round 3.
+    /// `None` means an old writer that didn't record the field; a
+    /// reader treats this as "unknown — fall back to fresh layout".
+    ///
+    /// [1]: https://docs.rs/jian-core/latest/jian_core/layout/measure/trait.MeasureBackend.html
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_backend: Option<String>,
     /// Per-family font assets. Empty when no fonts were subsetted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fonts: Vec<FontEntry>,
@@ -288,6 +302,7 @@ mod tests {
                 width: 800.0,
                 height: 600.0,
             }),
+            measurement_backend: Some("estimate".into()),
             fonts: vec![FontEntry {
                 family: "Inter".into(),
                 critical: Some("fonts/Inter-sub.ttf".into()),

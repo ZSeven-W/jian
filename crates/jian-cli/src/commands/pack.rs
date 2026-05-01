@@ -1,5 +1,5 @@
-//! `jian pack INPUT OUTPUT [--include-fonts] [--include-images]` — bundle a
-//! `.op` into a `.op.pack` zip.
+//! `jian pack INPUT OUTPUT [--include-fonts] [--include-images] [--aot]
+//! [--aot-viewport WxH]` — bundle a `.op` into a `.op.pack` zip.
 //!
 //! MVP manifest schema (written as `manifest.json` inside the zip):
 //!
@@ -9,12 +9,16 @@
 //!   "version": "0.1",
 //!   "app":  { "id": "...", "name": "...", "version": "..." },
 //!   "capabilities": ["network", "storage"],
-//!   "entries": ["app.op", "assets/fonts/Inter.ttf", ...],
-//!   "images": { "cat.png": "assets/images/<blake3hex>.png" }   // only if --include-images
+//!   "entries": ["app.op", "assets/fonts/Inter.ttf", "aot/initial_layout.bin", ...],
+//!   "images": { "cat.png": "assets/images/<blake3hex>.png" },     // only if --include-images
+//!   "aot": {                                                       // only if --aot
+//!     "initial_layout": "aot/initial_layout.bin",
+//!     "default_viewport": { "width": 800.0, "height": 600.0 }
+//!   }
 //! }
 //! ```
 //!
-//! Asset layout (Plan 9 §Task 3):
+//! Asset layout (Plan 9 §Task 3 + Plan 19 §C19 D1):
 //! - **Fonts** (`--include-fonts`): scans `<input>/../assets/fonts/` for
 //!   `.ttf`/`.otf`/`.woff`/`.woff2`, stores them at `assets/fonts/<filename>`
 //!   verbatim. Filenames carry the family-naming convention.
@@ -24,12 +28,21 @@
 //!   files with identical bytes collapse into one entry. The manifest's
 //!   `images` map records each original filename → hashed path so a
 //!   loader can rewrite `image.src` references when loading the pack.
+//! - **AOT initial layout** (`--aot`, default viewport `800x600` via
+//!   `--aot-viewport WxH`): builds a `Runtime`, runs `build_layout`,
+//!   serialises every node's scene-coord rect via the
+//!   [`jian_ops_schema::pack::InitialLayoutSnapshot`] little-endian
+//!   format and embeds it as `aot/initial_layout.bin`. A future
+//!   `BootstrapSource::Pack` reader preloads the rects to skip
+//!   `ComputeFirstLayout` at runtime (~30-80 ms on real docs).
 //!
-//! Logic-module bundling (`logic/<id>.wasm`) is a Plan-19 follow-up.
+//! Logic-module bundling (`logic/<id>.wasm`), AOT expressions, and
+//! AOT default-state are Plan-19 follow-ups.
 
 use crate::PackArgs;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use jian_ops_schema::document::PenDocument;
+use jian_ops_schema::pack::{InitialLayoutSnapshot, PackedRect, ENTRY_AOT_INITIAL_LAYOUT};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -63,6 +76,22 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         Vec::new()
     };
 
+    // AOT initial-layout snapshot (Plan 19 D1 / Task 6). Computed
+    // before opening the zip so a layout error fails fast with a
+    // clear message instead of a half-written archive.
+    let aot_layout: Option<(InitialLayoutSnapshot, Vec<u8>)> = if args.aot {
+        let viewport = parse_viewport(&args.aot_viewport)?;
+        let snapshot = compute_initial_layout(&loaded.value, viewport).context(
+            "computing AOT initial layout (jian pack --aot). Falls back when ComputeFirstLayout fails",
+        )?;
+        let bytes = snapshot
+            .write_bytes()
+            .map_err(|e| anyhow!("encode AOT initial layout: {e}"))?;
+        Some((snapshot, bytes))
+    } else {
+        None
+    };
+
     let mut entries: Vec<String> = vec!["app.op".into()];
     let mut seen_entries: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for asset in fonts.iter().chain(images.iter()) {
@@ -70,13 +99,21 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
             entries.push(asset.zip_path.clone());
         }
     }
+    if aot_layout.is_some() {
+        entries.push(ENTRY_AOT_INITIAL_LAYOUT.to_owned());
+    }
 
     let images_manifest: BTreeMap<String, String> = images
         .iter()
         .map(|i| (i.original.clone(), i.zip_path.clone()))
         .collect();
 
-    let manifest = build_manifest(&loaded.value, &entries, &images_manifest);
+    let manifest = build_manifest(
+        &loaded.value,
+        &entries,
+        &images_manifest,
+        aot_layout.as_ref().map(|(s, _)| s.viewport),
+    );
 
     let file =
         File::create(&args.output).with_context(|| format!("create {}", args.output.display()))?;
@@ -101,16 +138,167 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         zw.write_all(&asset.bytes)?;
     }
 
+    if let Some((_, bytes)) = aot_layout.as_ref() {
+        zw.start_file(ENTRY_AOT_INITIAL_LAYOUT, opts)?;
+        zw.write_all(bytes)?;
+    }
+
     zw.finish()?;
 
+    let aot_msg = match aot_layout.as_ref() {
+        Some((s, b)) => format!(
+            ", AOT layout {}×{} ({} rect(s), {} bytes)",
+            s.viewport.width as i32,
+            s.viewport.height as i32,
+            s.rects.len(),
+            b.len(),
+        ),
+        None => String::new(),
+    };
     println!(
-        "jian pack: wrote {} ({} bytes app.op, {} font(s), {} image(s))",
+        "jian pack: wrote {} ({} bytes app.op, {} font(s), {} image(s){})",
         args.output.display(),
         src.len(),
         fonts.len(),
         images.len(),
+        aot_msg,
     );
     Ok(ExitCode::SUCCESS)
+}
+
+/// Parse a `WxH` viewport string (e.g. `800x600`) into `(f32, f32)`.
+/// Both axes must be positive finite numbers; mirrors the player /
+/// dev `--size` parsers' style.
+fn parse_viewport(s: &str) -> Result<(f32, f32)> {
+    let (w_s, h_s) = s
+        .split_once(['x', 'X'])
+        .ok_or_else(|| anyhow!("expected WxH form (got `{s}`)"))?;
+    let w: f32 = w_s
+        .trim()
+        .parse()
+        .map_err(|e| anyhow!("invalid width in `{s}`: {e}"))?;
+    let h: f32 = h_s
+        .trim()
+        .parse()
+        .map_err(|e| anyhow!("invalid height in `{s}`: {e}"))?;
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return Err(anyhow!("viewport `{s}` must have positive finite dims"));
+    }
+    Ok((w, h))
+}
+
+/// Build a runtime, run `build_layout(viewport)`, then walk every
+/// node and collect its scene-coord rect into an
+/// [`InitialLayoutSnapshot`]. Nodes without a layout rect (very rare
+/// — typically a virtual `<ref>` placeholder the layout engine
+/// omitted) are silently skipped; the host falls back to a fresh
+/// layout pass for them.
+///
+/// First validates that every node id in the document is unique —
+/// `NodeTree::insert_subtree` overwrites duplicates silently, which
+/// would produce an incomplete AOT snapshot (codex round 3 MEDIUM).
+fn compute_initial_layout(
+    doc: &PenDocument,
+    viewport: (f32, f32),
+) -> Result<InitialLayoutSnapshot> {
+    if let Some(dup) = first_duplicate_node_id(doc) {
+        return Err(anyhow!(
+            "AOT initial layout: document has duplicate node id `{dup}`. \
+             Fix: ensure every node's `id` is unique before `jian pack --aot`",
+        ));
+    }
+    let mut rt = jian_core::Runtime::new_from_document(doc.clone())
+        .map_err(|e| anyhow!("Runtime::new_from_document: {e}"))?;
+    rt.build_layout(viewport)
+        .map_err(|e| anyhow!("build_layout({:?}): {e}", viewport))?;
+    let tree = rt
+        .document
+        .as_ref()
+        .ok_or_else(|| anyhow!("runtime has no document after construction"))?
+        .tree
+        .by_id
+        .clone();
+    let mut rects = BTreeMap::new();
+    for (id, key) in tree {
+        if let Some(rect) = rt.layout.node_rect(key) {
+            rects.insert(
+                id,
+                PackedRect::from_xywh((
+                    rect.origin.x,
+                    rect.origin.y,
+                    rect.size.width,
+                    rect.size.height,
+                )),
+            );
+        }
+    }
+    Ok(InitialLayoutSnapshot {
+        viewport: jian_ops_schema::pack::DefaultViewport {
+            width: viewport.0,
+            height: viewport.1,
+        },
+        rects,
+    })
+}
+
+/// Walk the **first-frame root set** of `doc` and return the first
+/// node id that appears twice, or `None` if every id is unique.
+///
+/// The walker mirrors `jian_core::document::loader`'s root-selection
+/// logic: when the doc declares non-empty `pages`, only `pages[0]
+/// .children` are surfaced into the runtime `NodeTree`; otherwise
+/// `doc.children` is the active root set. Walking only that set keeps
+/// the duplicate-id check aligned with what the AOT snapshot will
+/// actually contain — a duplicate buried in an inactive page can't
+/// poison the snapshot, so rejecting on it would be a spurious error
+/// (codex round 5 MEDIUM).
+///
+/// The walker is typed (recurses through known container fields
+/// only) so raw `serde_json::Value` payloads on event actions or
+/// `Ref::descendants` can't false-positive a duplicate id (codex
+/// round 4 MEDIUM).
+fn first_duplicate_node_id(doc: &PenDocument) -> Option<String> {
+    let roots: &[jian_ops_schema::node::PenNode] = match (&doc.pages, &doc.children) {
+        (Some(pages), _) if !pages.is_empty() => &pages[0].children,
+        _ => doc.children.as_slice(),
+    };
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for node in roots {
+        if let Some(dup) = walk_node_ids_typed(node, &mut seen) {
+            return Some(dup);
+        }
+    }
+    None
+}
+
+fn walk_node_ids_typed(
+    node: &jian_ops_schema::node::PenNode,
+    seen: &mut std::collections::BTreeSet<String>,
+) -> Option<String> {
+    use jian_ops_schema::node::PenNode;
+    let id = jian_core::document::tree::node_schema_id(node);
+    if !seen.insert(id.to_owned()) {
+        return Some(id.to_owned());
+    }
+    let children: Option<&Vec<PenNode>> = match node {
+        PenNode::Frame(x) => x.children.as_ref(),
+        PenNode::Group(x) => x.children.as_ref(),
+        PenNode::Rectangle(x) => x.children.as_ref(),
+        PenNode::Ref(x) => x.children.as_ref(),
+        // Leaf nodes (Text / TextInput / Image / IconFont / Path /
+        // Line / Ellipse / Polygon) have no descendant `PenNode`s.
+        // Their event-handler payloads + `Ref::descendants` overrides
+        // are raw JSON and intentionally skipped here.
+        _ => None,
+    };
+    if let Some(children) = children {
+        for c in children {
+            if let Some(dup) = walk_node_ids_typed(c, seen) {
+                return Some(dup);
+            }
+        }
+    }
+    None
 }
 
 struct Asset {
@@ -223,6 +411,7 @@ fn build_manifest(
     doc: &PenDocument,
     entries: &[String],
     images: &BTreeMap<String, String>,
+    aot_viewport: Option<jian_ops_schema::pack::DefaultViewport>,
 ) -> serde_json::Value {
     let app = doc.app.as_ref();
     let caps: Vec<String> = app
@@ -245,8 +434,38 @@ fn build_manifest(
             .expect("json! produces object")
             .insert("images".into(), serde_json::to_value(images).unwrap());
     }
+    if let Some(vp) = aot_viewport {
+        // Manifest's `aot` field mirrors `pack::manifest::AotInventory`'s
+        // wire shape — just the fields actually populated by --aot.
+        // Switching to the typed `AotManifest` is a separate refactor
+        // tracked in `pack/mod.rs`'s module doc.
+        //
+        // `measurement_backend` records which `MeasureBackend` baked
+        // the rects (codex round 3 MEDIUM): a host using `SkiaMeasure`
+        // (jian-skia's `textlayout` feature) computes different text
+        // widths than the `EstimateBackend` heuristic. The AOT writer
+        // uses the heuristic; a future runtime preload reader MUST
+        // reject (fall back to fresh layout) when its own backend tag
+        // doesn't match the manifest's. Plan 19 §C19 D1.
+        m.as_object_mut().expect("json! produces object").insert(
+            "aot".into(),
+            serde_json::json!({
+                "initial_layout": ENTRY_AOT_INITIAL_LAYOUT,
+                "default_viewport": { "width": vp.width, "height": vp.height },
+                "measurement_backend": AOT_MEASUREMENT_BACKEND,
+            }),
+        );
+    }
     m
 }
+
+/// Identifier for the [`jian_core::layout::measure::MeasureBackend`]
+/// the writer used. Today only the default `EstimateBackend` exists
+/// inside this crate's dependency tree (the Skia-shaping
+/// `SkiaMeasure` lives in `jian-skia` under the `textlayout` feature).
+/// A future writer that opts into a different backend must coin a new
+/// tag here so a reader can reject a mismatched preload.
+const AOT_MEASUREMENT_BACKEND: &str = "estimate";
 
 fn capability_str(c: &jian_ops_schema::app::Capability) -> &'static str {
     use jian_ops_schema::app::Capability::*;

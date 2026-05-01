@@ -528,3 +528,239 @@ fn pack_without_include_flags_omits_assets_dir() {
         "no `images` key when no images bundled"
     );
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Plan 19 D1 — `jian pack --aot` initial-layout snapshot round-trip
+// ──────────────────────────────────────────────────────────────────
+
+const AOT_OP_FIXTURE: &str = r##"{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "aot-fix",
+  "app": { "name": "AotFix", "version": "1", "id": "aot.fix" },
+  "children": [
+    { "type": "frame", "id": "root", "width": 800, "height": 600, "x": 0, "y": 0,
+      "children": [
+        { "type": "rectangle", "id": "child-a", "x": 16, "y": 16, "width": 200, "height": 32 },
+        { "type": "rectangle", "id": "child-b", "x": 16, "y": 64, "width": 120, "height": 40 }
+      ]
+    }
+  ]
+}"##;
+
+#[test]
+fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "aot.op", AOT_OP_FIXTURE);
+    let packed = dir.path().join("out.op.pack");
+
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "pack",
+            "--aot",
+            "--aot-viewport",
+            "800x600",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("AOT layout 800×600"));
+
+    let extracted = dir.path().join("extracted");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Manifest records the AOT inventory.
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(extracted.join("manifest.json")).unwrap()).unwrap();
+    let aot = manifest.get("aot").expect("manifest carries `aot`");
+    assert_eq!(aot["initial_layout"], "aot/initial_layout.bin");
+    assert_eq!(aot["default_viewport"]["width"], 800.0);
+    assert_eq!(aot["default_viewport"]["height"], 600.0);
+    // Codex round 3 MEDIUM: backend tag pinned so a future runtime
+    // preload reader can reject mismatched-shaping snapshots.
+    assert_eq!(aot["measurement_backend"], "estimate");
+
+    // Binary snapshot decodes and contains the document's nodes.
+    let bin = fs::read(extracted.join("aot/initial_layout.bin"))
+        .expect("aot/initial_layout.bin must be extracted");
+    let snap =
+        jian_ops_schema::pack::InitialLayoutSnapshot::read_bytes(&bin).expect("snapshot decodes");
+    assert_eq!(snap.viewport.width, 800.0);
+    assert_eq!(snap.viewport.height, 600.0);
+    assert!(snap.rects.contains_key("root"));
+    assert!(snap.rects.contains_key("child-a"));
+    assert!(snap.rects.contains_key("child-b"));
+}
+
+#[test]
+fn pack_without_aot_omits_initial_layout_bin() {
+    // Default `jian pack` (no `--aot`) must not emit an AOT entry —
+    // authors who don't ask for AOT shouldn't pay for the layout pass
+    // or the binary footprint.
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "aot.op", AOT_OP_FIXTURE);
+    let packed = dir.path().join("out.op.pack");
+
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
+        .assert()
+        .success();
+
+    let extracted = dir.path().join("extracted");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(extracted.join("manifest.json")).unwrap()).unwrap();
+    assert!(manifest.get("aot").is_none(), "no `aot` key by default");
+    assert!(
+        !extracted.join("aot/initial_layout.bin").exists(),
+        "no AOT binary by default"
+    );
+}
+
+#[test]
+fn pack_aot_rejects_invalid_viewport() {
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "aot.op", AOT_OP_FIXTURE);
+    let packed = dir.path().join("out.op.pack");
+
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "pack",
+            "--aot",
+            "--aot-viewport",
+            "not-a-viewport",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn pack_aot_rejects_documents_with_duplicate_node_ids() {
+    // Codex round 3 MEDIUM: `NodeTree::insert_subtree` overwrites
+    // duplicate ids silently, which would produce an incomplete AOT
+    // snapshot the runtime preload path can't detect. Catch it at
+    // pack time with a clear stderr message.
+    const DUP: &str = r##"{
+      "formatVersion": "1.0",
+      "version": "1.0.0",
+      "id": "dup",
+      "app": { "name": "Dup", "version": "1", "id": "dup" },
+      "children": [
+        { "type": "frame", "id": "root", "width": 400, "height": 300, "x": 0, "y": 0,
+          "children": [
+            { "type": "rectangle", "id": "shared", "x": 0, "y": 0, "width": 100, "height": 100 },
+            { "type": "rectangle", "id": "shared", "x": 0, "y": 100, "width": 100, "height": 100 }
+          ]
+        }
+      ]
+    }"##;
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "dup.op", DUP);
+    let packed = dir.path().join("out.op.pack");
+
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "pack",
+            "--aot",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "duplicate node ids must abort `--aot`"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("duplicate node id `shared`"),
+        "expected duplicate-id error, got stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn pack_aot_tolerates_duplicate_ids_in_inactive_pages() {
+    // Codex round 5 MEDIUM: the walker should mirror the runtime
+    // loader's root selection (active page only when `pages` exists).
+    // A duplicate buried in page 2 can't poison the AOT snapshot for
+    // page 1, so rejecting it would be a spurious failure.
+    const TWO_PAGES: &str = r##"{
+      "formatVersion": "1.0",
+      "version": "1.0.0",
+      "id": "tp",
+      "app": { "name": "TP", "version": "1", "id": "tp" },
+      "pages": [
+        { "id": "p1", "name": "Page 1", "children": [
+          { "type": "rectangle", "id": "uniq-p1", "x": 0, "y": 0, "width": 10, "height": 10 }
+        ]},
+        { "id": "p2", "name": "Page 2", "children": [
+          { "type": "rectangle", "id": "shared", "x": 0, "y": 0, "width": 10, "height": 10 },
+          { "type": "rectangle", "id": "shared", "x": 0, "y": 10, "width": 10, "height": 10 }
+        ]}
+      ],
+      "children": []
+    }"##;
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "two-pages.op", TWO_PAGES);
+    let packed = dir.path().join("out.op.pack");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "pack",
+            "--aot",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+}
+
+#[test]
+fn pack_without_aot_tolerates_duplicate_node_ids() {
+    // The duplicate-id guard is AOT-only — the JSON-only pack path
+    // hasn't historically validated uniqueness, and changing that
+    // would be a separate plan-wide refactor. Pin that today's pack
+    // (no `--aot`) still succeeds on the same shape.
+    const DUP: &str = r##"{
+      "formatVersion": "1.0",
+      "version": "1.0.0",
+      "id": "dup",
+      "app": { "name": "Dup", "version": "1", "id": "dup" },
+      "children": [
+        { "type": "rectangle", "id": "shared", "x": 0, "y": 0, "width": 10, "height": 10 },
+        { "type": "rectangle", "id": "shared", "x": 0, "y": 10, "width": 10, "height": 10 }
+      ]
+    }"##;
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "dup-no-aot.op", DUP);
+    let packed = dir.path().join("out.op.pack");
+    Command::cargo_bin("jian")
+        .unwrap()
+        .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
+        .assert()
+        .success();
+}
