@@ -2,9 +2,9 @@
 //! (Plan 8 §T8 / C5).
 //!
 //! The runtime-side abstractions ship in
-//! [`crate::deeplink`] — [`JianUrl::parse`][crate::deeplink::JianUrl::parse]
+//! [`crate::deeplink`] — `JianUrl::parse`
 //! pulls a `jian://app-id/path?query` into a typed value, and
-//! [`DeepLinkHandler`][crate::deeplink::DeepLinkHandler] is the
+//! `DeepLinkHandler` is the
 //! per-host receiver. This module wires that receiver into Cocoa's
 //! Apple-Event pipeline so URLs sent by `open jian://...` land in the
 //! running app instead of falling on the floor.
@@ -20,7 +20,7 @@
 //! it needs, so this module does NOT replace winit's delegate.
 //!
 //! Instead it stores the host's
-//! [`DeepLinkHandler`][crate::deeplink::DeepLinkHandler] in a
+//! `DeepLinkHandler` in a
 //! main-thread-only `RefCell` and exposes
 //! [`dispatch_url`] for the integration glue (whether that's a custom
 //! delegate proxy, a winit fork, or a future objc2 hook) to call when
@@ -34,10 +34,10 @@
 //! ## Single-thread invariant
 //!
 //! Cocoa fires `application:openURLs:` on the main thread; winit's
-//! event loop runs on the main thread too. The
-//! [`DeepLinkRegistry`] lives in a `thread_local!` on the main
-//! thread — accessing it from a worker thread is a logic bug and
-//! produces `RegistryError::WrongThread`.
+//! event loop runs on the main thread too. The handler registry
+//! lives in a `thread_local!` on the main thread — accessing it
+//! from a worker thread is a logic bug and produces
+//! [`RegistryError::WrongThread`].
 //!
 //! ## Why a thread-local rather than a `Box<dyn Handler>` field on
 //! `DesktopHost`

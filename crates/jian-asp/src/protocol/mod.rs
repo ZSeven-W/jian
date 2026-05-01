@@ -24,6 +24,6 @@ mod request;
 #[cfg(feature = "dev-asp")]
 pub use request::{Request, Response};
 #[cfg(feature = "dev-asp")]
-pub use result::{AuditEntry, DeltaEntry, DetailKind, NodeSummary, OutcomePayload};
+pub use result::{ActionRow, AuditEntry, DeltaEntry, DetailKind, NodeSummary, OutcomePayload};
 #[cfg(feature = "dev-asp")]
 pub use verbs::{InspectKind, NavMode, ScrollDir, SnapshotFormat, Verb};

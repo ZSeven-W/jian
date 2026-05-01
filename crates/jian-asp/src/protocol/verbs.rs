@@ -110,6 +110,28 @@ pub enum Verb {
         last_n: Option<u32>,
     },
 
+    /// Production-mode discovery verb (Plan 18 ASP prod mode / C0).
+    /// Returns a flat `[{id, events}]` projection of every actionable
+    /// element the agent may target, with no document tree, schema
+    /// fields, layout rects, accessibility tree, labels, or other
+    /// structural data. Available in both dev and prod modes — dev
+    /// keeps it additively (per the spec's "portable client"
+    /// migration plan) so a single agent can discover actions the
+    /// same way regardless of which mode the host is in.
+    ///
+    /// `cursor` / `limit` paginate when the action set exceeds the
+    /// server's per-response cap (default 200, max 1000). Cursors
+    /// are opaque, short-lived, and scoped to the current session +
+    /// app revision; clients that hold a cursor across an app
+    /// hot-reload should expect `invalid_cursor` and re-issue
+    /// without one.
+    ListActions {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<u32>,
+    },
+
     /// Tear down the session cleanly. The server sends a final
     /// `Response` and closes the transport.
     Exit,

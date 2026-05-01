@@ -7,7 +7,7 @@
 //! already a trained-on shape, and the Markdown render is just a
 //! prose template over the same fields.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// The verb-result payload. `verb` / `target` / `narrative` form a
@@ -85,6 +85,39 @@ pub enum DetailKind {
     },
     /// `audit last_n` returns the most recent ring-buffer entries.
     Audit { entries: Vec<AuditEntry> },
+    /// `list_actions` returns the production-mode flat projection
+    /// of every actionable element (Plan 18 ASP prod mode / C0).
+    /// `next_cursor` is `Some(...)` when the result set was truncated
+    /// at the per-response cap and the client should re-issue with
+    /// `cursor: <token>` to fetch the next page; `null` means the
+    /// projection is complete.
+    ///
+    /// `next_cursor` is **always** serialised (no `skip_serializing_if`)
+    /// so a client parser can rely on the field's presence to
+    /// distinguish "explicitly no more pages" from "old server that
+    /// didn't know about pagination" — codex round 1 HIGH.
+    ActionList {
+        actions: Vec<ActionRow>,
+        next_cursor: Option<String>,
+    },
+}
+
+/// One row in [`DetailKind::ActionList`]. Stable `id` + the set of
+/// `events` the agent may invoke against it. No labels, rects,
+/// roles, hierarchy, or any other structural data — by design (Plan
+/// 18 ASP prod mode threat model). The `id` mirrors
+/// `jian-action-surface`'s `<scope>.<verb>_<slug>_<hash4>` derived
+/// names so a single agent client can switch transport (MCP ↔ ASP)
+/// without re-learning ids.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionRow {
+    pub id: String,
+    /// One of `tap` / `set` / `submit` / `scroll` / `swipe` / `focus`
+    /// / `blur` / `open` / `close`. The wire-format keeps these as
+    /// free strings (rather than a typed enum) so additive event
+    /// kinds don't break old readers — clients that don't recognise
+    /// an event ignore the row.
+    pub events: Vec<String>,
 }
 
 /// Compact `inspect node_props` payload — bounded fields rather than
@@ -197,6 +230,27 @@ impl OutcomePayload {
             hints: Vec::new(),
             detail: None,
             error: Some("Invalid".into()),
+        }
+    }
+
+    /// Verb is allowed by the protocol but not by the server's
+    /// current operating mode (Plan 18 ASP prod mode / C0). Used by
+    /// `dispatch_with_mode` to reject `find` / `inspect` / `snapshot`
+    /// / `audit` / `wait_for` / `assert` / `navigate` / `set_state`
+    /// when the session is running in `Mode::Prod`. The
+    /// `UnsupportedVerbInProd` error tag is stable so an agent can
+    /// branch on the code without parsing the narrative
+    /// (codex round 1 NIT).
+    pub fn unsupported_verb_in_prod(verb: &'static str, err: &str) -> Self {
+        Self {
+            ok: false,
+            verb,
+            target: None,
+            narrative: err.to_owned(),
+            deltas: Vec::new(),
+            hints: Vec::new(),
+            detail: None,
+            error: Some("UnsupportedVerbInProd".into()),
         }
     }
 
