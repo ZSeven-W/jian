@@ -3,9 +3,11 @@
 //! Owns the four [`crate`-side](crate) impls of
 //! [`jian_core::startup::StartupStage::Visual`]:
 //! `RenderSplash` → `RenderFirstFrame` → `PresentToSurface` →
-//! `EventPumpReady`. The host calls [`run_visual_stage`] from inside
-//! `ApplicationHandler::resumed` (after the window + Skia surface are
-//! created); the helper drives the registered phases via
+//! `EventPumpReady`. The host calls [`run_visual_stage`] from the
+//! **first `RedrawRequested` after `ApplicationHandler::resumed`**
+//! (resumed creates the window + Skia surface and asks winit for an
+//! immediate redraw; the redraw handler dispatches into the visual
+//! stage). The helper drives the registered phases via
 //! [`StartupDriver::run_stage_sync`] (no `block_on` — the winit thread
 //! must not park in an executor loop).
 //!
@@ -176,8 +178,10 @@ impl std::error::Error for VisualStageError {
 }
 
 /// Drive the visual stage synchronously on the calling thread. Called
-/// from `ApplicationHandler::resumed` (or the first redraw after
-/// surface creation) by the host crate.
+/// from the first `RedrawRequested` handler after
+/// `ApplicationHandler::resumed` finishes creating the window +
+/// Skia surface — the host crate's `RunApp::redraw` dispatches here
+/// when its `pending_visual_stage` flag is `true`.
 ///
 /// `prior` is the cumulative report from stage 1 (DataPath). The
 /// driver pre-seeds its `done` set from `prior.phases` so the

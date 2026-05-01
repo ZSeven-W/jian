@@ -95,7 +95,8 @@ impl StartupReport {
     /// Fold another report's phases into this one. Used by hosts that
     /// drive multiple [`crate::startup::StartupStage`]s sequentially:
     /// stage 1 produces a report (DataPath), stage 2 produces another
-    /// (Visual, recorded in-resumed), stage 3 produces a third
+    /// (Visual, recorded inside the first `RedrawRequested` after
+    /// `ApplicationHandler::resumed`), stage 3 produces a third
     /// (Background, post-interactive). The host merges them as each
     /// stage finishes so a single `StartupReport` represents the full
     /// pipeline.

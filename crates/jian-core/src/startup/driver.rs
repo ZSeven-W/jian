@@ -148,10 +148,11 @@ impl StartupDriver {
     ///
     /// Use [`Self::run_stage`] when the host needs to drive a single
     /// [`StartupStage`] in isolation (the canonical Plan 19 host
-    /// integration: `DataPath` pre-window, `Visual` in-resumed,
-    /// `Background` post-interactive). `run` is kept as the convenience
-    /// shim for `jian perf startup` and tests that want one
-    /// end-to-end timing.
+    /// integration: `DataPath` pre-window, `Visual` in the first
+    /// `RedrawRequested` after `ApplicationHandler::resumed`,
+    /// `Background` post-interactive). `run` is kept as the
+    /// convenience shim for `jian perf startup` and tests that want
+    /// one end-to-end timing.
     pub async fn run(self, config: StartupConfig) -> Result<StartupReport, StartupError> {
         // `run` drives every phase in ALL, so the prior-done set is
         // empty: nothing has run yet, every dep must be satisfied by
@@ -204,11 +205,12 @@ impl StartupDriver {
     ///
     /// **Why no `block_on`**: `block_on` parks the calling thread in
     /// an executor loop that registers the waker for re-polling. On
-    /// the winit thread (where the visual stage runs from
-    /// `ApplicationHandler::resumed`) that interacts badly with the
-    /// platform's main-thread reentrancy assumptions on macOS in
-    /// particular. A single-poll synchronous drive avoids the
-    /// executor entirely. (Codex review of the B-block plan, round 1.)
+    /// the winit thread (where the visual stage runs from the first
+    /// `RedrawRequested` after `ApplicationHandler::resumed`) that
+    /// interacts badly with the platform's main-thread reentrancy
+    /// assumptions on macOS in particular. A single-poll synchronous
+    /// drive avoids the executor entirely. (Codex review of the
+    /// B-block plan, round 1.)
     ///
     /// # Panics
     ///

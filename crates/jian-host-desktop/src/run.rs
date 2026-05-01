@@ -529,10 +529,29 @@ impl ApplicationHandler for RunApp {
         }
         // Layout + viewport live in *logical* coordinates; only the
         // raster surface and pointer input use physical pixels.
+        //
+        // When a data-path bootstrap pre-populated the host's
+        // `startup_report`, the bootstrap already built layout +
+        // visible-only spatial against the user's intended viewport.
+        // Re-running them here would (a) overwrite that work the
+        // recorded `ComputeFirstLayout` / `BuildVisibleSpatial`
+        // timings describe, (b) invalidate the off-viewport
+        // `pending_hidden_bboxes` set the bootstrap stashed for
+        // Plan 19 D1's background stage, and (c) double-pay a cost
+        // the visual stage is about to paint with. Skip both calls;
+        // the visual stage paints the bootstrap's geometry, and if
+        // winit's reported logical size differs by a few pixels
+        // (DPR rounding, window-manager negotiation) the second
+        // redraw — the first steady-state pass — re-lays out via
+        // the existing resize path. Viewport size still updates so
+        // pointer translation maps physical → logical correctly.
+        // (Codex full B-block review, round 1, HIGH #2 + #4.)
         let logical = logical_size_f32(phys, self.scale_factor);
-        let _ = self.host.runtime.build_layout(logical);
+        if !self.pending_visual_stage {
+            let _ = self.host.runtime.build_layout(logical);
+            self.host.runtime.rebuild_spatial();
+        }
         self.host.runtime.viewport.size = make_size(logical.0, logical.1);
-        self.host.runtime.rebuild_spatial();
 
         // Plan 19 capstone B4: when a data-path bootstrap pre-populated
         // the host's startup_report, ask winit for an immediate
@@ -612,9 +631,24 @@ impl ApplicationHandler for RunApp {
                 self.last_size = (new.width.max(1), new.height.max(1));
                 self.ensure_surface(self.last_size.0, self.last_size.1);
                 let logical = logical_size_f32(*new, self.scale_factor);
-                let _ = self.host.runtime.build_layout(logical);
+                // Same gate as `resumed()`: when the data-path
+                // bootstrap pre-built layout/spatial and the visual
+                // stage hasn't run yet, a Resized event fired pre-
+                // first-redraw (window-manager negotiation, OS
+                // adjusting our requested inner-size) would
+                // otherwise overwrite the bootstrap state and
+                // invalidate the carried `pending_hidden_bboxes`.
+                // The visual stage paints with the bootstrap's
+                // geometry; the second redraw — first steady-state
+                // pass — re-lays out via the existing resize path
+                // when the pending flag has cleared. (Codex full B
+                // review, round 2, HIGH: same bug class as the
+                // resumed-rebuild fix in a different event arm.)
+                if !self.pending_visual_stage {
+                    let _ = self.host.runtime.build_layout(logical);
+                    self.host.runtime.rebuild_spatial();
+                }
                 self.host.runtime.viewport.size = make_size(logical.0, logical.1);
-                self.host.runtime.rebuild_spatial();
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }

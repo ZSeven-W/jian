@@ -128,8 +128,11 @@ impl StartupPhase {
     /// - [`StartupStage::Visual`] — post-resumed critical work that needs
     ///   a real `Window` + draw surface (Splash / FirstFrame / Present /
     ///   the `EventPumpReady` marker that closes first-interactive).
-    ///   Hosts run these on the winit thread inside
-    ///   `ApplicationHandler::resumed`.
+    ///   Hosts run these on the winit thread inside the first
+    ///   `RedrawRequested` after `ApplicationHandler::resumed`
+    ///   completes (resumed itself creates the window + surface but
+    ///   defers the stage to the redraw handler so winit's lifecycle
+    ///   contract stays simple).
     /// - [`StartupStage::Background`] — non-critical post-paint work
     ///   (full spatial fill, remaining-font + image decodes). The host
     ///   schedules these after first-interactive without blocking the

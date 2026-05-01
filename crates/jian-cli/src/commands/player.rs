@@ -110,12 +110,21 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         BootstrapSource::Schema(Box::new(schema)),
         (w, h),
     );
-    let stage1_report = futures::executor::block_on(driver.run_stage(
+    // Capture the offset between launch_epoch and the DataPath
+    // stage's t0 (the moment block_on enters run_filtered) so the
+    // recorded `started_at_ms` values can be rebased into the
+    // launch frame before merge. The offset is sub-millisecond on
+    // a healthy machine, but pinning it makes the cumulative
+    // timeline strictly monotonic. (Codex full B review, round 1,
+    // MEDIUM #3.)
+    let datapath_t0_offset_ms = launch_epoch.elapsed().as_secs_f64() * 1000.0;
+    let mut stage1_report = futures::executor::block_on(driver.run_stage(
         StartupStage::DataPath,
         &StartupReport::default(),
         StartupConfig::default(),
     ))
     .map_err(|e| anyhow!("data-path stage failed: {e}"))?;
+    stage1_report.shift_started_at_by_ms(datapath_t0_offset_ms);
     let mut startup_report = StartupReport::default();
     startup_report
         .merge_into(stage1_report)
