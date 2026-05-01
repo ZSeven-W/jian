@@ -30,7 +30,7 @@ use jian_core::Runtime;
 use jian_ops_schema::node::PenNode;
 
 use crate::protocol::{DetailKind, OutcomePayload};
-use crate::verb_impls::find_verb::{node_is_statically_visible, role_for, visible_text};
+use crate::verb_impls::node_helpers::{node_is_statically_visible, role_for, visible_text};
 
 /// Hard cap on the text payload. Tightly-bounded: the ax_tree is
 /// a compressed view that an agent should be able to read in a

@@ -8,24 +8,45 @@ repository   = { workspace = true }
 description  = "Jian Agent Shell Protocol — dev-only debugging / automation channel"
 readme       = "README.md"
 
-# Plan 18 Task 0 — feature-gating contract
+# Plan 18 Task 0 + Plan 18 ASP prod mode (C3) — feature-gating contract
 #
-# `dev-asp` is the master switch. Production hosts (jian-host-*) keep
-# this feature OFF in their default set; only dev builds (or explicit
-# `--features dev-asp`) link this crate's code paths.
+# Two opt-in features, both off by default:
+#
+# - `dev-asp` (master switch for the **debug / automation** surface):
+#   compiles the full verb set including `find` / `inspect` /
+#   `snapshot` / `audit` / `state_verb` / `expr_verb`. Production
+#   hosts must NOT enable this; CI proves the absence via
+#   `ci-action-surface-isolation.yml`.
+#
+# - `prod-asp` (master switch for the **production** surface):
+#   compiles only the lean prod-mode dispatch — `handshake` /
+#   `list_actions` / `tap` / `type` / `scroll` / `swipe` / `exit`.
+#   No structural readers; no expression evaluator; no direct
+#   state writes. Hosts that want token-efficient agent driving in
+#   production builds turn this on (Plan 18 ASP prod mode).
+#
+# The two share runtime infrastructure (protocol envelope, selector
+# resolver, session / token validator, transport, server loop, the
+# operation verbs themselves), so a single set of optional deps
+# powers both.
 #
 # Why `default = ["dev-asp"]` here, but NOT in hosts: stand-alone
 # `cargo build -p jian-asp` is a developer convenience; pulling the
-# crate via a host dep is the gate the CI assertion enforces. Plan 22
-# (action-surface) Task 10's `cargo tree --no-default-features
-# --features agent-surface` strips this default and proves
-# `jian-host-* → jian-asp` is absent in production.
+# crate via a host dep is the gate the CI assertion enforces.
 [features]
 default = ["dev-asp"]
-# `dev-asp` activates the Phase 1+ code paths AND pulls the serde
-# dep tree. `--no-default-features` truly produces an empty crate —
-# no serde, no modules, just the gating attribute pattern.
-dev-asp = ["dep:serde", "dep:serde_json", "dep:jian-core", "dep:jian-ops-schema"]
+# `dev-asp` activates the full debug surface. `--no-default-features`
+# truly produces an empty crate (no serde, no modules) — same
+# byte-empty link contract Plan 22 Task 10 asserts.
+dev-asp  = ["__asp-runtime"]
+# `prod-asp` activates the lean production surface. Same runtime
+# infrastructure as `dev-asp`, structural verb modules elided at
+# build time. Plan 18 ASP prod mode / C3.
+prod-asp = ["__asp-runtime"]
+# Internal helper feature: pulls in the shared runtime deps that
+# both `dev-asp` and `prod-asp` need. Hosts don't activate this
+# directly — they enable `dev-asp` or `prod-asp` (or neither).
+__asp-runtime = ["dep:serde", "dep:serde_json", "dep:jian-core", "dep:jian-ops-schema"]
 
 [dependencies]
 # Phase 1 of Plan 18: protocol + selector type definitions. Pure

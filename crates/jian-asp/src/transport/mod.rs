@@ -16,17 +16,17 @@
 //! one transport so adding e.g. `tokio-tungstenite`-backed
 //! WebSocket is purely additive.
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod stdio;
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use stdio::StdioTransport;
 
 /// Transport-layer error. Stringified upstream so verb dispatch
 /// can include the failure reason in the audit ring without
 /// dragging the underlying `std::io::Error` type through every
 /// trait boundary.
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 #[derive(Debug)]
 pub enum TransportError {
     /// EOF reached before a complete line was read. Some transports
@@ -38,7 +38,7 @@ pub enum TransportError {
     Io(String),
 }
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 impl std::fmt::Display for TransportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -48,7 +48,7 @@ impl std::fmt::Display for TransportError {
     }
 }
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 impl std::error::Error for TransportError {}
 
 /// One line in / one line out. The trait is intentionally
@@ -59,7 +59,7 @@ impl std::error::Error for TransportError {}
 /// `read_line` strips the trailing newline; `write_line` adds one.
 /// Empty / whitespace-only lines are surfaced unchanged so the
 /// verb-dispatch layer can decide whether to error or skip.
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub trait Transport {
     fn read_line(&mut self) -> Result<String, TransportError>;
     fn write_line(&mut self, line: &str) -> Result<(), TransportError>;

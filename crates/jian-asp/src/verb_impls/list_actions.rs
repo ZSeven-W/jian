@@ -4,7 +4,7 @@
 //! module wires the real projection: derive the same
 //! `<scope>.<verb-prefix-slug>_<hash4>` action names that
 //! `jian-action-surface` produces, then flatten each into an
-//! [`ActionRow`][crate::protocol::ActionRow] with the canonical
+//! [`crate::protocol::ActionRow`] with the canonical
 //! event names from spec §12 (`tap` / `set` / `submit` / `scroll`
 //! / `swipe` / `open` / …).
 //!

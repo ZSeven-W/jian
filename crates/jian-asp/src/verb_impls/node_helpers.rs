@@ -1,7 +1,18 @@
-//! Helpers shared by the `find` and `inspect` verbs — collect
-//! `NodeSummary` rows from a `Vec<NodeKey>`. Lives next to the
-//! dispatcher so the two verbs share one walk + projection
-//! pipeline rather than each rolling their own.
+//! Helpers shared by every verb that needs to summarise a node —
+//! `find` / `inspect` / operation verbs (`tap` / `type` / `scroll`
+//! / `swipe`). Lives in a module that's available under both the
+//! `dev-asp` and `prod-asp` feature flags (Plan 18 ASP prod mode /
+//! C3) so prod builds — which drop the structural verbs but keep
+//! the operation verbs — can still resolve a `Selector` to a
+//! `NodeSummary` for logging without pulling in `find_verb` /
+//! `ax_verb` / `snapshot_verb` etc.
+//!
+//! Originally lived under `find_verb.rs`; renamed in C3 because
+//! the module never owned a dispatch-handler body — `run_find`
+//! lives in `verb_impls/mod.rs` and reaches into these helpers.
+//! Keeping the helpers here avoids cyclic imports and lets the
+//! prod build elide `find_verb`-shaped code without pulling the
+//! operation-verb logging path with it.
 
 use crate::protocol::NodeSummary;
 use jian_core::document::tree::node_schema_id;

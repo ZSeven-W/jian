@@ -28,50 +28,75 @@
 //!   `&Runtime`), `navigate` / `set_state` / `snapshot` /
 //!   `inspect ax_tree | state`.
 
-use crate::protocol::{DetailKind, InspectKind, NodeSummary, OutcomePayload, Verb};
+use crate::protocol::{DetailKind, OutcomePayload, Verb};
+#[cfg(feature = "dev-asp")]
+use crate::protocol::{InspectKind, NodeSummary};
+#[cfg(feature = "dev-asp")]
 use crate::selector::Selector;
 use crate::session::{Permission, Session};
 use jian_core::Runtime;
+
+// Plan 18 ASP prod mode / C3 — module-level feature gates.
+//
+// Always-on under either ASP feature:
+// - `node_helpers`: shared node-summary helpers (`role_for`,
+//   `visible_text`, `node_is_statically_visible`,
+//   `collect_node_summaries`). Used by both prod operation verbs
+//   and dev structural verbs.
+// - `list_actions`: prod's only discovery verb — must be reachable
+//   in both modes per spec §7's portable-client policy.
+// - Operation verbs: `tap_verb` / `type_verb` / `scroll_verb` /
+//   `swipe_verb`. Available in prod (target by id, C5 will
+//   tighten selectors) and in dev.
+//
+// `dev-asp`-only:
+// - `ax_verb`, `snapshot_verb` — structural readers prod drops.
+// - `state_verb`, `expr_verb` — direct state writes / expression
+//   evaluation; not part of the prod surface.
+//
+// Note: `find_verb` has no module-level body of its own — the
+// dispatch handler `run_find` lives in this `mod.rs` and reaches
+// into `node_helpers`. The previous `find_verb.rs` was renamed to
+// `node_helpers.rs` in C3 (it was always helpers-only).
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod list_actions;
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod node_helpers;
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod scroll_verb;
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod swipe_verb;
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod tap_verb;
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod type_verb;
 
 #[cfg(feature = "dev-asp")]
 pub mod ax_verb;
 #[cfg(feature = "dev-asp")]
 pub mod expr_verb;
 #[cfg(feature = "dev-asp")]
-pub mod find_verb;
-/// Production-mode discovery verb projection (Plan 18 ASP prod
-/// mode / C1). Currently still gated to `dev-asp` because the
-/// dispatch table itself is dev-asp-only — C3 splits the gate
-/// into `dev-asp` (full surface) + `prod-asp` (lean surface,
-/// `list_actions` + ops verbs only) and at that point this
-/// module's gate broadens to `cfg(any(feature = "dev-asp",
-/// feature = "prod-asp"))`. The spec's portable-client policy
-/// (§7) says `list_actions` must be reachable in both modes.
-#[cfg(feature = "dev-asp")]
-pub mod list_actions;
-#[cfg(feature = "dev-asp")]
-pub mod scroll_verb;
-#[cfg(feature = "dev-asp")]
 pub mod snapshot_verb;
 #[cfg(feature = "dev-asp")]
 pub mod state_verb;
-#[cfg(feature = "dev-asp")]
-pub mod swipe_verb;
-#[cfg(feature = "dev-asp")]
-pub mod tap_verb;
-#[cfg(feature = "dev-asp")]
-pub mod type_verb;
 
 #[cfg(feature = "dev-asp")]
 pub use expr_verb::{run_assert, run_wait_for};
-#[cfg(feature = "dev-asp")]
-pub use find_verb::collect_node_summaries;
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub use node_helpers::collect_node_summaries;
 #[cfg(feature = "dev-asp")]
 pub use state_verb::{run_inspect_state, run_navigate, run_set_state};
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use tap_verb::run_tap;
 
-#[cfg(test)]
+// Most tests reach into dev-asp-only handlers (find/inspect/etc.)
+// — gating the test mod to `dev-asp` keeps the prod-only build's
+// `cargo test -p jian-asp --features prod-asp` tractable. Prod-
+// specific tests (list_actions projection / Mode::Prod dispatch
+// rejection) already pass under dev-asp because dev-asp is a
+// superset; a dedicated prod-only test mod can land in C6 if we
+// want CI coverage for the lean build.
+#[cfg(all(test, feature = "dev-asp"))]
 mod tests {
     use super::*;
     use crate::protocol::{InspectKind, Verb};
@@ -1041,10 +1066,16 @@ pub fn dispatch(
             ),
             DispatchControl::Exit,
         ),
-        Verb::Find { selector, limit } => (
-            run_find(runtime, selector, *limit),
-            DispatchControl::Continue,
-        ),
+        Verb::Find {
+            selector: _selector,
+            limit: _limit,
+        } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = run_find(runtime, _selector, *_limit);
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("find");
+            (payload, DispatchControl::Continue)
+        }
         Verb::Tap { selector } => (run_tap(runtime, selector), DispatchControl::Continue),
         Verb::Type {
             selector,
@@ -1070,37 +1101,72 @@ pub fn dispatch(
             swipe_verb::run_swipe(runtime, selector, *direction, *distance),
             DispatchControl::Continue,
         ),
-        Verb::Snapshot { format } => (
-            snapshot_verb::run_snapshot(runtime, *format),
-            DispatchControl::Continue,
-        ),
-        Verb::Navigate { path, mode } => (
-            run_navigate(runtime, path, *mode),
-            DispatchControl::Continue,
-        ),
+        Verb::Snapshot { format: _format } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = snapshot_verb::run_snapshot(runtime, *_format);
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("snapshot");
+            (payload, DispatchControl::Continue)
+        }
+        Verb::Navigate {
+            path: _path,
+            mode: _mode,
+        } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = run_navigate(runtime, _path, *_mode);
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("navigate");
+            (payload, DispatchControl::Continue)
+        }
         Verb::SetState {
-            scope,
-            key,
-            value_json,
-        } => (
-            run_set_state(runtime, scope, key, value_json),
-            DispatchControl::Continue,
-        ),
-        Verb::Assert { expr } => (run_assert(runtime, expr), DispatchControl::Continue),
-        Verb::WaitFor { expr, timeout_ms } => (
-            run_wait_for(runtime, expr, *timeout_ms),
-            DispatchControl::Continue,
-        ),
-        Verb::Inspect { selector, what } => (
-            run_inspect(runtime, selector.as_ref(), *what),
-            DispatchControl::Continue,
-        ),
-        Verb::Audit { last_n } => {
-            let n = last_n.unwrap_or(32) as usize;
-            let entries = session.audit_tail(n);
-            let outcome = OutcomePayload::ok("audit", None, format!("{} entries", entries.len()))
-                .with_detail(DetailKind::Audit { entries });
-            (outcome, DispatchControl::Continue)
+            scope: _scope,
+            key: _key,
+            value_json: _value,
+        } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = run_set_state(runtime, _scope, _key, _value);
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("set_state");
+            (payload, DispatchControl::Continue)
+        }
+        Verb::Assert { expr: _expr } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = run_assert(runtime, _expr);
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("assert");
+            (payload, DispatchControl::Continue)
+        }
+        Verb::WaitFor {
+            expr: _expr,
+            timeout_ms: _timeout_ms,
+        } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = run_wait_for(runtime, _expr, *_timeout_ms);
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("wait_for");
+            (payload, DispatchControl::Continue)
+        }
+        Verb::Inspect {
+            selector: _selector,
+            what: _what,
+        } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = run_inspect(runtime, _selector.as_ref(), *_what);
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("inspect");
+            (payload, DispatchControl::Continue)
+        }
+        Verb::Audit { last_n: _last_n } => {
+            #[cfg(feature = "dev-asp")]
+            let payload = {
+                let n = _last_n.unwrap_or(32) as usize;
+                let entries = session.audit_tail(n);
+                OutcomePayload::ok("audit", None, format!("{} entries", entries.len()))
+                    .with_detail(DetailKind::Audit { entries })
+            };
+            #[cfg(not(feature = "dev-asp"))]
+            let payload = unsupported_in_prod_build("audit");
+            (payload, DispatchControl::Continue)
         }
         Verb::ListActions { cursor, limit } => (
             run_list_actions(runtime, cursor.as_deref(), *limit),
@@ -1144,6 +1210,24 @@ pub fn dispatch_with_mode(
 /// cap without re-reading the doc.
 pub const LIST_ACTIONS_MAX_LIMIT: u32 = 1000;
 
+/// Build-time prod-only guard — used by [`dispatch`] arms when the
+/// crate is compiled WITHOUT the `dev-asp` feature, i.e. as a
+/// `prod-asp` only build (Plan 18 ASP prod mode / C3). The
+/// `Mode::Prod` runtime check in [`dispatch_with_mode`] already
+/// returns the same payload before any handler runs, so reaching
+/// this branch via the bare [`dispatch`] entry point on a prod-asp
+/// build means the host called the wrong API. The error tag is the
+/// same `UnsupportedVerbInProd` so a client branch on `error` is
+/// stable across build configurations.
+#[cfg(not(feature = "dev-asp"))]
+fn unsupported_in_prod_build(verb: &'static str) -> OutcomePayload {
+    OutcomePayload::unsupported_verb_in_prod(
+        verb,
+        "verb not compiled in this build (build with `dev-asp` feature \
+         to enable structural verbs)",
+    )
+}
+
 /// `list_actions` handler (Plan 18 ASP prod mode / C0 + C1).
 ///
 /// C0 stubbed this to an empty array; C1 wires the real projection
@@ -1166,7 +1250,7 @@ pub const LIST_ACTIONS_MAX_LIMIT: u32 = 1000;
 /// (`AvailabilityStatic::StaticHidden` never reaches the projector).
 /// Dynamic state-gating against `bindings.visible` /
 /// `bindings.disabled` is C2's job.
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 fn run_list_actions(runtime: &Runtime, cursor: Option<&str>, limit: Option<u32>) -> OutcomePayload {
     use jian_core::action_surface::{derive_actions, BUILD_SALT};
     if let Some(0) = limit {
@@ -1231,6 +1315,7 @@ pub fn verb_name(verb: &Verb) -> &'static str {
     }
 }
 
+#[cfg(feature = "dev-asp")]
 fn run_find(runtime: &Runtime, sel: &Selector, limit: Option<u32>) -> OutcomePayload {
     let Some(doc) = runtime.document.as_ref() else {
         return OutcomePayload::error("find", "no document loaded");
@@ -1272,6 +1357,7 @@ fn run_find(runtime: &Runtime, sel: &Selector, limit: Option<u32>) -> OutcomePay
         .with_detail(DetailKind::Node { node: first })
 }
 
+#[cfg(feature = "dev-asp")]
 fn run_inspect(runtime: &Runtime, sel: Option<&Selector>, what: InspectKind) -> OutcomePayload {
     let Some(doc) = runtime.document.as_ref() else {
         return OutcomePayload::error("inspect", "no document loaded");

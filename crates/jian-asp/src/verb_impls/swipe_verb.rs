@@ -32,7 +32,7 @@ use jian_core::Runtime;
 
 use crate::protocol::{OutcomePayload, ScrollDir};
 use crate::selector::Selector;
-use crate::verb_impls::find_verb::collect_node_summaries;
+use crate::verb_impls::node_helpers::collect_node_summaries;
 
 /// Reserved pointer id for ASP-synthesised events. Same value
 /// `tap_verb` uses — different verb on the same session never

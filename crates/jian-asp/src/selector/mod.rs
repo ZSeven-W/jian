@@ -10,16 +10,16 @@
 //! field semantics; see `2026-04-17-jian-plan-18-agent-shell-protocol.md`
 //! Task 2 for the Phase 1 / Phase 2 split rationale.
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod types;
 
 // Phase 2 resolver — `Selector::resolve(&NodeTree) ->
 // Vec<NodeKey>`. Lives in the same `dev-asp` cfg as the types so a
 // no-feature build remains empty.
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod resolve;
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use resolve::ResolveError;
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use types::{Combinator, Selector};

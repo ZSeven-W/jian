@@ -13,17 +13,17 @@
 //! the session / handshake live in Plan 18 Task 3+ behind the
 //! `dev-asp` feature gate.
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod result;
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod verbs;
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 mod request;
 
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use request::{Request, Response};
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use result::{ActionRow, AuditEntry, DeltaEntry, DetailKind, NodeSummary, OutcomePayload};
-#[cfg(feature = "dev-asp")]
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use verbs::{InspectKind, NavMode, ScrollDir, SnapshotFormat, Verb};

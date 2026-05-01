@@ -21,7 +21,7 @@ use jian_core::Runtime;
 
 use crate::protocol::{NodeSummary, OutcomePayload};
 use crate::selector::Selector;
-use crate::verb_impls::find_verb::collect_node_summaries;
+use crate::verb_impls::node_helpers::collect_node_summaries;
 
 /// Reserved pointer id for ASP-synthesised events. Chosen at the
 /// top of u32 so a real mouse / touch id (typically 1..=N for a

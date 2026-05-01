@@ -29,7 +29,7 @@ use jian_core::Runtime;
 
 use crate::protocol::{OutcomePayload, ScrollDir};
 use crate::selector::Selector;
-use crate::verb_impls::find_verb::collect_node_summaries;
+use crate::verb_impls::node_helpers::collect_node_summaries;
 
 /// Default scroll distance when `distance: None` — a single mouse
 /// wheel notch on every desktop platform's logical-pixel scale.

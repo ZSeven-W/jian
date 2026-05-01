@@ -27,7 +27,7 @@ use jian_core::Runtime;
 use jian_ops_schema::node::PenNode;
 
 use crate::protocol::{DetailKind, OutcomePayload, SnapshotFormat};
-use crate::verb_impls::find_verb::{node_is_statically_visible, role_for, visible_text};
+use crate::verb_impls::node_helpers::{node_is_statically_visible, role_for, visible_text};
 
 /// Hard cap on the snapshot's node count. Default budget — 500 is
 /// well past any realistic single-screen `.op` document while

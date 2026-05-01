@@ -18,11 +18,24 @@ description  = "winit-based desktop host for the Jian runtime"
 default = []
 
 # Dev-only Agent Shell Protocol (Plan 18). Pulls in `jian-asp` and
-# enables the verb dispatch / transport plumbing once Phase 1 of the
-# ASP plan lands. Production hosts MUST NOT enable this feature; the
+# enables the **full** verb surface (find / inspect / snapshot /
+# audit / state writes / expression evaluator) for debugging and
+# UI testing. Production hosts must NOT enable this feature; the
 # CI isolation job (`ci-action-surface-isolation.yml`) fails any PR
-# whose `cargo tree` for a release host includes `jian-asp`.
+# whose `cargo tree` for a release host includes `jian-asp` via
+# `dev-asp`.
 dev-asp = ["dep:jian-asp", "jian-asp/dev-asp"]
+
+# Production-safe Agent Shell Protocol (Plan 18 ASP prod mode / C3).
+# Same `jian-asp` dep, but activates the lean **production** verb
+# surface (`handshake` / `list_actions` / `tap` / `type` / `scroll`
+# / `swipe` / `exit`) — no structural introspection. Built for
+# token-efficient AI driving against shipping apps. Mutually
+# exclusive with `dev-asp` is NOT enforced at the cargo level (a
+# stand-alone build can enable both for testing the runtime
+# `Mode::{Dev, Prod}` switch), but production binaries should
+# enable only `prod-asp`.
+prod-asp = ["dep:jian-asp", "jian-asp/prod-asp"]
 
 # Opt-in to the real event-loop run helper. Pulls in `softbuffer` for
 # CPU-side pixel presentation (no per-platform GPU context needed).
