@@ -40,7 +40,11 @@ use crate::startup::phase::{StartupPhase, StartupStage};
 use crate::startup::report::{PhaseTiming, StartupReport};
 use futures::future::{FutureExt, LocalBoxFuture};
 use futures::stream::{FuturesUnordered, StreamExt};
+use futures::task::noop_waker;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::pin;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
 /// Configuration passed to [`StartupDriver::run`]. Empty for Task 1; reserved
@@ -185,6 +189,54 @@ impl StartupDriver {
         let prior_done: HashSet<StartupPhase> = prior.phases.iter().map(|t| t.phase).collect();
         self.run_filtered(move |p| p.stage() == stage, prior_done, config)
             .await
+    }
+
+    /// Synchronous variant of [`Self::run_stage`] for stages whose
+    /// phase impls do not actually `.await` real I/O.
+    ///
+    /// Polls the stage future on the **calling thread** with a
+    /// no-op waker — when every phase impl resolves on its first
+    /// poll (which is the contract for the [`StartupStage::Visual`]
+    /// stage: Splash / FirstFrame / Present / EventPumpReady are all
+    /// synchronous rasterisation + present + marker work) the entire
+    /// pipeline completes inside one call without spawning an
+    /// executor.
+    ///
+    /// **Why no `block_on`**: `block_on` parks the calling thread in
+    /// an executor loop that registers the waker for re-polling. On
+    /// the winit thread (where the visual stage runs from
+    /// `ApplicationHandler::resumed`) that interacts badly with the
+    /// platform's main-thread reentrancy assumptions on macOS in
+    /// particular. A single-poll synchronous drive avoids the
+    /// executor entirely. (Codex review of the B-block plan, round 1.)
+    ///
+    /// # Panics
+    ///
+    /// If any registered phase returns `Poll::Pending` — i.e. its
+    /// body actually awaits real async work — this method panics
+    /// with a clear error. Visual-stage impls must not await; if a
+    /// host needs real async on the main thread it should use
+    /// [`Self::run_stage`] from a worker thread under `block_on`
+    /// instead.
+    pub fn run_stage_sync(
+        self,
+        stage: StartupStage,
+        prior: &StartupReport,
+        config: StartupConfig,
+    ) -> Result<StartupReport, StartupError> {
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
+        let fut = self.run_stage(stage, prior, config);
+        let mut pinned = pin!(fut);
+        match pinned.as_mut().poll(&mut cx) {
+            Poll::Ready(out) => out,
+            Poll::Pending => panic!(
+                "run_stage_sync({stage:?}): a phase impl returned Pending. \
+                 Visual stage requires synchronous phase bodies; if real \
+                 async work is needed, call `run_stage` from a worker \
+                 thread under `block_on` instead."
+            ),
+        }
     }
 
     /// Shared implementation behind `run` and `run_stage`. `selector`
@@ -853,6 +905,68 @@ mod tests {
         let report =
             block_on(d.run_stage(StartupStage::Visual, &prior, StartupConfig::default())).unwrap();
         assert_eq!(report.phases.len(), 4);
+    }
+
+    #[test]
+    fn run_stage_sync_drives_visual_phases_without_an_executor() {
+        // The Visual-stage contract: every impl resolves on first
+        // poll. `run_stage_sync` polls the stage future on the
+        // calling thread without spawning an executor (no
+        // `block_on`); a single poll cycle drains the pipeline.
+        let mut d = StartupDriver::new();
+        register_for_stage(&mut d, StartupStage::Visual);
+        let prior = synthetic_report_for_stage(StartupStage::DataPath);
+        let report = d
+            .run_stage_sync(StartupStage::Visual, &prior, StartupConfig::default())
+            .expect("visual sync run ok");
+        assert_eq!(report.phases.len(), 4);
+        assert!(report.first_interactive_ms > 0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "returned Pending")]
+    fn run_stage_sync_panics_if_a_phase_yields_pending() {
+        // A misbehaving phase that actually awaits real async work
+        // would loop forever under noop_waker. We turn that into a
+        // loud panic so misuse is obvious.
+        let mut d = StartupDriver::new();
+        for p in StartupPhase::ALL {
+            if p.stage() == StartupStage::Visual {
+                d.register(*p, move || async move {
+                    yield_n(1).await;
+                    Ok(())
+                });
+            }
+        }
+        let prior = synthetic_report_for_stage(StartupStage::DataPath);
+        let _ = d.run_stage_sync(StartupStage::Visual, &prior, StartupConfig::default());
+    }
+
+    #[test]
+    fn run_stage_sync_propagates_phase_errors() {
+        // Sync runner returns the same Result shape as the async
+        // run_stage — a failed phase surfaces normally.
+        let mut d = StartupDriver::new();
+        for p in StartupPhase::ALL {
+            if p.stage() == StartupStage::Visual {
+                if *p == StartupPhase::RenderFirstFrame {
+                    d.register(*p, || async { Err("simulated failure".to_owned()) });
+                } else {
+                    d.register(*p, ok_phase());
+                }
+            }
+        }
+        let prior = synthetic_report_for_stage(StartupStage::DataPath);
+        let err = d
+            .run_stage_sync(StartupStage::Visual, &prior, StartupConfig::default())
+            .expect_err("phase error must surface");
+        assert!(matches!(
+            err,
+            StartupError::PhaseFailed {
+                phase: StartupPhase::RenderFirstFrame,
+                ..
+            }
+        ));
     }
 
     #[test]
