@@ -7,19 +7,11 @@
   symlink or copy at build time; cargo-bundle picks up
   `<crate-dir>/Info.plist` automatically.
 
-  Two pieces of Plan 8 Task 8 (deeplink) live here:
-
-  - `CFBundleURLTypes` registers the `jian://` URL scheme so
-    macOS routes deep links into our running NSApplication. The
-    NSApplicationDelegate receiver in jian-host-desktop's deeplink
-    layer (still TBD; see Plan 8 Task 8 unchecked items) parses
-    the URL via `JianUrl::parse` and pushes it through the
-    runtime's HistoryRouter.
-
-  - `CFBundleDocumentTypes` advertises `.op` (and `.op.pack`) as
-    Jian-owned document extensions, so a Finder double-click on
-    a .op file launches our bundle and Open Files passes the
-    path to the running app via `application:openURLs:`.
+  Today's plist ships `CFBundleDocumentTypes` for `.op` (Finder
+  double-click → Open Files routes the path to the running app
+  via `application:openURLs:`). `CFBundleURLTypes` for `jian://`
+  is deferred — see the inline comment further down for the
+  Plan 8 §C5 rationale.
 -->
 <plist version="1.0">
 <dict>
@@ -44,18 +36,37 @@
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <!--
-      `CFBundleURLTypes` for `jian://` is intentionally NOT
-      registered: the runtime-side `JianUrl::parse` +
-      `DeepLinkHandler` abstractions ship, but the
-      NSApplicationDelegate Apple-Event receiver that forwards
-      URLs into the running app does not. Registering the scheme
-      without dispatching it would route deep links into a black
-      hole. Re-add this block once the receiver lands in
-      `crates/jian-host-desktop/src/app_delegate.rs` (or wherever
-      it ships) — at that point single-instance / IPC will also
-      need to be in place so a fresh launch can forward to a
-      running peer.
+      `CFBundleURLTypes` for `jian://` is intentionally STILL NOT
+      registered (Plan 8 §T8 / C5 — codex round 1 HIGH).
+      `crates/jian-host-desktop/src/app_delegate.rs` ships only the
+      *trait-routing seam* (`install_handler` / `dispatch_url`); the
+      real NSApplicationDelegate Apple-Event subclass that forwards
+      URLs into `dispatch_url` lands alongside macOS-release CI.
+      Registering the scheme without that subclass would route deep
+      links into a black hole — the OS hands the URL to the bundle,
+      the bundle has no `application:openURLs:` listener, and the
+      URL drops on the floor. Re-add this block once the subclass
+      ships AND single-instance forwarding is in place.
     -->
+    <!--
+      Sparkle auto-updater (Plan 8 §T9 / C8) — keys reserved but the
+      feed is not enabled yet. The release script substitutes
+      `@@SUFEED_URL@@` and `@@SU_PUBLIC_ED_KEY@@` only on the
+      tagged-release path; nightly / dev builds ship without these
+      keys and the host's update path stays disabled. The actual
+      Sparkle.framework integration (CocoaPods or SPM dep on
+      `Sparkle/Sparkle 2.x`) is a per-platform CI follow-up; until
+      it lands, these keys are inert metadata for downstream tooling
+      to consume.
+    -->
+    <key>SUFeedURL</key>
+    <string>@@SUFEED_URL@@</string>
+    <key>SUPublicEDKey</key>
+    <string>@@SU_PUBLIC_ED_KEY@@</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>

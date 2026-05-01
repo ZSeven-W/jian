@@ -13,8 +13,12 @@
 # packages `.tar.gz` archives only; AppImage is opt-in for users
 # who want the self-contained format. The script also installs
 # `packaging/linux/jian.desktop` + `jian.mime.xml` into the AppDir so
-# file double-click and `jian://` URL handling work after
-# `appimaged` registers the bundle.
+# `.op` file double-click works after `appimaged` registers the
+# bundle. `jian://` URL-scheme handling is intentionally OFF —
+# `jian.desktop` deliberately omits `x-scheme-handler/jian` (Plan 8
+# §C7), and the matching `xdg-mime default` line in
+# `install-mime.sh` skips the URL scheme too. Re-enable once the
+# CLI has a single-instance forwarding entry point.
 
 set -euo pipefail
 
@@ -63,6 +67,28 @@ cp "$ICON_SRC" "$APPDIR/usr/share/applications/jian.png"
 
 cd "$WORK"
 ARCH="$(uname -m)"
+
+# AppImageUpdate (Plan 8 §T9 / C10): embed a `zsync` update URL so
+# users can `appimageupdate Jian-*.AppImage` to delta-update from a
+# static feed bucket instead of re-downloading the full image. The
+# release script exports `APPIMAGE_UPDATE_URL` pointing at
+# `https://get.jian.dev/releases/Jian-x86_64.AppImage.zsync`. Skipping
+# the env var produces a non-updateable bundle (still functional,
+# just without delta updates) — the warning fires once per release
+# run rather than aborting the build.
+#
+# linuxdeploy doesn't expose a dedicated `--update-information` flag,
+# but the underlying `appimagetool` invocation it spawns reads
+# `UPDATE_INFORMATION` from the env. Codex round 1 HIGH fix:
+# `export` BEFORE the `linuxdeploy --output appimage` step so
+# appimagetool sees the value during the wrap pass.
+if [ -n "${APPIMAGE_UPDATE_URL:-}" ]; then
+    export UPDATE_INFORMATION="zsync|$APPIMAGE_UPDATE_URL"
+    echo "build-appimage: embedding update channel: $APPIMAGE_UPDATE_URL"
+else
+    echo "build-appimage: \$APPIMAGE_UPDATE_URL unset → no AppImageUpdate metadata" >&2
+fi
+
 linuxdeploy \
     --appdir "$APPDIR" \
     --desktop-file "$APPDIR/usr/share/applications/jian.desktop" \

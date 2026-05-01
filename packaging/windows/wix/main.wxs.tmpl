@@ -1,0 +1,126 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  WiX 3 source for the `jian` Windows installer (Plan 8 §T10 / C2).
+
+  Substitutions performed by the release script before
+  `cargo wix` (with the `‑‑input main.wxs` flag) is invoked:
+
+  - `@@VERSION@@`   — semantic version, e.g. `0.1.0`.
+  - `@@UPGRADE_GUID@@` — stable upgrade code (regenerated once,
+    pinned forever; matches the `[package.metadata.wix].upgrade-guid`
+    field in `crates/jian-cli/Cargo.toml`).
+
+  Codex round 1 HIGH: the `jian://` URL scheme registration is
+  deliberately commented out. The runtime side ships only the
+  trait-routing seam (`win_deeplink::dispatch_url`), not the
+  hidden-window WindowProc that would receive `WM_COPYDATA` from a
+  `ShellExecute jian://...` spawn. Pointing the protocol handler at
+  `jian player "%1"` would also fail at the CLI layer — `jian player`
+  rejects bare `jian://` URIs (deep links target a *running* peer,
+  not a fresh document load). Re-enable the `RegisterUrlScheme`
+  component in the per-platform CI follow-up that lands the
+  WindowProc + a forwarding entry point.
+
+  Today's MSI ships:
+
+  1. `.op` file-association (Plan 8 §T10 / C4). Right-click "Open With…"
+     hands `.op` files to the registered `jian player` command.
+
+  WiX's `Product/@Manufacturer` doubles as the publisher in
+  Add/Remove Programs.
+
+  cargo-wix prerequisite: this template assumes `cargo wix init`
+  has populated the `JianBinary` component (referencing
+  `target/release/jian.exe` via `File Id='JianExe'`). The release
+  script renders this template AFTER `cargo wix init` so the
+  generated source has the binary component in place; merging the
+  registry-only `RegisterFileAssoc` block into the generated wxs
+  is mechanical.
+-->
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'>
+    <Product Id='*'
+             Name='Jian'
+             Manufacturer='ZSeven-W'
+             Version='@@VERSION@@'
+             UpgradeCode='@@UPGRADE_GUID@@'
+             Language='1033'>
+
+        <Package InstallerVersion='450'
+                 Compressed='yes'
+                 InstallScope='perMachine'
+                 Description='Jian runtime CLI — check, pack, and run .op files'/>
+
+        <MajorUpgrade DowngradeErrorMessage='A newer version of Jian is already installed.'/>
+        <MediaTemplate EmbedCab='yes'/>
+
+        <Feature Id='ProductFeature' Title='Jian CLI' Level='1'>
+            <ComponentRef Id='JianBinary'/>
+            <!-- Re-enable once the WindowProc receiver lands:
+                 <ComponentRef Id='RegisterUrlScheme'/> -->
+            <ComponentRef Id='RegisterFileAssoc'/>
+        </Feature>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='ProgramFiles64Folder'>
+                <Directory Id='APPLICATIONFOLDER' Name='Jian'/>
+            </Directory>
+        </Directory>
+
+        <DirectoryRef Id='APPLICATIONFOLDER'>
+            <!--
+              `cargo wix` generates the `JianBinary` component pointing
+              at `target/release/jian.exe` automatically; this template
+              only authors the registry-level pieces. Run
+              `cargo wix init` once to seed the binary component, then
+              merge this file's `<RegisterUrlScheme>` / `<RegisterFileAssoc>`
+              blocks into the generated source.
+            -->
+            <!-- Plan 8 §T8 / C6 — `jian://` URL scheme. Wire-frozen
+                 here for the future WindowProc-bearing follow-up;
+                 deliberately not referenced from `<Feature>` above
+                 until the `win_deeplink::WmCopyDataReceiver` body
+                 lands AND a forwarding-only CLI entry point exists.
+                 The release script renders this template once with
+                 the component intact so the upstream wire shape
+                 stays diff-friendly across re-renders.
+            <Component Id='RegisterUrlScheme' Guid='*'>
+                <RegistryKey Root='HKLM' Key='Software\Classes\jian'>
+                    <RegistryValue Type='string' Value='URL:Jian Protocol'/>
+                    <RegistryValue Name='URL Protocol' Type='string' Value=''/>
+                </RegistryKey>
+                <RegistryKey Root='HKLM' Key='Software\Classes\jian\DefaultIcon'>
+                    <RegistryValue Type='string' Value='[#JianExe],0'/>
+                </RegistryKey>
+                <RegistryKey Root='HKLM' Key='Software\Classes\jian\shell\open\command'>
+                    <RegistryValue Type='string'
+                                   Value='&quot;[#JianExe]&quot; deeplink-forward &quot;%1&quot;'/>
+                </RegistryKey>
+            </Component>
+            -->
+
+
+            <Component Id='RegisterFileAssoc' Guid='*'>
+                <!-- Plan 8 §T10 / C4 — `.op` file association. -->
+                <RegistryKey Root='HKLM' Key='Software\Classes\.op'>
+                    <RegistryValue Type='string' Value='Jian.OpFile'/>
+                </RegistryKey>
+                <RegistryKey Root='HKLM' Key='Software\Classes\Jian.OpFile'>
+                    <RegistryValue Type='string' Value='Jian / OpenPencil document'/>
+                </RegistryKey>
+                <RegistryKey Root='HKLM' Key='Software\Classes\Jian.OpFile\DefaultIcon'>
+                    <RegistryValue Type='string' Value='[#JianExe],0'/>
+                </RegistryKey>
+                <RegistryKey Root='HKLM' Key='Software\Classes\Jian.OpFile\shell\open\command'>
+                    <RegistryValue Type='string'
+                                   Value='&quot;[#JianExe]&quot; player &quot;%1&quot;'/>
+                </RegistryKey>
+            </Component>
+        </DirectoryRef>
+
+        <!--
+          High-DPI manifest for the launched `.exe` is embedded by
+          rustc via `#[link(...)] application.manifest` rather than
+          here — keeps the WiX file shell-only.
+        -->
+    </Product>
+</Wix>

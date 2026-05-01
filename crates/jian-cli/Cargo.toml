@@ -72,14 +72,50 @@ files standalone.
 copyright = "Copyright (c) 2026 ZSeven-W"
 category = "Developer Tool"
 osx_minimum_system_version = "10.15"
-osx_url_schemes = ["jian"]
+# `osx_url_schemes` (cargo-bundle) is intentionally OMITTED — codex
+# round 2 HIGH. Setting it here re-injects `CFBundleURLTypes` into
+# the generated Info.plist regardless of the Info.plist.in template
+# body, which defeats the Plan 8 §C5 deferral (no NSApplicationDelegate
+# Apple-Event subclass yet → registering the scheme black-holes deep
+# links). Re-add this line in the per-platform CI follow-up that
+# lands the receiver.
 
-# `cargo wix` config (Plan 8 Task 10, Windows MSI). Run
+# `cargo wix` config (Plan 8 Task 10 / C2, Windows MSI). Run
 # `cargo wix --no-build --nocapture` from this crate's directory on
 # Windows once the toolchain is installed (`cargo install cargo-wix`)
 # and a `wix/main.wxs` lives under this crate. The wxs template
-# itself ships in `packaging/winget/wix/main.wxs.tmpl` so the same release
-# script that fills in `packaging/homebrew/jian.rb` can render it.
+# itself ships in `packaging/windows/wix/main.wxs.tmpl`; the release
+# script substitutes `@@VERSION@@` / `@@UPGRADE_GUID@@` and renders
+# the per-version copy. The placeholder GUIDs below are pinned at
+# template time; the release script overrides via the `--upgrade-guid`
+# CLI flag of `cargo wix` to keep the on-disk Cargo.toml stable.
 [package.metadata.wix]
 upgrade-guid = "00000000-0000-0000-0000-000000000000"
 path-guid = "00000000-0000-0000-0000-000000000001"
+
+# `cargo deb` config (Plan 8 Task 10 / C3, Debian / Ubuntu .deb).
+# Run `cargo deb --no-build` from this crate's directory after a
+# `cargo build --release -p jian --target x86_64-unknown-linux-gnu`.
+# Outputs `target/debian/jian_<VERSION>_amd64.deb`. The .desktop and
+# MIME-type files in `packaging/linux/` get installed under
+# `/usr/share/{applications,mime/packages}` so the launcher and
+# `xdg-mime` see `.op` files immediately.
+[package.metadata.deb]
+maintainer = "ZSeven-W <noreply@zseven.dev>"
+copyright = "Copyright (c) 2026 ZSeven-W"
+license-file = ["../../LICENSE", "0"]
+extended-description = """
+Jian is the runtime that backs OpenPencil — a vector design tool that
+exports .op files. The `jian` CLI validates, packs, and previews
+those files standalone.
+"""
+section = "graphics"
+priority = "optional"
+depends = "$auto, libfontconfig1, libfreetype6"
+assets = [
+    ["target/release/jian", "usr/bin/", "755"],
+    ["../../packaging/linux/jian.desktop", "usr/share/applications/", "644"],
+    ["../../packaging/linux/jian.mime.xml", "usr/share/mime/packages/", "644"],
+    ["../../packaging/icon/AppIcon-source.png", "usr/share/icons/hicolor/512x512/apps/jian.png", "644"],
+    ["../../packaging/README.md", "usr/share/doc/jian/", "644"],
+]

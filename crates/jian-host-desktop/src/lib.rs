@@ -29,6 +29,8 @@
 //! drop(host);
 //! ```
 
+#[cfg(target_os = "macos")]
+pub mod app_delegate;
 pub mod app_icon;
 pub mod deeplink;
 pub mod host;
@@ -40,6 +42,8 @@ pub mod services;
 pub mod startup;
 pub mod startup_visual;
 pub mod updater;
+#[cfg(target_os = "windows")]
+pub mod win_deeplink;
 
 #[cfg(feature = "run")]
 mod run;

@@ -1,0 +1,52 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  Sparkle appcast template for the macOS auto-updater (Plan 8 §T9 / C8).
+
+  Sparkle reads the appcast XML at the URL in `Info.plist`'s
+  `SUFeedURL` key. Each `<item>` declares one available release with
+  the .zip download, EdDSA signature, and minimum-system-version
+  guard. The release script (Plan 9 follow-up — ships per-platform
+  signing) substitutes the `@@…@@` placeholders before publishing
+  to the static feed bucket.
+
+  Substitutions performed by the release script:
+
+  - `@@VERSION@@`              — semver, `0.1.0`.
+  - `@@VERSION_BUILD@@`        — CFBundleVersion, monotonic. Use the
+                                  same string as `@@VERSION@@` until a
+                                  hot-fix release demands distinct.
+  - `@@PUB_DATE@@`             — RFC 2822, e.g. `Thu, 01 May 2026 21:00:00 +0000`.
+  - `@@DOWNLOAD_URL@@`         — `https://get.jian.dev/releases/Jian-<VERSION>.zip`
+  - `@@DOWNLOAD_LENGTH@@`      — file size in bytes.
+  - `@@EDDSA_SIGNATURE@@`      — `sign_update` output from sparkle-project.org.
+  - `@@RELEASE_NOTES_URL@@`    — `https://get.jian.dev/releases/Jian-<VERSION>-notes.html`
+  - `@@MINIMUM_SYSTEM_VERSION@@` — Mirror `LSMinimumSystemVersion` from
+                                    `Info.plist.in` (`10.15`).
+
+  EdDSA (not DSA): Sparkle 2.x dropped DSA. Generate the signing key
+  once with `sign_update --generate-keys`, store the **private** half
+  in the release CI secret store (e.g. `SPARKLE_ED_KEY` env var on the
+  macos-release runner), and embed the **public** half in
+  `Info.plist`'s `SUPublicEDKey` field.
+-->
+<rss version="2.0"
+     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+    <channel>
+        <title>Jian</title>
+        <link>https://get.jian.dev/releases/appcast.xml</link>
+        <description>Jian releases — vector design runtime CLI</description>
+        <language>en</language>
+        <item>
+            <title>Version @@VERSION@@</title>
+            <pubDate>@@PUB_DATE@@</pubDate>
+            <sparkle:version>@@VERSION_BUILD@@</sparkle:version>
+            <sparkle:shortVersionString>@@VERSION@@</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>@@MINIMUM_SYSTEM_VERSION@@</sparkle:minimumSystemVersion>
+            <sparkle:releaseNotesLink>@@RELEASE_NOTES_URL@@</sparkle:releaseNotesLink>
+            <enclosure url="@@DOWNLOAD_URL@@"
+                       length="@@DOWNLOAD_LENGTH@@"
+                       type="application/octet-stream"
+                       sparkle:edSignature="@@EDDSA_SIGNATURE@@"/>
+        </item>
+    </channel>
+</rss>
