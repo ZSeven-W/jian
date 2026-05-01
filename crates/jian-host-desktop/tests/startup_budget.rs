@@ -1,28 +1,39 @@
-//! Cold-start budget regression guard (Plan 19 Task 9).
+//! Cold-start budget regression guard (Plan 19 Task 9 / D3).
 //!
-//! What this test measures **today**: the `StartupDriver` framework's
-//! own overhead — the cost of building a layered `FuturesUnordered`
-//! dispatch over every variant in `StartupPhase::ALL`, the per-phase
-//! `PhaseTiming` allocation, and the `Instant::now()` deltas the
-//! report rolls up. Phase impls are currently
-//! `futures::future::ready(Ok(()))` no-ops; Plan 19 Tasks 2-7 land
-//! the real Runtime-coupled implementations (eager GPU init, lazy
-//! expression compile, font subset, visible-only spatial, …) over
-//! several follow-ups.
+//! Two layers of assertion live here:
 //!
-//! What this test catches: a regression in the scheduler that
-//! suddenly makes the framework take 10× longer (e.g. a wakeup leak
-//! or an accidental `block_in_place` inside a phase). The ceiling
-//! is intentionally generous — the no-op driver should run in well
-//! under 50 ms on every CI machine; the assertion uses 200 ms to
-//! survive macOS aarch64 → Linux x86_64 → Windows VM variance.
+//! 1. **Framework overhead** (`startup_driver_overhead_*`,
+//!    `startup_driver_per_phase_*`, `startup_driver_runs_every_*`):
+//!    every phase registered as `futures::future::ready(Ok(()))`. The
+//!    test catches scheduler regressions — a wakeup leak, an
+//!    accidental `block_in_place`, a dropped phase — that would 10×
+//!    the no-op driver's wall clock or break the per-phase invariants
+//!    Plan 19 leans on downstream (font preload, splash dismissal,
+//!    spatial fill-rest). The 200 ms ceiling stays generous on
+//!    purpose to survive macOS aarch64 → Linux x86_64 → Windows VM
+//!    variance.
 //!
-//! Once the real phase impls land, this test's ceiling tightens
-//! toward the C19 desktop budget (400 ms). Until then a tighter
-//! ceiling here would falsely fail when the framework is the entire
-//! thing being measured.
+//! 2. **Real DataPath bootstrap** (`startup_budget_counter_doc_*`,
+//!    `startup_budget_500_node_doc_*`): drives
+//!    `HostAgnosticBootstrap::install_data_path` with no-op Visual /
+//!    Background phases — the same shape `jian perf startup` uses,
+//!    minus the visual presentation. This measures the actual cold-
+//!    start cost the user pays before the first frame and gates the
+//!    Plan 19 §Gate desktop budget (< 400 ms total). The ceiling is
+//!    set per fixture: counter.op (3 nodes, ~200 LOC of schema) gets
+//!    a 100 ms ceiling — measured p95 on macOS aarch64 sits near
+//!    1 ms, the headroom covers Linux/Windows CI noise. The 500-node
+//!    fixture gets 200 ms — `Runtime::new_from_document` and
+//!    `build_layout` both walk the tree once. The total Plan 19
+//!    desktop budget (400 ms) is split conceptually as DataPath ≤
+//!    200 ms, Visual ≤ 150 ms, framework / process-launch overhead ≤
+//!    50 ms; these tests guard the first slice. AOT (`.op.pack`) and
+//!    full-process measurements are deferred to D1 / D4 respectively.
 
-use jian_core::startup::{PhaseResult, StartupConfig, StartupDriver, StartupPhase};
+use jian_core::startup::{
+    BootstrapSource, HostAgnosticBootstrap, PhaseResult, StartupConfig, StartupDriver,
+    StartupPhase, StartupStage,
+};
 use std::time::Instant;
 
 /// Generous overhead ceiling for the no-op driver, picked so the
@@ -118,6 +129,148 @@ fn startup_driver_runs_every_phase_exactly_once() {
             "phase {:?} fired {} times; expected exactly 1",
             phase,
             timings.len(),
+        );
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Real DataPath bootstrap budgets (Plan 19 §Gate, D3)
+// ──────────────────────────────────────────────────────────────────
+
+/// Per-fixture ceiling for the counter-shaped doc (3 nodes). Local
+/// p95 on macOS aarch64 is sub-millisecond; the 100 ms ceiling buys
+/// ~100× headroom for slower CI runners and warm-cache variance.
+const COUNTER_BUDGET_MS: f64 = 100.0;
+
+/// Per-fixture ceiling for a 500-node doc — `Runtime::new_from_document`
+/// and `build_layout` both walk the tree once, and visible-spatial
+/// fills the off-viewport set in the same pass. 200 ms is half the
+/// Plan 19 desktop total (400 ms), leaving 200 ms for the visual
+/// stage and process-launch overhead D4 will gate end-to-end.
+const LARGE_DOC_BUDGET_MS: f64 = 200.0;
+
+/// Drive a single bootstrap iteration: `HostAgnosticBootstrap` for
+/// the DataPath stage, no-op closures for Visual + Background so the
+/// driver still completes its full phase set (matches `jian perf
+/// startup`'s shape — the desktop host attaches real Visual impls in
+/// a second `run_stage` call after the window opens). Returns the
+/// elapsed wall clock in milliseconds.
+fn run_bootstrap_once(source: BootstrapSource, viewport: (f32, f32)) -> f64 {
+    let mut driver = StartupDriver::new();
+    let _handles = HostAgnosticBootstrap::install_data_path(&mut driver, source, viewport);
+    for phase in StartupPhase::ALL {
+        if phase.stage() != StartupStage::DataPath {
+            driver.register(*phase, || async { PhaseResult::Ok(()) });
+        }
+    }
+    let started = Instant::now();
+    let _report = futures::executor::block_on(driver.run(StartupConfig::default()))
+        .expect("driver.run(bootstrap) returns Ok");
+    started.elapsed().as_secs_f64() * 1_000.0
+}
+
+/// 500-node fixture — a single root frame with 500 sibling rectangles.
+/// Stress-tests the *quantity* of work `Runtime::new_from_document`,
+/// `build_layout`, and `BuildVisibleSpatial` do, not their depth.
+/// Codex review note: a deep tree would mostly stress recursion limits
+/// — a flat fan-out is the realistic large-doc shape (gallery /
+/// dashboard layouts).
+fn synth_500_node_doc() -> String {
+    let mut children = String::with_capacity(500 * 80);
+    for i in 0..500 {
+        if i > 0 {
+            children.push(',');
+        }
+        // `r##` lets the JSON's `"#0066ff"` literal pass through
+        // without colliding with the raw-string terminator.
+        children.push_str(&format!(
+            r##"{{"type":"rectangle","id":"r{i}","width":40,"height":40,"fill":[{{"type":"solid","color":"#0066ff"}}]}}"##
+        ));
+    }
+    format!(
+        r##"{{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "large-doc",
+  "app": {{ "name": "Large", "version": "1.0.0", "id": "com.example.large" }},
+  "children": [{{
+    "type": "frame",
+    "id": "root",
+    "width": 2400,
+    "height": 2400,
+    "layout": "horizontal",
+    "children": [{children}]
+  }}]
+}}"##
+    )
+}
+
+#[test]
+fn startup_budget_counter_doc_via_bootstrap() {
+    // counter.op (3 nodes) — the canonical small-doc fixture every
+    // other Plan 19 test uses. Two runs: warmup (allocator / cache)
+    // + measurement (steady-state). Mirrors the framework-overhead
+    // pattern above so the same flake characteristics apply.
+    let src = include_str!("../../jian-core/tests/counter.op").to_owned();
+    let viewport = (400.0, 200.0);
+    let _warmup = run_bootstrap_once(BootstrapSource::String(src.clone()), viewport);
+    let elapsed = run_bootstrap_once(BootstrapSource::String(src), viewport);
+    assert!(
+        elapsed < COUNTER_BUDGET_MS,
+        "counter.op DataPath bootstrap exceeded {:.0} ms ceiling: {:.2} ms",
+        COUNTER_BUDGET_MS,
+        elapsed,
+    );
+}
+
+#[test]
+fn startup_budget_500_node_doc_via_bootstrap() {
+    // 500-node synthetic large-doc. The body is built once outside
+    // the timed region — schema construction is not part of the
+    // startup pipeline (the user pays for *.op* parsing inside
+    // ParseSchema, and BootstrapSource::String already feeds the
+    // pipeline raw text). Warmup pass shakes out cold-allocator
+    // jitter the same as the small-doc test.
+    let src = synth_500_node_doc();
+    let viewport = (2400.0, 2400.0);
+    let _warmup = run_bootstrap_once(BootstrapSource::String(src.clone()), viewport);
+    let elapsed = run_bootstrap_once(BootstrapSource::String(src), viewport);
+    assert!(
+        elapsed < LARGE_DOC_BUDGET_MS,
+        "500-node DataPath bootstrap exceeded {:.0} ms ceiling: {:.2} ms",
+        LARGE_DOC_BUDGET_MS,
+        elapsed,
+    );
+}
+
+#[test]
+fn startup_budget_bootstrap_completes_every_datapath_phase() {
+    // Sanity guard for the budget tests above: the bootstrap must
+    // actually execute every DataPath phase — a regression that
+    // silently skips one (e.g. a dep-graph mis-wire) would make the
+    // wall clock falsely look fast. Runs once and asserts the
+    // DataPath-stage phase set fully populates the report.
+    let src = include_str!("../../jian-core/tests/counter.op").to_owned();
+    let mut driver = StartupDriver::new();
+    let _handles = HostAgnosticBootstrap::install_data_path(
+        &mut driver,
+        BootstrapSource::String(src),
+        (400.0, 200.0),
+    );
+    for phase in StartupPhase::ALL {
+        if phase.stage() != StartupStage::DataPath {
+            driver.register(*phase, || async { PhaseResult::Ok(()) });
+        }
+    }
+    let report = futures::executor::block_on(driver.run(StartupConfig::default()))
+        .expect("driver.run(bootstrap) returns Ok");
+    for phase in StartupPhase::ALL
+        .iter()
+        .filter(|p| p.stage() == StartupStage::DataPath)
+    {
+        assert!(
+            report.phases.iter().any(|t| t.phase == *phase),
+            "DataPath phase {phase:?} missing from bootstrap report"
         );
     }
 }
