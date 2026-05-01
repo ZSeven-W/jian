@@ -30,7 +30,7 @@
 //! signal under noisy hardware). Total wall-clock and critical-path
 //! aggregates use the same statistics.
 
-use crate::{PerfFormat, PerfStartupArgs};
+use crate::{PerfCompareArgs, PerfCompareFormat, PerfFormat, PerfStartupArgs};
 use anyhow::{Context, Result};
 #[cfg(test)]
 use jian_core::startup::PhaseTiming;
@@ -373,6 +373,399 @@ fn p95(samples: &[f64]) -> f64 {
     s[nearest_rank_index(s.len(), 0.95)]
 }
 
+// ──────────────────────────────────────────────────────────────────
+// `jian perf compare` — diff two startup-budget JSON outputs and gate
+// the current run against a baseline (Plan 19 Task 19 / D4).
+// ──────────────────────────────────────────────────────────────────
+
+/// One metric's baseline → current pair, with the relative delta.
+/// `delta_ratio = (current - baseline) / baseline` when baseline > 0;
+/// `0.0` when baseline is exactly 0 (avoids dividing by zero — the
+/// noise floor handles small-but-nonzero baselines).
+#[derive(Debug, Clone)]
+struct DiffRow {
+    metric: String,
+    baseline_ms: f64,
+    current_ms: f64,
+    delta_ratio: f64,
+    /// `true` when the baseline median is below the user-specified
+    /// noise floor; the row stays in the table but is exempt from
+    /// the threshold gate.
+    below_noise_floor: bool,
+    /// `true` when this row's `delta_ratio` exceeds the threshold
+    /// AND `below_noise_floor` is false. Only rows with this flag
+    /// fail the gate.
+    regressed: bool,
+}
+
+/// Aggregated diff used by every output formatter. Holds per-phase
+/// `median_ms` deltas plus the three roll-up metrics (`first_interactive`,
+/// `critical_path`, `wall_clock`). Built by [`build_diff`]; rendered by
+/// [`render_table`] / [`render_markdown`] / [`render_json`].
+///
+/// `missing_rollups` records any of the three mandatory roll-up
+/// medians (first_interactive / critical_path / wall_clock) that
+/// couldn't be parsed from either JSON. A non-empty list means the
+/// input is structurally broken — `run_compare` fails on this case
+/// rather than silently exiting green with an empty table (codex
+/// round 2 HIGH).
+#[derive(Debug, Clone)]
+struct Diff {
+    rows: Vec<DiffRow>,
+    threshold: f64,
+    noise_floor_ms: f64,
+    missing_rollups: Vec<&'static str>,
+}
+
+impl Diff {
+    fn any_regressed(&self) -> bool {
+        self.rows.iter().any(|r| r.regressed)
+    }
+
+    /// `true` when the comparison can't be trusted: either no rows
+    /// matched at all, or one of the mandatory roll-up medians is
+    /// absent from the inputs. The CLI exits non-zero on this case
+    /// so a corrupt JSON can't silently exit green.
+    fn is_structurally_broken(&self) -> bool {
+        self.rows.is_empty() || !self.missing_rollups.is_empty()
+    }
+}
+
+pub fn run_compare(args: PerfCompareArgs) -> Result<ExitCode> {
+    let baseline_text = std::fs::read_to_string(&args.baseline)
+        .with_context(|| format!("read baseline {}", args.baseline.display()))?;
+    let current_text = std::fs::read_to_string(&args.current)
+        .with_context(|| format!("read current {}", args.current.display()))?;
+    let baseline: serde_json::Value =
+        serde_json::from_str(&baseline_text).context("parse baseline JSON")?;
+    let current: serde_json::Value =
+        serde_json::from_str(&current_text).context("parse current JSON")?;
+
+    let diff = build_diff(&baseline, &current, args.threshold, args.noise_floor_ms);
+
+    match args.format {
+        PerfCompareFormat::Table => print!("{}", render_table(&diff, args.label.as_deref())),
+        PerfCompareFormat::Markdown => print!("{}", render_markdown(&diff, args.label.as_deref())),
+        PerfCompareFormat::Json => {
+            let v = render_json(&diff, args.label.as_deref());
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+    }
+
+    // Fail loudly on structurally broken inputs (codex round 2 HIGH):
+    // a malformed JSON that produces zero comparable rows or omits a
+    // mandatory roll-up median must NOT exit green. The diff text the
+    // user just saw still helps them debug.
+    if diff.is_structurally_broken() {
+        eprintln!(
+            "jian perf compare: structurally broken input — {} row(s), missing rollups: {:?}",
+            diff.rows.len(),
+            diff.missing_rollups
+        );
+        return Ok(ExitCode::from(2));
+    }
+
+    Ok(if diff.any_regressed() {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// Build a [`Diff`] by walking every phase in `current` and matching
+/// against the same-named phase in `baseline`. Phases present in
+/// `baseline` but missing from `current` (or vice versa) are skipped
+/// — `jian perf startup`'s phase set is stable across runs, so a
+/// missing phase is a CI bug we'd rather surface as a noisy
+/// passthrough than a confusing partial regression.
+///
+/// The three roll-up metrics (first-interactive / critical-path /
+/// wall-clock medians) round out the per-phase rows; total wall
+/// clock is the single most actionable number a reviewer reads.
+fn build_diff(
+    baseline: &serde_json::Value,
+    current: &serde_json::Value,
+    threshold: f64,
+    noise_floor_ms: f64,
+) -> Diff {
+    let mut rows = Vec::new();
+
+    // Per-phase median deltas. `phases` is an array; index by `phase`
+    // string so a CI mismatch on phase order doesn't desync the diff.
+    let baseline_phases = baseline
+        .get("phases")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let current_phases = current
+        .get("phases")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    for cp in &current_phases {
+        let Some(name) = cp.get("phase").and_then(|v| v.as_str()).map(str::to_owned) else {
+            continue;
+        };
+        // Both sides treated symmetrically: a missing or non-numeric
+        // `median_ms` on EITHER side skips the row. The earlier
+        // `unwrap_or(0.0)` on the current side could turn a broken
+        // tool output into a fake "improved" delta; codex round 1
+        // MEDIUM. The phase-coverage sanity guard in the budget tests
+        // (D3) catches actual missing-phase regressions; this loop's
+        // job is just to compute deltas where both sides agree.
+        let Some(cur_med) = cp.get("median_ms").and_then(|v| v.as_f64()) else {
+            continue;
+        };
+        let Some(base_med) = baseline_phases
+            .iter()
+            .find(|bp| bp.get("phase").and_then(|v| v.as_str()) == Some(&name))
+            .and_then(|bp| bp.get("median_ms").and_then(|v| v.as_f64()))
+        else {
+            continue;
+        };
+        rows.push(make_row(name, base_med, cur_med, threshold, noise_floor_ms));
+    }
+
+    // Roll-up medians. Order matches what a reviewer reads top-down:
+    // first-interactive (the user-visible signal) before the internal
+    // critical-path / wall-clock totals. These three are mandatory in
+    // any well-formed `jian perf startup --format json` output — a
+    // missing one signals structurally broken input (codex round 2
+    // HIGH). Track absence in `missing_rollups` so `run_compare` can
+    // exit non-zero rather than silently surfacing zero rows.
+    let mut missing_rollups: Vec<&'static str> = Vec::new();
+    for (key, label) in [
+        ("first_interactive_ms", "first_interactive (median)"),
+        ("critical_path_ms", "critical_path (median)"),
+        ("wall_clock_ms", "wall_clock (median)"),
+    ] {
+        let base = baseline
+            .get(key)
+            .and_then(|v| v.get("median"))
+            .and_then(|v| v.as_f64());
+        let cur = current
+            .get(key)
+            .and_then(|v| v.get("median"))
+            .and_then(|v| v.as_f64());
+        match (base, cur) {
+            (Some(b), Some(c)) => {
+                rows.push(make_row(label.to_owned(), b, c, threshold, noise_floor_ms));
+            }
+            _ => missing_rollups.push(key),
+        }
+    }
+
+    Diff {
+        rows,
+        threshold,
+        noise_floor_ms,
+        missing_rollups,
+    }
+}
+
+fn make_row(
+    metric: String,
+    baseline_ms: f64,
+    current_ms: f64,
+    threshold: f64,
+    noise_floor_ms: f64,
+) -> DiffRow {
+    let delta_ratio = if baseline_ms > 0.0 {
+        (current_ms - baseline_ms) / baseline_ms
+    } else {
+        0.0
+    };
+    let below_noise_floor = baseline_ms < noise_floor_ms;
+    let regressed = !below_noise_floor && delta_ratio > threshold;
+    DiffRow {
+        metric,
+        baseline_ms,
+        current_ms,
+        delta_ratio,
+        below_noise_floor,
+        regressed,
+    }
+}
+
+fn render_table(diff: &Diff, label: Option<&str>) -> String {
+    use std::fmt::Write as _;
+    let metric_w = diff
+        .rows
+        .iter()
+        .map(|r| r.metric.len())
+        .max()
+        .unwrap_or(6)
+        .max("Metric".len());
+    let mut out = String::new();
+    if let Some(lbl) = label {
+        let _ = writeln!(out, "jian perf compare — {lbl}");
+    } else {
+        let _ = writeln!(out, "jian perf compare");
+    }
+    let _ = writeln!(
+        out,
+        "threshold: {:.0}%   noise floor: {:.2} ms\n",
+        diff.threshold * 100.0,
+        diff.noise_floor_ms
+    );
+    let _ = writeln!(
+        out,
+        "{:width$} │ Baseline ms │ Current ms │   Δ%    │ Status",
+        "Metric",
+        width = metric_w
+    );
+    let _ = writeln!(
+        out,
+        "{:─<width$}─┼─────────────┼────────────┼─────────┼────────",
+        "",
+        width = metric_w
+    );
+    for row in &diff.rows {
+        let status = row_status(row);
+        let _ = writeln!(
+            out,
+            "{name:width$} │ {b:>11.3} │ {c:>10.3} │ {d:>+6.1}% │ {s}",
+            name = row.metric,
+            width = metric_w,
+            b = row.baseline_ms,
+            c = row.current_ms,
+            d = row.delta_ratio * 100.0,
+            s = status,
+        );
+    }
+    let _ = writeln!(
+        out,
+        "{:─<width$}─┴─────────────┴────────────┴─────────┴────────",
+        "",
+        width = metric_w
+    );
+    // Verdict order: structural breakage first (it overrides
+    // regression analysis — the inputs aren't trustworthy), then
+    // regression, then green. Codex round 3 MEDIUM: the markdown
+    // rendering used to print "All metrics within threshold" even on
+    // empty / corrupt input.
+    if diff.is_structurally_broken() {
+        let _ = writeln!(
+            out,
+            "BROKEN — structurally invalid input ({} row(s); missing rollups: {:?})",
+            diff.rows.len(),
+            diff.missing_rollups
+        );
+    } else if diff.any_regressed() {
+        let _ = writeln!(
+            out,
+            "REGRESSED — {} metric(s) over threshold",
+            diff.rows.iter().filter(|r| r.regressed).count()
+        );
+    } else {
+        let _ = writeln!(out, "OK — all metrics within threshold");
+    }
+    out
+}
+
+fn render_markdown(diff: &Diff, label: Option<&str>) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let header = match label {
+        Some(lbl) => format!("### startup-budget — {lbl}"),
+        None => "### startup-budget".to_owned(),
+    };
+    let _ = writeln!(out, "{header}");
+    let _ = writeln!(
+        out,
+        "_threshold: {:.0}%, noise floor: {:.2} ms_",
+        diff.threshold * 100.0,
+        diff.noise_floor_ms
+    );
+    let _ = writeln!(out);
+    let _ = writeln!(out, "| Metric | Baseline ms | Current ms | Δ% | Status |");
+    let _ = writeln!(out, "| --- | ---: | ---: | ---: | --- |");
+    for row in &diff.rows {
+        let _ = writeln!(
+            out,
+            "| `{name}` | {b:.3} | {c:.3} | {d:+.1}% | {s} |",
+            name = row.metric,
+            b = row.baseline_ms,
+            c = row.current_ms,
+            d = row.delta_ratio * 100.0,
+            s = row_status(row),
+        );
+    }
+    // Same verdict ordering as `render_table` — broken first so a
+    // PR comment can't say "All metrics within threshold." for a
+    // structurally invalid input (codex round 3 MEDIUM).
+    if diff.is_structurally_broken() {
+        let _ = writeln!(
+            out,
+            "\n**BROKEN** — structurally invalid input ({} row(s); missing rollups: {:?}).",
+            diff.rows.len(),
+            diff.missing_rollups
+        );
+    } else if diff.any_regressed() {
+        let _ = writeln!(
+            out,
+            "\n**REGRESSED** — {} metric(s) over the {:.0}% threshold.",
+            diff.rows.iter().filter(|r| r.regressed).count(),
+            diff.threshold * 100.0
+        );
+    } else {
+        let _ = writeln!(out, "\nAll metrics within threshold.");
+    }
+    out
+}
+
+fn render_json(diff: &Diff, label: Option<&str>) -> serde_json::Value {
+    let rows: Vec<_> = diff
+        .rows
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "metric": r.metric,
+                "baseline_ms": r.baseline_ms,
+                "current_ms":  r.current_ms,
+                "delta_ratio": r.delta_ratio,
+                "below_noise_floor": r.below_noise_floor,
+                "regressed": r.regressed,
+            })
+        })
+        .collect();
+    // Single authoritative `verdict` string so a JSON consumer that
+    // only inspects one field can't accidentally treat corrupt input
+    // as passing. The peer booleans (`regressed`, `structurally_broken`)
+    // remain for backwards-compat / fine-grained inspection. Codex
+    // round 4 NIT.
+    let verdict = if diff.is_structurally_broken() {
+        "broken"
+    } else if diff.any_regressed() {
+        "regressed"
+    } else {
+        "ok"
+    };
+    serde_json::json!({
+        "label": label,
+        "threshold": diff.threshold,
+        "noise_floor_ms": diff.noise_floor_ms,
+        "rows": rows,
+        "verdict": verdict,
+        "regressed": diff.any_regressed(),
+        "structurally_broken": diff.is_structurally_broken(),
+        "missing_rollups": diff.missing_rollups,
+    })
+}
+
+fn row_status(row: &DiffRow) -> &'static str {
+    if row.regressed {
+        "REGRESSED"
+    } else if row.below_noise_floor {
+        "noise"
+    } else if row.delta_ratio < -0.05 {
+        "improved"
+    } else {
+        "ok"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +909,291 @@ mod tests {
     #[test]
     fn median_helper_with_empty_samples_returns_zero() {
         assert_eq!(median(&[]), 0.0);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // `jian perf compare` (D4) — diff + threshold gate
+    // ──────────────────────────────────────────────────────────────
+
+    fn perf_json(phases: &[(&str, f64)], wall_clock_median: f64) -> serde_json::Value {
+        let phases: Vec<_> = phases
+            .iter()
+            .map(|(name, med)| {
+                serde_json::json!({
+                    "phase": name,
+                    "on_critical": true,
+                    "min_ms": *med,
+                    "median_ms": *med,
+                    "p95_ms": *med,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "runs": 10,
+            "phases": phases,
+            "first_interactive_ms": { "median": wall_clock_median, "min": wall_clock_median, "p95": wall_clock_median },
+            "critical_path_ms":     { "median": wall_clock_median, "min": wall_clock_median, "p95": wall_clock_median },
+            "wall_clock_ms":        { "median": wall_clock_median, "min": wall_clock_median, "p95": wall_clock_median },
+        })
+    }
+
+    #[test]
+    fn build_diff_rows_per_phase_plus_three_rollups() {
+        // Two phases + three roll-up rows = five total when both
+        // sides agree on the phase set. Confirms the row order
+        // matches the documented "phases first, then rollups".
+        let base = perf_json(&[("ReadFile", 1.0), ("ParseSchema", 2.0)], 5.0);
+        let cur = perf_json(&[("ReadFile", 1.0), ("ParseSchema", 2.0)], 5.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        assert_eq!(diff.rows.len(), 5);
+        assert_eq!(diff.rows[0].metric, "ReadFile");
+        assert_eq!(diff.rows[1].metric, "ParseSchema");
+        assert_eq!(diff.rows[2].metric, "first_interactive (median)");
+        assert_eq!(diff.rows[3].metric, "critical_path (median)");
+        assert_eq!(diff.rows[4].metric, "wall_clock (median)");
+        assert!(!diff.any_regressed());
+    }
+
+    #[test]
+    fn regression_above_threshold_and_above_noise_floor_trips_gate() {
+        // Baseline 10 ms → current 12 ms = +20% delta. With a 15%
+        // threshold and 0.5 ms noise floor, this trips the gate.
+        let base = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let cur = perf_json(&[("ReadFile", 12.0)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        assert!(diff.any_regressed(), "20% over 15% should regress");
+        let read = diff.rows.iter().find(|r| r.metric == "ReadFile").unwrap();
+        assert!((read.delta_ratio - 0.20).abs() < 1e-9);
+        assert!(read.regressed);
+    }
+
+    #[test]
+    fn regression_below_noise_floor_does_not_trip_gate() {
+        // Baseline 0.04 ms → current 0.10 ms = +150% delta. The
+        // delta ratio is huge but the baseline is below the 0.5 ms
+        // noise floor — sub-millisecond medians are dominated by CI
+        // jitter, gating on them produces false positives. Row stays
+        // marked `below_noise_floor`, the gate stays open.
+        let base = perf_json(&[("ReadFile", 0.04)], 50.0);
+        let cur = perf_json(&[("ReadFile", 0.10)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        assert!(!diff.any_regressed(), "below noise floor cannot regress");
+        let read = diff.rows.iter().find(|r| r.metric == "ReadFile").unwrap();
+        assert!(read.below_noise_floor);
+        assert!(!read.regressed);
+    }
+
+    #[test]
+    fn improvement_below_negative_five_percent_marks_improved() {
+        // Baseline 10 ms → current 8 ms = -20%. Above the noise
+        // floor, well below -5% → status="improved".
+        let base = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let cur = perf_json(&[("ReadFile", 8.0)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        let read = diff.rows.iter().find(|r| r.metric == "ReadFile").unwrap();
+        assert_eq!(row_status(read), "improved");
+        assert!(!diff.any_regressed());
+    }
+
+    #[test]
+    fn phase_missing_from_baseline_is_skipped_not_failed() {
+        // CI mismatch: baseline omits a phase the current run has.
+        // The compare must skip the row rather than crash or false-
+        // regress. The remaining phase still drives the verdict.
+        let base = perf_json(&[("ReadFile", 1.0)], 5.0);
+        let cur = perf_json(&[("ReadFile", 1.0), ("ParseSchema", 2.0)], 5.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        assert!(diff.rows.iter().all(|r| r.metric != "ParseSchema"));
+        assert!(diff.rows.iter().any(|r| r.metric == "ReadFile"));
+        assert!(!diff.any_regressed());
+    }
+
+    #[test]
+    fn corrupt_json_with_no_rollups_is_structurally_broken() {
+        // Codex round 2 HIGH: a fully corrupt current JSON (no
+        // phases, no rollups) used to slip through with zero
+        // comparable rows and exit success. Must now flag broken.
+        let baseline = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let current = serde_json::json!({ "runs": 0, "phases": [] });
+        let diff = build_diff(&baseline, &current, 0.15, 0.5);
+        assert!(diff.is_structurally_broken());
+        assert!(!diff.missing_rollups.is_empty());
+    }
+
+    #[test]
+    fn missing_one_rollup_is_structurally_broken() {
+        // A baseline that lacks `wall_clock_ms` (e.g. an older
+        // schema someone forgot to migrate) must trip the broken
+        // gate even if the other metrics line up cleanly.
+        let baseline = serde_json::json!({
+            "runs": 10,
+            "phases": [{"phase": "ReadFile", "on_critical": true, "min_ms": 5.0, "median_ms": 10.0, "p95_ms": 15.0}],
+            "first_interactive_ms": {"median": 50.0, "min": 40.0, "p95": 60.0},
+            "critical_path_ms":     {"median": 50.0, "min": 40.0, "p95": 60.0},
+            // wall_clock_ms intentionally absent
+        });
+        let current = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let diff = build_diff(&baseline, &current, 0.15, 0.5);
+        assert!(diff.is_structurally_broken());
+        assert_eq!(diff.missing_rollups, vec!["wall_clock_ms"]);
+    }
+
+    #[test]
+    fn well_formed_input_is_not_structurally_broken() {
+        // Sanity: the happy-path test pair must NOT flag broken.
+        let base = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let cur = perf_json(&[("ReadFile", 11.0)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        assert!(!diff.is_structurally_broken());
+        assert!(diff.missing_rollups.is_empty());
+    }
+
+    #[test]
+    fn current_phase_with_missing_median_is_skipped_not_zeroed() {
+        // Codex round 1 MEDIUM: a current phase whose `median_ms`
+        // is missing or non-numeric used to be `unwrap_or(0.0)`'d,
+        // which produced a fake "improved" delta. The fix treats
+        // both sides symmetrically — missing -> skip the row.
+        let baseline = serde_json::json!({
+            "runs": 10,
+            "phases": [
+                {"phase": "ReadFile", "on_critical": true, "min_ms": 5.0, "median_ms": 10.0, "p95_ms": 15.0}
+            ],
+            "first_interactive_ms": {"median": 50.0, "min": 40.0, "p95": 60.0},
+            "critical_path_ms":     {"median": 50.0, "min": 40.0, "p95": 60.0},
+            "wall_clock_ms":        {"median": 50.0, "min": 40.0, "p95": 60.0},
+        });
+        let current = serde_json::json!({
+            "runs": 10,
+            "phases": [
+                {"phase": "ReadFile", "on_critical": true, "min_ms": 5.0, "p95_ms": 15.0}
+            ],
+            "first_interactive_ms": {"median": 50.0, "min": 40.0, "p95": 60.0},
+            "critical_path_ms":     {"median": 50.0, "min": 40.0, "p95": 60.0},
+            "wall_clock_ms":        {"median": 50.0, "min": 40.0, "p95": 60.0},
+        });
+        let diff = build_diff(&baseline, &current, 0.15, 0.5);
+        assert!(
+            diff.rows.iter().all(|r| r.metric != "ReadFile"),
+            "phase with missing current median_ms must be skipped"
+        );
+        assert!(
+            !diff.any_regressed(),
+            "missing-median phase must not silently improve and must not regress"
+        );
+    }
+
+    #[test]
+    fn zero_baseline_does_not_divide_by_zero() {
+        // A 0.0 ms baseline (e.g. a no-op phase) must not produce
+        // inf or NaN deltas. The row records 0.0 and stays in the
+        // table; the noise floor handles whether to gate it.
+        let base = perf_json(&[("ReadFile", 0.0)], 5.0);
+        let cur = perf_json(&[("ReadFile", 5.0)], 5.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        let read = diff.rows.iter().find(|r| r.metric == "ReadFile").unwrap();
+        assert_eq!(read.delta_ratio, 0.0);
+        assert!(read.below_noise_floor);
+        assert!(!read.regressed);
+    }
+
+    #[test]
+    fn render_table_includes_metric_and_status_columns() {
+        let base = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let cur = perf_json(&[("ReadFile", 12.0)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        let table = render_table(&diff, Some("linux-x86_64"));
+        assert!(table.contains("linux-x86_64"));
+        assert!(table.contains("ReadFile"));
+        assert!(table.contains("REGRESSED"));
+    }
+
+    #[test]
+    fn render_markdown_outputs_pipe_table() {
+        let base = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let cur = perf_json(&[("ReadFile", 10.5)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        let md = render_markdown(&diff, Some("macos-aarch64"));
+        assert!(md.contains("### startup-budget — macos-aarch64"));
+        assert!(md.contains("| Metric |"));
+        assert!(md.contains("`ReadFile`"));
+        assert!(md.contains("All metrics within threshold."));
+    }
+
+    #[test]
+    fn render_markdown_says_broken_on_corrupt_input() {
+        // Codex round 3 MEDIUM: the PR comment used to claim "All
+        // metrics within threshold." even for fully corrupt JSON
+        // because the verdict line only checked `any_regressed()`.
+        // Now the broken case takes precedence.
+        let baseline = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let current = serde_json::json!({ "runs": 0, "phases": [] });
+        let diff = build_diff(&baseline, &current, 0.15, 0.5);
+        let md = render_markdown(&diff, Some("macos-aarch64"));
+        assert!(
+            md.contains("**BROKEN**"),
+            "expected BROKEN verdict, got: {md}"
+        );
+        assert!(!md.contains("All metrics within threshold."));
+    }
+
+    #[test]
+    fn render_table_says_broken_on_corrupt_input() {
+        // Same defense for the human-readable table.
+        let baseline = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let current = serde_json::json!({ "runs": 0, "phases": [] });
+        let diff = build_diff(&baseline, &current, 0.15, 0.5);
+        let table = render_table(&diff, Some("linux-x86_64"));
+        assert!(
+            table.contains("BROKEN"),
+            "expected BROKEN verdict, got: {table}"
+        );
+        assert!(!table.contains("OK — all metrics"));
+    }
+
+    #[test]
+    fn render_json_emits_rows_and_verdict() {
+        let base = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let cur = perf_json(&[("ReadFile", 12.0)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        let v = render_json(&diff, Some("linux-x86_64"));
+        assert_eq!(v["label"], "linux-x86_64");
+        assert_eq!(v["threshold"], 0.15);
+        assert_eq!(v["verdict"], "regressed");
+        assert_eq!(v["regressed"], true);
+        assert_eq!(v["structurally_broken"], false);
+        let rows = v["rows"].as_array().unwrap();
+        assert!(rows
+            .iter()
+            .any(|r| r["metric"] == "ReadFile" && r["regressed"] == true));
+    }
+
+    #[test]
+    fn render_json_verdict_is_broken_on_corrupt_input() {
+        // Codex round 4 NIT: a JSON consumer must not be able to
+        // accidentally treat broken input as passing by inspecting
+        // only the `regressed` boolean. The authoritative `verdict`
+        // string folds both gating dimensions into one value.
+        let baseline = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let current = serde_json::json!({ "runs": 0, "phases": [] });
+        let diff = build_diff(&baseline, &current, 0.15, 0.5);
+        let v = render_json(&diff, None);
+        assert_eq!(v["verdict"], "broken");
+        assert_eq!(v["structurally_broken"], true);
+        // `regressed` stays false because the input is broken before
+        // any threshold check could fire — the verdict string is the
+        // authoritative gate signal.
+        assert_eq!(v["regressed"], false);
+    }
+
+    #[test]
+    fn render_json_verdict_is_ok_on_well_formed_input_within_threshold() {
+        let base = perf_json(&[("ReadFile", 10.0)], 50.0);
+        let cur = perf_json(&[("ReadFile", 10.5)], 50.0);
+        let diff = build_diff(&base, &cur, 0.15, 0.5);
+        let v = render_json(&diff, None);
+        assert_eq!(v["verdict"], "ok");
+        assert_eq!(v["regressed"], false);
+        assert_eq!(v["structurally_broken"], false);
     }
 }

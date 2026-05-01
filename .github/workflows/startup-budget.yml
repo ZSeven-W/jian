@@ -10,24 +10,34 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# `pull-requests: write` lets the comment step in `startup-perf-comment`
+# below post a single rolling diff comment on the PR. `actions: read`
+# lets the per-platform `gh run list` / `gh run download` calls fetch
+# the matching baseline from the most recent successful run on `main`
+# (no third-party action; supply-chain risk minimised). `contents:
+# read` is the floor for `actions/checkout`.
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: short
 
-# Plan 19 Task 19 scaffolding: collects per-platform `jian perf startup`
-# JSON artifacts on every push + PR so future commits can wire a
-# regression-comment bot without re-running CI matrices on top of
-# what `ci.yml` already does. The bot itself, the >15% regression
-# threshold gate, and the per-platform budget assertions all wait on
-# Plan 19 Task 9 (real Runtime-coupled phase impls — currently the
-# CLI runs the driver with no-op closures, so its timings reflect
-# framework overhead and are not yet representative of cold-start
-# cost).
+# Plan 19 Task 19 (D4): per-platform `jian perf startup` baselines on
+# every push, with PRs gated by `jian perf compare` against `main`'s
+# most recent green artifact. Beyond a `--threshold 0.15` (15%)
+# regression on any tracked metric *and* baseline above the
+# `--noise-floor-ms 1.0` floor, the matrix job fails red. The diff
+# table is also captured as markdown and posted as a PR comment.
 #
-# Today: build the CLI, run `jian perf startup --format json` against
-# the bundled counter template, archive the output. Future commits:
-# diff against `main`, comment on PRs, fail the job on regressions
-# beyond a per-platform threshold.
+# Two-job structure:
+# - `startup-perf` runs the matrix per-platform: build CLI release,
+#   collect counter.op JSON, gate against baseline, upload artifact.
+# - `startup-perf-comment` runs once after the matrix on PRs: pulls
+#   each platform's markdown diff and posts a single rolling comment
+#   so reviewers see all three platforms in one place.
 
 jobs:
   startup-perf:
@@ -102,9 +112,163 @@ jobs:
             --runs 20 \
             --format table
 
+      # PR baseline: fetch the most recent successful main run's
+      # artifact via the official `gh` CLI (no third-party action; no
+      # mutable-tag supply-chain risk). `gh run download` is no-op-
+      # safe when the artifact name doesn't exist on the resolved run,
+      # so the next step's `[ -f ... ]` check is the canonical guard.
+      - name: Download baseline (main) JSON
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p baseline
+          run_id=$(gh run list \
+            --workflow startup-budget.yml \
+            --branch main \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId // empty')
+          if [ -z "$run_id" ]; then
+            echo "::warning::no successful main run found; gate will skip"
+            exit 0
+          fi
+          gh run download "$run_id" \
+            --name "startup-perf-${{ matrix.name }}" \
+            --dir baseline || true
+
+      # Capture markdown diff first, BEFORE the gate, so a regression
+      # failure can't skip the artifact upload that the comment job
+      # depends on. `|| true` keeps the markdown step green; the gate
+      # below drives the matrix exit code.
+      - name: Capture markdown diff (no-gate)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_path="baseline/counter-${{ matrix.name }}.json"
+          current_path="target/perf-reports/counter-${{ matrix.name }}.json"
+          if [ ! -f "$baseline_path" ]; then
+            printf "_no baseline available for %s; gate skipped (first PR after workflow change?)._\n" \
+              "${{ matrix.name }}" \
+              > "target/perf-reports/diff-${{ matrix.name }}.md"
+            exit 0
+          fi
+          ./target/${{ matrix.target }}/release/jian perf compare \
+            "$baseline_path" "$current_path" \
+            --threshold 0.15 \
+            --noise-floor-ms 1.0 \
+            --format markdown \
+            --label "${{ matrix.name }}" \
+            > "target/perf-reports/diff-${{ matrix.name }}.md" \
+            || true
+
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: startup-perf-${{ matrix.name }}
           path: target/perf-reports/counter-${{ matrix.name }}.json
           retention-days: 30
           if-no-files-found: error
+
+      # Markdown diff artifact — only on PRs, used by the comment job.
+      # `if: always()` ensures the markdown lands even if the gate
+      # below trips red.
+      - if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-perf-diff-${{ matrix.name }}
+          path: target/perf-reports/diff-${{ matrix.name }}.md
+          retention-days: 7
+          if-no-files-found: warn
+
+      # Gate runs LAST among the matrix steps so the artifact uploads
+      # above complete before a regression turns the job red. The
+      # comment job (`startup-perf-comment`, `if: always()`) consumes
+      # the uploaded artifacts regardless of this step's exit code.
+      - name: jian perf compare (gate)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_path="baseline/counter-${{ matrix.name }}.json"
+          current_path="target/perf-reports/counter-${{ matrix.name }}.json"
+          if [ ! -f "$baseline_path" ]; then
+            echo "::warning::no baseline JSON for ${{ matrix.name }}; gate skipped"
+            exit 0
+          fi
+          ./target/${{ matrix.target }}/release/jian perf compare \
+            "$baseline_path" "$current_path" \
+            --threshold 0.15 \
+            --noise-floor-ms 1.0 \
+            --label "${{ matrix.name }}"
+
+  startup-perf-comment:
+    name: startup-perf comment
+    runs-on: ubuntu-latest
+    needs: startup-perf
+    # `if: always()` so a regression-failed matrix job still gets a
+    # comment posted (the PR author needs to see the numbers most
+    # when the gate is red). `github.event_name == 'pull_request'`
+    # is enforced by the matrix steps already, but repeat here so
+    # the comment job is a no-op for direct pushes to main.
+    if: always() && github.event_name == 'pull_request'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: diffs
+          pattern: startup-perf-diff-*
+          merge-multiple: false
+
+      - name: Build comment body
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## startup-budget diff (Plan 19 D4)"
+            echo
+            for d in diffs/startup-perf-diff-*; do
+              [ -d "$d" ] || continue
+              for f in "$d"/*.md; do
+                [ -f "$f" ] || continue
+                cat "$f"
+                echo
+              done
+            done
+            echo "_threshold: 15%, noise floor: 1.00 ms — gate ran in matrix._"
+          } > comment.md
+
+      # Pass the body via the file system, not via `GITHUB_OUTPUT`'s
+      # heredoc protocol — a fixed delimiter could be terminated by
+      # arbitrary diff text and inject extra step outputs (codex
+      # round 1, MEDIUM). `actions/github-script` reads the file
+      # directly under the matrix-scoped runner workspace.
+      - name: Post / update PR comment
+        uses: actions/github-script@v7
+        env:
+          COMMENT_PATH: ${{ github.workspace }}/comment.md
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync(process.env.COMMENT_PATH, 'utf8');
+            const marker = '## startup-budget diff (Plan 19 D4)';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(
+              github.rest.issues.listComments,
+              { owner, repo, issue_number, per_page: 100 }
+            );
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body
+              });
+            }

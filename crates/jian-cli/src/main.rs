@@ -31,6 +31,38 @@ fn parse_positive_dpi(s: &str) -> Result<f64, String> {
     }
 }
 
+/// Clap value parser for `jian perf compare`'s `--noise-floor-ms`.
+/// Must be finite and non-negative — `NaN` / `inf` would silently
+/// disable the floor or print nonsensical deltas; a negative floor
+/// would gate on noise that's already below zero. Codex review of D4
+/// (round 1) flagged the original raw-`f64` parse; round 2 flagged
+/// `-0.0` slipping through `>= 0.0`, fixed by `is_sign_negative()`.
+fn parse_finite_non_negative(s: &str) -> Result<f64, String> {
+    let v: f64 = s.parse().map_err(|_| format!("not a number: `{}`", s))?;
+    if v.is_finite() && v >= 0.0 && !v.is_sign_negative() {
+        Ok(v)
+    } else {
+        Err(format!("must be a finite number >= 0 (got `{}`)", s))
+    }
+}
+
+/// Clap value parser for `jian perf compare`'s `--threshold`. A
+/// regression-gate ratio belongs in `[0.0, 1.0]` — `0.0` means
+/// "any positive delta regresses" (strictest), `1.0` means "fail
+/// only when current is more than 2× baseline" (loosest). Anything
+/// above 1.0 effectively disables the gate (codex round 2 NIT).
+fn parse_threshold_ratio(s: &str) -> Result<f64, String> {
+    let v = parse_finite_non_negative(s)?;
+    if v <= 1.0 {
+        Ok(v)
+    } else {
+        Err(format!(
+            "threshold ratio must be in [0.0, 1.0] (got `{}`); use 0.15 for the canonical 15% gate",
+            s
+        ))
+    }
+}
+
 mod commands;
 mod diagnostic_render;
 #[cfg(feature = "player")]
@@ -83,6 +115,12 @@ pub struct PerfArgs {
 pub enum PerfCommand {
     /// Measure cold-start phase timings (Plan 19 Task 8).
     Startup(PerfStartupArgs),
+    /// Diff two `jian perf startup --format json` outputs and gate
+    /// the current run against a baseline (Plan 19 Task 19 / D4).
+    /// Prints a per-metric delta table and exits non-zero when any
+    /// tracked metric regresses by more than `--threshold` *and* the
+    /// baseline is above the noise floor (`--noise-floor-ms`).
+    Compare(PerfCompareArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -104,6 +142,43 @@ pub struct PerfStartupArgs {
 pub enum PerfFormat {
     Table,
     Json,
+}
+
+#[derive(Parser, Debug)]
+pub struct PerfCompareArgs {
+    /// Baseline JSON file (typically `main`'s artifact from the
+    /// previous run of `jian perf startup --format json`).
+    pub baseline: PathBuf,
+    /// Current JSON file (the run under review).
+    pub current: PathBuf,
+    /// Regression threshold as a decimal ratio (`0.15` = 15%). Per-
+    /// metric medians whose `(current - baseline) / baseline` exceeds
+    /// this trip the gate. Must be in `[0.0, 1.0]` — `1e308`-style
+    /// values would silently disable the gate (codex round 2 NIT).
+    #[arg(long, default_value_t = 0.15, value_parser = parse_threshold_ratio)]
+    pub threshold: f64,
+    /// Noise floor in milliseconds. Metrics whose **baseline** median
+    /// is below this value skip the threshold gate (timing noise on
+    /// sub-millisecond samples produces unstable percentages); they
+    /// still appear in the table but cannot fail the run. Must be
+    /// finite and non-negative.
+    #[arg(long, default_value_t = 1.0, value_parser = parse_finite_non_negative)]
+    pub noise_floor_ms: f64,
+    /// Output format: `table` (human-readable, default), `json`
+    /// (structured), or `markdown` (PR-comment friendly).
+    #[arg(long, value_enum, default_value_t = PerfCompareFormat::Table)]
+    pub format: PerfCompareFormat,
+    /// Override the platform label printed in the markdown / table
+    /// header (e.g. `linux-x86_64`). Default: omitted.
+    #[arg(long)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum PerfCompareFormat {
+    Table,
+    Json,
+    Markdown,
 }
 
 #[derive(Parser, Debug)]
@@ -229,36 +304,6 @@ pub struct NewArgs {
     pub path: Option<PathBuf>,
 }
 
-// `parse_positive_dpi` itself lives behind `#[cfg(feature = "player")]`,
-// so the parser tests must mirror that gate or `cargo test
-// --no-default-features` fails to compile when the function vanishes.
-#[cfg(all(test, feature = "player"))]
-mod parser_tests {
-    use super::*;
-
-    #[test]
-    fn parse_positive_dpi_accepts_typical_values() {
-        assert_eq!(parse_positive_dpi("1.0").unwrap(), 1.0);
-        assert_eq!(parse_positive_dpi("2").unwrap(), 2.0);
-        assert_eq!(parse_positive_dpi("1.5").unwrap(), 1.5);
-        assert_eq!(parse_positive_dpi("0.5").unwrap(), 0.5);
-    }
-
-    #[test]
-    fn parse_positive_dpi_rejects_zero_and_negative() {
-        assert!(parse_positive_dpi("0").is_err());
-        assert!(parse_positive_dpi("0.0").is_err());
-        assert!(parse_positive_dpi("-1.5").is_err());
-    }
-
-    #[test]
-    fn parse_positive_dpi_rejects_non_finite() {
-        assert!(parse_positive_dpi("nan").is_err());
-        assert!(parse_positive_dpi("inf").is_err());
-        assert!(parse_positive_dpi("not-a-number").is_err());
-    }
-}
-
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
@@ -272,6 +317,7 @@ fn main() -> ExitCode {
         Command::Dev(args) => commands::dev::run(args),
         Command::Perf(args) => match args.cmd {
             PerfCommand::Startup(a) => commands::perf::run(a),
+            PerfCommand::Compare(a) => commands::perf::run_compare(a),
         },
     };
 
@@ -281,5 +327,84 @@ fn main() -> ExitCode {
             eprintln!("jian: error: {:#}", e);
             ExitCode::from(2)
         }
+    }
+}
+
+// Both clap value parsers' tests share one module placed after
+// `fn main` so clippy's `items_after_test_module` lint doesn't fire.
+// `parse_positive_dpi` only exists under `feature = "player"`, so its
+// tests are individually gated; `parse_finite_non_negative` is
+// always-on (used by the `Compare` subcommand which lives outside the
+// `player` feature gate) and its tests are unconditional.
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+
+    #[cfg(feature = "player")]
+    #[test]
+    fn parse_positive_dpi_accepts_typical_values() {
+        assert_eq!(parse_positive_dpi("1.0").unwrap(), 1.0);
+        assert_eq!(parse_positive_dpi("2").unwrap(), 2.0);
+        assert_eq!(parse_positive_dpi("1.5").unwrap(), 1.5);
+        assert_eq!(parse_positive_dpi("0.5").unwrap(), 0.5);
+    }
+
+    #[cfg(feature = "player")]
+    #[test]
+    fn parse_positive_dpi_rejects_zero_and_negative() {
+        assert!(parse_positive_dpi("0").is_err());
+        assert!(parse_positive_dpi("0.0").is_err());
+        assert!(parse_positive_dpi("-1.5").is_err());
+    }
+
+    #[cfg(feature = "player")]
+    #[test]
+    fn parse_positive_dpi_rejects_non_finite() {
+        assert!(parse_positive_dpi("nan").is_err());
+        assert!(parse_positive_dpi("inf").is_err());
+        assert!(parse_positive_dpi("not-a-number").is_err());
+    }
+
+    #[test]
+    fn parse_finite_non_negative_accepts_zero_and_positive() {
+        assert_eq!(parse_finite_non_negative("0").unwrap(), 0.0);
+        assert_eq!(parse_finite_non_negative("0.0").unwrap(), 0.0);
+        assert_eq!(parse_finite_non_negative("0.15").unwrap(), 0.15);
+        assert_eq!(parse_finite_non_negative("1").unwrap(), 1.0);
+        assert_eq!(parse_finite_non_negative("2.5").unwrap(), 2.5);
+    }
+
+    #[test]
+    fn parse_finite_non_negative_rejects_negative_and_non_finite() {
+        assert!(parse_finite_non_negative("-1").is_err());
+        assert!(parse_finite_non_negative("-0.0001").is_err());
+        // Negative zero parses to a value where `>= 0.0` is `true`,
+        // so the predicate must also reject `is_sign_negative()`.
+        // Codex round 2 NIT.
+        assert!(parse_finite_non_negative("-0").is_err());
+        assert!(parse_finite_non_negative("-0.0").is_err());
+        assert!(parse_finite_non_negative("nan").is_err());
+        assert!(parse_finite_non_negative("inf").is_err());
+        assert!(parse_finite_non_negative("not-a-number").is_err());
+    }
+
+    #[test]
+    fn parse_threshold_ratio_accepts_canonical_range() {
+        assert_eq!(parse_threshold_ratio("0").unwrap(), 0.0);
+        assert_eq!(parse_threshold_ratio("0.15").unwrap(), 0.15);
+        assert_eq!(parse_threshold_ratio("1").unwrap(), 1.0);
+        assert_eq!(parse_threshold_ratio("1.0").unwrap(), 1.0);
+    }
+
+    #[test]
+    fn parse_threshold_ratio_rejects_above_one_and_negative() {
+        // Above 1.0 effectively disables the gate (codex round 2 NIT).
+        assert!(parse_threshold_ratio("1.0001").is_err());
+        assert!(parse_threshold_ratio("100").is_err());
+        assert!(parse_threshold_ratio("1e308").is_err());
+        // The non-negative + finiteness checks still apply.
+        assert!(parse_threshold_ratio("-0.1").is_err());
+        assert!(parse_threshold_ratio("nan").is_err());
+        assert!(parse_threshold_ratio("inf").is_err());
     }
 }
