@@ -29,7 +29,7 @@ use std::time::Instant;
 use crate::protocol::{OutcomePayload, Request, Response, Verb};
 use crate::session::{Session, TokenValidator};
 use crate::transport::{Transport, TransportError};
-use crate::verb_impls::{dispatch, verb_name, DispatchControl};
+use crate::verb_impls::{dispatch, dispatch_with_mode, verb_name, DispatchControl, Mode};
 use jian_core::Runtime;
 
 /// Top-level error type — a real I/O failure or a malformed
@@ -45,6 +45,17 @@ pub enum ServerError {
     BadHandshake(String),
     /// Validator rejected the handshake's token.
     AuthFailed(String),
+    /// Prod session refused to start because the runtime's loaded
+    /// document has no `app.capabilities` declared (or the field
+    /// exists but is empty). Spec §4 / Plan 18 ASP prod mode (C3b):
+    /// prod ASP requires the author to have opted into machine-
+    /// readable automation by populating capabilities. Apps that
+    /// haven't opted in stay closed to prod ASP.
+    ProdCapabilitiesEmpty,
+    /// Prod session refused to start because the runtime had no
+    /// document loaded at all. Caller should `Runtime::load_str`
+    /// before invoking [`run_prod_session`].
+    ProdNoDocument,
 }
 
 impl std::fmt::Display for ServerError {
@@ -53,6 +64,15 @@ impl std::fmt::Display for ServerError {
             ServerError::Transport(e) => write!(f, "transport: {}", e),
             ServerError::BadHandshake(m) => write!(f, "bad handshake: {}", m),
             ServerError::AuthFailed(m) => write!(f, "auth failed: {}", m),
+            ServerError::ProdCapabilitiesEmpty => write!(
+                f,
+                "prod ASP refused to start: app.capabilities is empty or absent \
+                 (spec §4 — author must opt in to machine-readable automation)"
+            ),
+            ServerError::ProdNoDocument => write!(
+                f,
+                "prod ASP refused to start: no document loaded in the runtime"
+            ),
         }
     }
 }
@@ -148,6 +168,127 @@ pub fn run_session(
             }
         };
         let (payload, control) = dispatch(&req.verb, runtime, &mut session);
+        write_response(transport, req.id, &payload)?;
+        session.record_outcome(start.elapsed().as_millis() as u64, &payload);
+        if control == DispatchControl::Exit {
+            return Ok(());
+        }
+    }
+}
+
+/// Run one **production-mode** ASP session over `transport` against
+/// `runtime` (Plan 18 ASP prod mode / C3b).
+///
+/// Same lifecycle as [`run_session`] but with two prod-specific
+/// guards before the steady-state loop spins:
+///
+/// 1. **Document required** — `runtime.document` must be `Some`. A
+///    fresh `Runtime::new()` with no document loaded gets
+///    `ServerError::ProdNoDocument`. (`run_session` allows this for
+///    debug agents that attach a document mid-session via
+///    `set_state`; prod ASP doesn't expose `set_state` so the
+///    pre-condition is mandatory here.)
+/// 2. **Non-empty capabilities** — `runtime.document.schema.app.capabilities`
+///    must be `Some(non-empty)`. Apps that haven't opted into
+///    machine-readable automation stay closed to prod ASP per spec
+///    §4. `ServerError::ProdCapabilitiesEmpty` on violation.
+///
+/// Once both guards pass, the loop dispatches every verb through
+/// [`dispatch_with_mode`] with [`Mode::Prod`]. Structural verbs
+/// (`find` / `inspect` / `snapshot` / `audit` / `wait_for` /
+/// `assert` / `navigate` / `set_state`) reject with
+/// `OutcomePayload::unsupported_verb_in_prod` (stable error tag
+/// `UnsupportedVerbInProd`); the session stays open so the agent
+/// can recover with an allowed verb.
+///
+/// Token validation is the host's responsibility — pass a
+/// real [`TokenValidator`] that actually checks the token. The
+/// session module deliberately doesn't bake one in (different
+/// hosts use different bootstrap channels: file / Keychain /
+/// Keystore / postMessage). The server can't structurally prove
+/// the validator isn't a no-op stub; that's a host-side contract.
+pub fn run_prod_session(
+    transport: &mut dyn Transport,
+    validator: &dyn TokenValidator,
+    runtime: &mut Runtime,
+    start: Instant,
+) -> Result<(), ServerError> {
+    // Prod-mode preconditions BEFORE we read anything off the
+    // transport. A misconfigured host should fail closed at boot,
+    // not after the agent has already sent its handshake.
+    let doc = runtime
+        .document
+        .as_ref()
+        .ok_or(ServerError::ProdNoDocument)?;
+    let capabilities_ok = doc
+        .schema
+        .app
+        .as_ref()
+        .and_then(|a| a.capabilities.as_ref())
+        .is_some_and(|caps| !caps.is_empty());
+    if !capabilities_ok {
+        return Err(ServerError::ProdCapabilitiesEmpty);
+    }
+
+    // 1. Handshake — same parser as run_session.
+    let line = transport.read_line()?;
+    let req: Request = serde_json::from_str(&line)
+        .map_err(|e| ServerError::BadHandshake(format!("first line is not a Request: {}", e)))?;
+    let (token, client, version) = match req.verb {
+        Verb::Handshake {
+            token,
+            client,
+            version,
+        } => (token, client, version),
+        other => {
+            return Err(ServerError::BadHandshake(format!(
+                "first verb must be `handshake`, got `{}`",
+                verb_name(&other)
+            )))
+        }
+    };
+    let permission = match validator.validate(&token) {
+        Ok(p) => p,
+        Err(reason) => {
+            let payload = OutcomePayload::denied(
+                "handshake",
+                reason,
+                Some("re-handshake with a token granting the required tier"),
+            );
+            let _ = write_response(transport, req.id, &payload);
+            return Err(ServerError::AuthFailed(reason.to_owned()));
+        }
+    };
+    let mut session = Session::new(permission, client, version);
+    let ack = OutcomePayload::ok(
+        "handshake",
+        None,
+        format!("handshake ok (prod), permission={:?}", permission),
+    );
+    write_response(transport, req.id, &ack)?;
+    session.record_outcome(start.elapsed().as_millis() as u64, &ack);
+
+    // 2. Steady state — every verb routes through `dispatch_with_mode(Mode::Prod)`.
+    loop {
+        let line = match transport.read_line() {
+            Ok(s) => s,
+            Err(TransportError::Eof) => return Ok(()),
+            Err(e) => return Err(ServerError::Transport(e)),
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let req: Request = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                let payload =
+                    OutcomePayload::invalid("request", &format!("could not parse request: {}", e));
+                write_response(transport, 0, &payload)?;
+                session.record_outcome(start.elapsed().as_millis() as u64, &payload);
+                continue;
+            }
+        };
+        let (payload, control) = dispatch_with_mode(&req.verb, runtime, &mut session, Mode::Prod);
         write_response(transport, req.id, &payload)?;
         session.record_outcome(start.elapsed().as_millis() as u64, &payload);
         if control == DispatchControl::Exit {
@@ -307,5 +448,112 @@ not-json
         let lines = read_lines(&out);
         // Exactly two responses: handshake ack + exit ack.
         assert_eq!(lines.len(), 2);
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // C3b — run_prod_session preconditions + dispatch routing
+    // ──────────────────────────────────────────────────────────────
+
+    fn make_runtime_with_capabilities(caps_json: &str) -> Runtime {
+        let doc_json = format!(
+            r##"{{
+              "formatVersion":"1.0","version":"1.0.0","id":"x",
+              "app":{{"name":"x","version":"1","id":"x","capabilities":{caps_json}}},
+              "children":[
+                {{ "type":"frame","id":"root","width":480,"height":320,"x":0,"y":0,
+                "children":[
+                  {{ "type":"rectangle","id":"save-btn","x":0,"y":0,"width":50,"height":20,
+                    "events": {{ "onTap": [{{ "set": {{ "$state.x": "1" }} }}] }} }}
+                ]}}
+              ],
+              "state":{{"x":{{"type":"int","default":0}}}}
+            }}"##
+        );
+        let schema: PenDocument = jian_ops_schema::load_str(&doc_json).unwrap().value;
+        let mut rt = Runtime::new_from_document(schema).unwrap();
+        rt.build_layout((480.0, 320.0)).unwrap();
+        rt.rebuild_spatial();
+        rt
+    }
+
+    #[test]
+    fn run_prod_session_refuses_when_capabilities_absent() {
+        // The default `make_runtime` fixture has no capabilities at
+        // all. Prod must fail closed before reading the transport.
+        let input = "";
+        let (mut transport, _out) = rig(input);
+        let validator = StaticTokenValidator::new("s", Permission::Act);
+        let mut runtime = make_runtime();
+        let err =
+            run_prod_session(&mut transport, &validator, &mut runtime, Instant::now()).unwrap_err();
+        assert!(matches!(err, ServerError::ProdCapabilitiesEmpty));
+    }
+
+    #[test]
+    fn run_prod_session_refuses_when_capabilities_empty_array() {
+        // Author wrote `app.capabilities: []` — explicit empty.
+        // Same outcome as absent: refusal.
+        let input = "";
+        let (mut transport, _out) = rig(input);
+        let validator = StaticTokenValidator::new("s", Permission::Act);
+        let mut runtime = make_runtime_with_capabilities("[]");
+        let err =
+            run_prod_session(&mut transport, &validator, &mut runtime, Instant::now()).unwrap_err();
+        assert!(matches!(err, ServerError::ProdCapabilitiesEmpty));
+    }
+
+    #[test]
+    fn run_prod_session_refuses_when_no_document_loaded() {
+        // Fresh runtime with no document at all → ProdNoDocument.
+        let input = "";
+        let (mut transport, _out) = rig(input);
+        let validator = StaticTokenValidator::new("s", Permission::Act);
+        let mut runtime = Runtime::new();
+        let err =
+            run_prod_session(&mut transport, &validator, &mut runtime, Instant::now()).unwrap_err();
+        assert!(matches!(err, ServerError::ProdNoDocument));
+    }
+
+    #[test]
+    fn run_prod_session_with_capabilities_allows_handshake_and_list_actions() {
+        // Capabilities present → prod session starts. Agent calls
+        // list_actions and receives the projected rows.
+        let input = r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}
+{"id":2,"verb":"list_actions"}
+{"id":3,"verb":"exit"}
+"#;
+        let (mut transport, out) = rig(input);
+        let validator = StaticTokenValidator::new("s", Permission::Act);
+        let mut runtime = make_runtime_with_capabilities(r#"["network"]"#);
+        run_prod_session(&mut transport, &validator, &mut runtime, Instant::now()).unwrap();
+        let lines = read_lines(&out);
+        assert_eq!(lines.len(), 3);
+        // Handshake ack + list_actions response + exit ack.
+        let r2: Response = serde_json::from_str(&lines[1]).unwrap();
+        assert!(r2.ok, "list_actions should succeed in prod");
+        let payload: serde_json::Value = serde_json::from_str(&r2.body).unwrap();
+        assert_eq!(payload["verb"], "list_actions");
+    }
+
+    #[test]
+    fn run_prod_session_rejects_structural_verbs_with_unsupported_tag() {
+        // Structural verb (snapshot) under prod-mode dispatch → the
+        // `UnsupportedVerbInProd` error tag travels back to the client.
+        // The session stays open (the `exit` after still gets a
+        // response).
+        let input = r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}
+{"id":2,"verb":"snapshot"}
+{"id":3,"verb":"exit"}
+"#;
+        let (mut transport, out) = rig(input);
+        let validator = StaticTokenValidator::new("s", Permission::Act);
+        let mut runtime = make_runtime_with_capabilities(r#"["network"]"#);
+        run_prod_session(&mut transport, &validator, &mut runtime, Instant::now()).unwrap();
+        let lines = read_lines(&out);
+        assert_eq!(lines.len(), 3);
+        let r2: Response = serde_json::from_str(&lines[1]).unwrap();
+        assert!(!r2.ok);
+        let payload: serde_json::Value = serde_json::from_str(&r2.body).unwrap();
+        assert_eq!(payload["error"], "UnsupportedVerbInProd");
     }
 }
