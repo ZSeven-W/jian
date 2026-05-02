@@ -338,6 +338,71 @@ fn player_help_advertises_dpi_and_debug_overlay() {
     );
 }
 
+// Plan 18 ASP prod mode / C4 — `jian player --asp` rejects network
+// bind targets at the CLI level. We check rejection (not acceptance)
+// because a real bind would open a winit window and block, which the
+// headless test runner can't drive. The bind path is still covered
+// by `jian-asp`'s in-crate `socket_path::tests` and the
+// `unix_socket::tests` round-trip.
+#[cfg(all(feature = "player", feature = "prod-asp"))]
+#[test]
+fn player_asp_rejects_tcp_url() {
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "player",
+            "--asp",
+            "tcp://0.0.0.0:9000",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("refuses network bind targets"),
+        "expected refusal message, got stderr={stderr:?}"
+    );
+}
+
+#[cfg(all(feature = "player", feature = "prod-asp"))]
+#[test]
+fn player_asp_rejects_host_port() {
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "player",
+            "--asp",
+            "127.0.0.1:8080",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("refuses network bind targets"),
+        "expected refusal message, got stderr={stderr:?}"
+    );
+}
+
+#[cfg(all(feature = "player", feature = "prod-asp"))]
+#[test]
+fn player_help_advertises_asp_flag() {
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["player", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--asp"), "expected --asp in help");
+}
+
 #[test]
 fn pack_then_unpack_roundtrips_app_op() {
     let dir = TempDir::new().unwrap();

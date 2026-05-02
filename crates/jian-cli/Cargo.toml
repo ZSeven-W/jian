@@ -19,12 +19,21 @@ player  = ["dep:jian-host-desktop", "dep:notify"]
 # `jian-action-surface` + the host's mcp drain integration. Off by
 # default so the headless / no-rmcp build path stays tight.
 mcp     = ["player", "jian-host-desktop/mcp", "dep:jian-action-surface"]
+# Plan 18 ASP prod mode / C4 — enables the `jian player --asp <path>`
+# flag for token-efficient agent driving against a production .op.
+# Pulls in jian-asp directly (path resolution + Unix socket /
+# Named Pipe transports + run_prod_session entry point). Off by
+# default so the released CLI binary's wire surface stays small;
+# downstream packagers building an "AI-driving" channel turn this on.
+prod-asp = ["player", "dep:jian-asp", "jian-host-desktop/prod-asp"]
 
 [dependencies]
 jian-core        = { path = "../jian-core" }
 jian-ops-schema  = { path = "../jian-ops-schema" }
 jian-host-desktop = { path = "../jian-host-desktop", optional = true, features = ["run"] }
 jian-action-surface = { path = "../jian-action-surface", optional = true, features = ["mcp"] }
+# Plan 18 ASP prod mode (C4): only pulled in when `prod-asp` is on.
+jian-asp         = { path = "../jian-asp", optional = true, default-features = false, features = ["prod-asp"] }
 clap             = { version = "4", features = ["derive"] }
 anyhow           = "1"
 serde            = { workspace = true }

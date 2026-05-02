@@ -153,8 +153,68 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         host = host.with_pending_hidden_bboxes(bboxes);
     }
     let host = install_updater_from_doc(host);
+
+    // Plan 18 ASP prod mode / C4: if `--asp <arg>` was passed, bind
+    // the listener BEFORE entering the winit event loop. We bind
+    // here (not inside the host) so a misconfigured path
+    // (`tcp://...`, a regular file the user typed by mistake,
+    // missing `XDG_RUNTIME_DIR` *and* unreadable `/tmp`) fails
+    // fast with a CLI-level error rather than killing the
+    // already-running render thread.
+    //
+    // Live wiring of the accept loop into the runtime is a follow-up
+    // commit (`run_prod_session` needs `&mut Runtime`, which winit
+    // owns once `host.run()` is called). This commit lands the
+    // transport + flag plumbing so C4's deliverables are in tree
+    // and a packager who needs prod ASP can validate the path
+    // resolution / refusal contract today.
+    #[cfg(feature = "prod-asp")]
+    let _asp_listener = match args.asp.as_deref() {
+        Some(arg) => Some(bind_asp_listener(arg)?),
+        None => None,
+    };
+
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve `--asp <arg>` and bind a local-only listener. Returns the
+/// listener so the caller can keep it alive (and print the path).
+/// Errors here surface verbatim from the CLI as
+/// `jian: error: --asp: ...`.
+#[cfg(all(unix, feature = "prod-asp"))]
+fn bind_asp_listener(arg: &str) -> Result<jian_asp::transport::UnixSocketListener> {
+    use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
+
+    let target = resolve_bind_arg(arg, std::process::id(), |k| std::env::var(k).ok())
+        .map_err(|e| anyhow!("--asp: {}", e))?;
+    let BindTarget::UnixSocket(path) = target else {
+        // Unreachable on unix — `resolve_bind_arg` always picks
+        // UnixSocket here. Treat as a hard error to keep the type
+        // exhaustive without a panic.
+        return Err(anyhow!("--asp: internal: unexpected bind target on unix"));
+    };
+    let listener = jian_asp::transport::UnixSocketListener::bind(&path)
+        .map_err(|e| anyhow!("--asp: {}", e))?;
+    eprintln!("jian player: ASP listening on {}", listener.path().display());
+    Ok(listener)
+}
+
+#[cfg(all(windows, feature = "prod-asp"))]
+fn bind_asp_listener(arg: &str) -> Result<jian_asp::transport::NamedPipeListener> {
+    use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
+
+    let target = resolve_bind_arg(arg, std::process::id(), |k| std::env::var(k).ok())
+        .map_err(|e| anyhow!("--asp: {}", e))?;
+    let BindTarget::NamedPipe(name) = target else {
+        return Err(anyhow!(
+            "--asp: internal: unexpected bind target on windows"
+        ));
+    };
+    let listener = jian_asp::transport::NamedPipeListener::bind(&name)
+        .map_err(|e| anyhow!("--asp: {}", e))?;
+    eprintln!("jian player: ASP listening on {}", listener.name());
+    Ok(listener)
 }
 
 /// Resolve a CLI argument that may be either a filesystem path or a

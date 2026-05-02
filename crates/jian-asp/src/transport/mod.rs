@@ -1,26 +1,53 @@
-//! ASP transport layer (Plan 18 Task 5).
+//! ASP transport layer (Plan 18 Task 5 + Plan 18 ASP prod mode C4).
 //!
 //! NDJSON over an arbitrary byte stream. The trait surface is small
 //! on purpose — read one request line, write one response line —
-//! so the four supported transports (stdio, Unix socket, Windows
-//! Named Pipe, WebSocket) all plug in behind the same shape and
+//! so every supported transport plugs in behind the same shape and
 //! the verb dispatch / server main loop don't need to care which.
 //!
-//! Phase 2 (this commit) ships:
-//! - The [`Transport`] trait abstraction.
+//! Currently shipped:
+//! - [`Transport`] trait abstraction + [`TransportError`].
 //! - [`stdio::StdioTransport`] — reads from stdin, writes to stdout.
-//!   Suitable for the dev-tools agent CLI in `bin/`.
+//!   Used by the dev-tools agent CLI.
+//! - [`unix_socket::UnixSocketListener`] /
+//!   [`unix_socket::UnixSocketTransport`] — bound to a filesystem
+//!   path with `0600` socket / `0700` parent-dir perms, used by
+//!   `jian player --asp <path>` on macOS / Linux. Spec §6.
+//! - [`named_pipe::NamedPipeListener`] — typed stub on Windows; the
+//!   real `windows-sys`-backed implementation lands in a follow-up.
+//! - [`socket_path::resolve_bind_arg`] — translates `--asp <arg>`
+//!   into a [`socket_path::BindTarget`] and refuses any value that
+//!   looks like a network bind (TCP / `host:port` / URL with
+//!   scheme), per spec §6.
 //!
-//! Phase 2 follow-ups land the other three transports behind the
-//! same trait. The server / dispatch code is decoupled from any
-//! one transport so adding e.g. `tokio-tungstenite`-backed
-//! WebSocket is purely additive.
+//! Future-additive: the server / dispatch code is decoupled from
+//! any one transport so a `tokio-tungstenite`-backed WebSocket
+//! variant could land behind the same trait.
 
 #[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod stdio;
 
 #[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub use stdio::StdioTransport;
+
+// `socket_path` is platform-agnostic and only allocates strings —
+// safe to expose under either feature gate. The CLI consumes it
+// from the `prod-asp` path; dev hosts can use it too if they want
+// to bind a Unix socket for an interactive REPL session.
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod socket_path;
+
+#[cfg(all(unix, any(feature = "dev-asp", feature = "prod-asp")))]
+pub mod unix_socket;
+
+#[cfg(all(unix, any(feature = "dev-asp", feature = "prod-asp")))]
+pub use unix_socket::{UnixSocketListener, UnixSocketTransport};
+
+#[cfg(all(windows, any(feature = "dev-asp", feature = "prod-asp")))]
+pub mod named_pipe;
+
+#[cfg(all(windows, any(feature = "dev-asp", feature = "prod-asp")))]
+pub use named_pipe::NamedPipeListener;
 
 /// Transport-layer error. Stringified upstream so verb dispatch
 /// can include the failure reason in the audit ring without

@@ -269,6 +269,23 @@ pub struct PlayerArgs {
     /// default — flag-only, no value.
     #[arg(long = "debug-overlay")]
     pub debug_overlay: bool,
+    /// Open a prod ASP (Agent Shell Protocol) listener on a
+    /// local-only transport so an AI agent can drive the running
+    /// app via `list_actions` + `tap` / `type` / `scroll` / `swipe`.
+    ///
+    /// Argument:
+    /// - `auto` — pick a per-process default
+    ///   (`$XDG_RUNTIME_DIR/jian/<pid>.asp.sock` on Unix,
+    ///   `\\.\pipe\jian\<pid>\asp` on Windows).
+    /// - `<path>` — bind to that filesystem path (Unix) or Named
+    ///   Pipe (Windows starting `\\.\pipe\`).
+    ///
+    /// Network bind targets (TCP, `host:port`, URLs with a scheme)
+    /// are rejected — prod ASP is local-only by design (Plan 18
+    /// spec §6). Requires the `prod-asp` cargo feature.
+    #[cfg(feature = "prod-asp")]
+    #[arg(long = "asp")]
+    pub asp: Option<String>,
 }
 
 #[cfg(feature = "player")]
