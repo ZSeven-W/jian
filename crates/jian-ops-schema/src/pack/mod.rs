@@ -27,14 +27,18 @@
 //!
 //! - `aot/initial_layout.bin` — **shipped** (Plan 19 D1). Byte-level
 //!   serializer + decoder live in [`initial_layout`]; `jian pack
-//!   --aot` wires it through. The runtime preload path that consumes
-//!   the snapshot to skip `ComputeFirstLayout` is a follow-up — it
-//!   needs a `LayoutEngine::preload_initial` method that bypasses
-//!   taffy's compute step.
+//!   --aot` wires it through. The runtime preload path lives in
+//!   `jian_core::layout::LayoutEngine::preload_initial` and is gated
+//!   by [`crate::pack::default_state::DefaultStateSnapshot::is_empty`]'s
+//!   sibling on the bootstrap side.
+//! - `aot/default_state.bin` — **shipped** (Plan 19 D1 follow-up).
+//!   Six-scope JSON-in-binary-frame serializer + decoder live in
+//!   [`default_state`]. The pack writer captures values from a
+//!   freshly seeded `Runtime` and the runtime side restores them
+//!   ahead of `SeedStateGraph` so the schema-default scan can be
+//!   skipped on cold start.
 //! - `aot/expressions.bin` — **deferred**. Needs `jian_core::expression::Chunk`
 //!   to derive `Serialize`, a touchier refactor.
-//! - `aot/default_state.bin` — **deferred**. Same reason — state-graph
-//!   serialisation isn't in shape yet.
 //!
 //! The font subset entries depend on the subsetter wiring (Plan 19
 //! D2 — runtime side shipped, AOT side waits on D1's expression
@@ -46,9 +50,13 @@
 //! below stay wire-compatible with the current MVP schema so the
 //! migration lands without touching `manifest.json` consumers.
 
+pub mod default_state;
 pub mod initial_layout;
 pub mod manifest;
 
+pub use default_state::{
+    DefaultStateError, DefaultStateSnapshot, DEFAULT_STATE_MAGIC, DEFAULT_STATE_VERSION,
+};
 pub use initial_layout::{
     InitialLayoutError, InitialLayoutSnapshot, PackedRect, INITIAL_LAYOUT_MAGIC,
     INITIAL_LAYOUT_VERSION,

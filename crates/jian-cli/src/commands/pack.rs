@@ -36,13 +36,19 @@
 //!   `BootstrapSource::Pack` reader preloads the rects to skip
 //!   `ComputeFirstLayout` at runtime (~30-80 ms on real docs).
 //!
-//! Logic-module bundling (`logic/<id>.wasm`), AOT expressions, and
-//! AOT default-state are Plan-19 follow-ups.
+//! Logic-module bundling (`logic/<id>.wasm`) and AOT expressions
+//! (`aot/expressions.bin`) are Plan-19 follow-ups. AOT default-state
+//! (`aot/default_state.bin`) ships under `--aot` alongside the layout
+//! snapshot — both are dumped from the same probe runtime so the
+//! state values reflect the schema-default seed at pack time.
 
 use crate::PackArgs;
 use anyhow::{anyhow, Context, Result};
 use jian_ops_schema::document::PenDocument;
-use jian_ops_schema::pack::{InitialLayoutSnapshot, PackedRect, ENTRY_AOT_INITIAL_LAYOUT};
+use jian_ops_schema::pack::{
+    DefaultStateSnapshot, InitialLayoutSnapshot, PackedRect, ENTRY_AOT_DEFAULT_STATE,
+    ENTRY_AOT_INITIAL_LAYOUT,
+};
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{self, File};
@@ -76,21 +82,39 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         Vec::new()
     };
 
-    // AOT initial-layout snapshot (Plan 19 D1 / Task 6). Computed
-    // before opening the zip so a layout error fails fast with a
-    // clear message instead of a half-written archive.
-    let aot_layout: Option<(InitialLayoutSnapshot, Vec<u8>)> = if args.aot {
+    // AOT initial-layout snapshot + default-state snapshot (Plan 19
+    // D1 / Task 6). Computed before opening the zip so a layout
+    // error fails fast with a clear message instead of a half-written
+    // archive. Both come from the SAME probe runtime so the rect set
+    // and the seeded state agree on which document was hashed —
+    // walking the schema twice would race a future loader change.
+    let aot_payload: Option<(
+        InitialLayoutSnapshot,
+        Vec<u8>,
+        DefaultStateSnapshot,
+        Vec<u8>,
+    )> = if args.aot {
         let viewport = parse_viewport(&args.aot_viewport)?;
-        let snapshot = compute_initial_layout(&loaded.value, viewport).context(
-            "computing AOT initial layout (jian pack --aot). Falls back when ComputeFirstLayout fails",
-        )?;
-        let bytes = snapshot
+        let (layout_snap, state_snap) =
+            compute_aot_payload(&loaded.value, viewport).context(
+                "computing AOT initial layout / default state (jian pack --aot). \
+                 Falls back when ComputeFirstLayout fails",
+            )?;
+        let layout_bytes = layout_snap
             .write_bytes()
             .map_err(|e| anyhow!("encode AOT initial layout: {e}"))?;
-        Some((snapshot, bytes))
+        let state_bytes = state_snap
+            .write_bytes()
+            .map_err(|e| anyhow!("encode AOT default state: {e}"))?;
+        Some((layout_snap, layout_bytes, state_snap, state_bytes))
     } else {
         None
     };
+    // Backwards-compat alias — the rest of the function reads the
+    // layout pair directly.
+    let aot_layout: Option<(InitialLayoutSnapshot, Vec<u8>)> = aot_payload
+        .as_ref()
+        .map(|(s, b, _, _)| (s.clone(), b.clone()));
 
     let mut entries: Vec<String> = vec!["app.op".into()];
     let mut seen_entries: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -101,6 +125,7 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
     }
     if aot_layout.is_some() {
         entries.push(ENTRY_AOT_INITIAL_LAYOUT.to_owned());
+        entries.push(ENTRY_AOT_DEFAULT_STATE.to_owned());
     }
 
     let images_manifest: BTreeMap<String, String> = images
@@ -138,20 +163,24 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         zw.write_all(&asset.bytes)?;
     }
 
-    if let Some((_, bytes)) = aot_layout.as_ref() {
+    if let Some((_, layout_bytes, _, state_bytes)) = aot_payload.as_ref() {
         zw.start_file(ENTRY_AOT_INITIAL_LAYOUT, opts)?;
-        zw.write_all(bytes)?;
+        zw.write_all(layout_bytes)?;
+        zw.start_file(ENTRY_AOT_DEFAULT_STATE, opts)?;
+        zw.write_all(state_bytes)?;
     }
 
     zw.finish()?;
 
-    let aot_msg = match aot_layout.as_ref() {
-        Some((s, b)) => format!(
-            ", AOT layout {}×{} ({} rect(s), {} bytes)",
+    let aot_msg = match aot_payload.as_ref() {
+        Some((s, layout_bytes, state, state_bytes)) => format!(
+            ", AOT layout {}×{} ({} rect(s), {} bytes), AOT state ({} app key(s), {} bytes)",
             s.viewport.width as i32,
             s.viewport.height as i32,
             s.rects.len(),
-            b.len(),
+            layout_bytes.len(),
+            state.app.len(),
+            state_bytes.len(),
         ),
         None => String::new(),
     };
@@ -189,18 +218,26 @@ fn parse_viewport(s: &str) -> Result<(f32, f32)> {
 
 /// Build a runtime, run `build_layout(viewport)`, then walk every
 /// node and collect its scene-coord rect into an
-/// [`InitialLayoutSnapshot`]. Nodes without a layout rect (very rare
-/// — typically a virtual `<ref>` placeholder the layout engine
+/// [`InitialLayoutSnapshot`] alongside a snapshot of every state
+/// scope's seeded values. Nodes without a layout rect (very rare —
+/// typically a virtual `<ref>` placeholder the layout engine
 /// omitted) are silently skipped; the host falls back to a fresh
 /// layout pass for them.
 ///
 /// First validates that every node id in the document is unique —
 /// `NodeTree::insert_subtree` overwrites duplicates silently, which
 /// would produce an incomplete AOT snapshot (codex round 3 MEDIUM).
-fn compute_initial_layout(
+///
+/// The state snapshot reflects the schema-default seed at the moment
+/// `Runtime::new_from_document` finishes; no events have fired and
+/// no signals have been mutated, so the dump is exactly what
+/// `SeedStateGraph` would otherwise reproduce. Capturing both
+/// payloads from the same runtime keeps the layout↔state pair
+/// internally consistent.
+fn compute_aot_payload(
     doc: &PenDocument,
     viewport: (f32, f32),
-) -> Result<InitialLayoutSnapshot> {
+) -> Result<(InitialLayoutSnapshot, DefaultStateSnapshot)> {
     if let Some(dup) = first_duplicate_node_id(doc) {
         return Err(anyhow!(
             "AOT initial layout: document has duplicate node id `{dup}`. \
@@ -232,13 +269,15 @@ fn compute_initial_layout(
             );
         }
     }
-    Ok(InitialLayoutSnapshot {
+    let layout = InitialLayoutSnapshot {
         viewport: jian_ops_schema::pack::DefaultViewport {
             width: viewport.0,
             height: viewport.1,
         },
         rects,
-    })
+    };
+    let state = rt.state.dump_default_state();
+    Ok((layout, state))
 }
 
 /// Walk the **first-frame root set** of `doc` and return the first
@@ -451,6 +490,7 @@ fn build_manifest(
             "aot".into(),
             serde_json::json!({
                 "initial_layout": ENTRY_AOT_INITIAL_LAYOUT,
+                "default_state": ENTRY_AOT_DEFAULT_STATE,
                 "default_viewport": { "width": vp.width, "height": vp.height },
                 "measurement_backend": AOT_MEASUREMENT_BACKEND,
             }),

@@ -733,6 +733,9 @@ fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
     // preload reader can reject mismatched-shaping snapshots.
     assert_eq!(aot["measurement_backend"], "estimate");
 
+    // Manifest records both AOT entries (Plan 19 D1 follow-up).
+    assert_eq!(aot["default_state"], "aot/default_state.bin");
+
     // Binary snapshot decodes and contains the document's nodes.
     let bin = fs::read(extracted.join("aot/initial_layout.bin"))
         .expect("aot/initial_layout.bin must be extracted");
@@ -743,6 +746,17 @@ fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
     assert!(snap.rects.contains_key("root"));
     assert!(snap.rects.contains_key("child-a"));
     assert!(snap.rects.contains_key("child-b"));
+
+    // AOT default-state file decodes (Plan 19 D1 follow-up). The
+    // `aot.op` fixture declares no `state` block, so every scope
+    // round-trips empty — but the file itself MUST exist so a runtime
+    // preload reader sees a deterministic "nothing to seed" signal
+    // rather than fall back to a fresh SeedStateGraph.
+    let state_bin = fs::read(extracted.join("aot/default_state.bin"))
+        .expect("aot/default_state.bin must be extracted");
+    let state_snap = jian_ops_schema::pack::DefaultStateSnapshot::read_bytes(&state_bin)
+        .expect("state snapshot decodes");
+    assert!(state_snap.is_empty(), "fixture has no state to seed");
 }
 
 #[test]
@@ -776,7 +790,11 @@ fn pack_without_aot_omits_initial_layout_bin() {
     assert!(manifest.get("aot").is_none(), "no `aot` key by default");
     assert!(
         !extracted.join("aot/initial_layout.bin").exists(),
-        "no AOT binary by default"
+        "no AOT initial_layout binary by default"
+    );
+    assert!(
+        !extracted.join("aot/default_state.bin").exists(),
+        "no AOT default_state binary by default"
     );
 }
 
