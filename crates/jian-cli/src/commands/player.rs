@@ -34,6 +34,116 @@ struct LoadedSource {
 }
 
 pub fn run(args: PlayerArgs) -> Result<ExitCode> {
+    // Plan 8 §T8 Windows leg: when a second `jian.exe` instance
+    // is launched (file double-click, `jian://...` URL handler,
+    // or `--asp` re-attach), Windows spawns a fresh process by
+    // default — no Launch-Services-style routing the way macOS
+    // gives us for free. We acquire a named-mutex singleton at
+    // entry; if a primary is already running, we forward our
+    // argv via WM_COPYDATA and exit cleanly. Only the primary
+    // path falls through to the regular `jian player` startup
+    // (window creation + event loop).
+    //
+    // The singleton guard is held in `_singleton` for the
+    // lifetime of this function so the mutex stays acquired
+    // across the player's whole run. Drop releases it.
+    #[cfg(target_os = "windows")]
+    let _singleton;
+    #[cfg(target_os = "windows")]
+    let mut _receiver_window: Option<jian_host_desktop::win_deeplink_receiver::ReceiverWindow> =
+        None;
+    #[cfg(target_os = "windows")]
+    match jian_host_desktop::win_deeplink_receiver::try_acquire_singleton() {
+        jian_host_desktop::win_deeplink_receiver::Singleton::Primary(guard) => {
+            // Codex round 5 HIGH: install a NullDeepLinkHandler in
+            // the registry BEFORE the receiver window goes up so a
+            // forwarded URL arriving during cold-start dispatches
+            // cleanly (returning `false` = declined-but-protocol-
+            // handled) instead of `NoHandlerRegistered`. Once the
+            // host wires a real `DeepLinkHandler` (e.g. a router
+            // that opens `jian://app/page` paths), this gets
+            // replaced via `install_deeplink_handler`.
+            let _prev = jian_host_desktop::win_deeplink::install_handler(Box::new(
+                jian_host_desktop::deeplink::NullDeepLinkHandler::default(),
+            ));
+            // Install the receiver window NOW (before any startup
+            // work) so secondaries arriving during our cold-start
+            // can FindWindowExW + SendMessageTimeoutW. The
+            // `SingletonGuard` carries the ready event the receiver
+            // signals; secondaries `WaitForSingleObject` on it for
+            // a bounded interval before probing.
+            match jian_host_desktop::win_deeplink_receiver::install_receiver_window(&guard) {
+                Ok(window) => {
+                    _receiver_window = Some(window);
+                }
+                Err(e) => {
+                    use std::io::Write;
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "jian: warning — receiver window install failed ({e}); \
+                         deep links will not route into this instance"
+                    );
+                }
+            }
+            _singleton = guard;
+        }
+        jian_host_desktop::win_deeplink_receiver::Singleton::Secondary => {
+            // Codex round 3 MEDIUM Q4 #2: the receiver's
+            // dispatch_url only accepts `jian://` URLs (it parses
+            // via `JianUrl::parse` which rejects other schemes).
+            // Forwarding a bare `.op` path or `file://...` URI
+            // would always come back as `PrimaryRejected`. Until a
+            // typed wire enum lands for file-open dispatch,
+            // restrict secondary forwarding to `jian://` only.
+            let raw = args.path.to_string_lossy();
+            if !raw.starts_with("jian://") {
+                return Err(anyhow!(
+                    "another `jian.exe` is already running. The Plan 8 §T8 \
+                     receiver only forwards `jian://` URLs at this time; \
+                     close the running instance first to open `{raw}`."
+                ));
+            }
+            use jian_host_desktop::win_deeplink_receiver::ForwardOutcome;
+            match jian_host_desktop::win_deeplink_receiver::forward_url_to_primary(&raw)
+            {
+                Ok(ForwardOutcome::Delivered) => return Ok(ExitCode::SUCCESS),
+                Ok(ForwardOutcome::PrimaryRejected) => {
+                    // The primary is alive and saw the URL but
+                    // refused it. Surface as an error so the
+                    // user sees the rejection instead of a
+                    // silent drop.
+                    return Err(anyhow!(
+                        "running `jian.exe` rejected the forwarded URL — \
+                         see the primary's stderr for details"
+                    ));
+                }
+                Ok(ForwardOutcome::NoPeer) => {
+                    return Err(anyhow!(
+                        "another `jian.exe` holds the singleton mutex but its \
+                         receiver window was not found — refusing to start a \
+                         second window"
+                    ));
+                }
+                Ok(ForwardOutcome::SendTimedOut) => {
+                    return Err(anyhow!(
+                        "running `jian.exe` did not respond to the forwarded \
+                         URL within 5 s — refusing to start a second window"
+                    ));
+                }
+                Ok(ForwardOutcome::SendFailed { last_error }) => {
+                    return Err(anyhow!(
+                        "running `jian.exe` failed to receive the forwarded URL \
+                         (Win32 error {last_error}) — refusing to start a second \
+                         window"
+                    ));
+                }
+                Err(e) => {
+                    return Err(anyhow!("forward to running instance failed: {e}"));
+                }
+            }
+        }
+    };
+
     // The Linux `.desktop` registers `Exec=jian player %U`, which
     // means the file manager hands us URI strings (`file:///path/x.op`)
     // for double-clicked files alongside `jian://...` deep links for

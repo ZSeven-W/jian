@@ -75,14 +75,27 @@
               merge this file's `<RegisterUrlScheme>` / `<RegisterFileAssoc>`
               blocks into the generated source.
             -->
-            <!-- Plan 8 §T8 / C6 — `jian://` URL scheme. Wire-frozen
-                 here for the future WindowProc-bearing follow-up;
-                 deliberately not referenced from `<Feature>` above
-                 until the `win_deeplink::WmCopyDataReceiver` body
-                 lands AND a forwarding-only CLI entry point exists.
+            <!-- Plan 8 §T8 — `jian://` URL scheme registration.
+                 Wire-frozen here for the upstream WiX renderer to
+                 pick up; deliberately not yet referenced from
+                 `<Feature>` above because the URL-scheme→`jian.exe`
+                 hand-off depends on the WindowProc-bearing
+                 `win_deeplink_receiver` (which now ships) AND a
+                 host-level `DeepLinkHandler` that routes parsed
+                 URLs into the runtime (which is the next follow-up
+                 — currently a `NullDeepLinkHandler` placeholder
+                 ack's the protocol but doesn't act on the URL).
                  The release script renders this template once with
                  the component intact so the upstream wire shape
                  stays diff-friendly across re-renders.
+
+                 Important: the registry calls `jian.exe player "%1"`
+                 (NOT a separate `deeplink-forward` subcommand) —
+                 `jian player` itself runs the named-mutex singleton
+                 + `WM_COPYDATA` forwarding at process entry, so a
+                 `jian://` click on a system with a primary already
+                 running forwards-and-exits cleanly via the same
+                 entry point as a fresh launch.
             <Component Id='RegisterUrlScheme' Guid='*'>
                 <RegistryKey Root='HKLM' Key='Software\Classes\jian'>
                     <RegistryValue Type='string' Value='URL:Jian Protocol'/>
@@ -93,7 +106,7 @@
                 </RegistryKey>
                 <RegistryKey Root='HKLM' Key='Software\Classes\jian\shell\open\command'>
                     <RegistryValue Type='string'
-                                   Value='&quot;[#JianExe]&quot; deeplink-forward &quot;%1&quot;'/>
+                                   Value='&quot;[#JianExe]&quot; player &quot;%1&quot;'/>
                 </RegistryKey>
             </Component>
             -->

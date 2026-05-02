@@ -258,6 +258,15 @@ pub fn install_deeplink_handler(
     }
     #[cfg(target_os = "windows")]
     {
+        // Plan 8 §T8 Windows leg: the cross-platform shim only
+        // installs the handler registry. The CLI is responsible
+        // for `try_acquire_singleton` BEFORE calling this (so a
+        // secondary process never reaches here) and for calling
+        // `crate::win_deeplink_receiver::install_receiver_window
+        // (&singleton_guard)` after the registry has the handler.
+        // Splitting these out of the shim is necessary because
+        // `install_receiver_window` requires a `&SingletonGuard`
+        // for its pre-created ready event handle.
         return crate::win_deeplink::install_handler(handler);
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -281,6 +290,11 @@ pub fn take_deeplink_handler() -> Option<Box<dyn DeepLinkHandler>> {
     }
     #[cfg(target_os = "windows")]
     {
+        // Drop the stored receiver window before the handler so a
+        // late `WM_COPYDATA` after teardown can't find a live
+        // target with no handler behind it. The thread-local
+        // `take` returns the guard which `Drop` destroys.
+        let _ = crate::win_deeplink_receiver::take_receiver_window();
         return crate::win_deeplink::take_handler();
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

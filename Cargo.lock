@@ -2469,6 +2469,7 @@ dependencies = [
  "serde_json",
  "softbuffer",
  "tempfile",
+ "windows-sys 0.61.2",
  "winit",
 ]
 

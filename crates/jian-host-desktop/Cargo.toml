@@ -130,6 +130,29 @@ objc2-foundation = { version = "0.2", features = [
     "NSAppleEventDescriptor",
 ] }
 
+# Plan 8 §T8 Windows leg: hidden message-only window + WindowProc
+# for `WM_COPYDATA` deep-link forwarding, plus named-mutex single-
+# instance probe so a secondary `jian.exe` invocation can hand
+# `jian://...` / `.op` argv to the running primary and exit.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+    # `Win32_Graphics_Gdi` gates `WNDCLASSEXW` (its `hbrBackground`
+    # is `HBRUSH`, owned by the GDI feature seam in 0.61).
+    # `COPYDATASTRUCT` lives under `Win32_System_DataExchange`.
+    # `CreateMutexW` requires `Win32_Security` for its
+    # `SECURITY_ATTRIBUTES` parameter.
+    # `SYNCHRONIZE` (the OpenEventW access-mask constant) lives
+    # under `Win32_Storage_FileSystem` in windows-sys 0.61.
+    "Win32_Graphics_Gdi",
+] }
+
 [dev-dependencies.futures]
 version = "0.3"
 

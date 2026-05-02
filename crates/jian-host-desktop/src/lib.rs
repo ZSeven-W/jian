@@ -46,6 +46,8 @@ pub mod startup_visual;
 pub mod updater;
 #[cfg(target_os = "windows")]
 pub mod win_deeplink;
+#[cfg(target_os = "windows")]
+pub mod win_deeplink_receiver;
 
 #[cfg(feature = "run")]
 mod run;

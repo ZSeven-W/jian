@@ -94,9 +94,60 @@ additions targeted at the workspace's `0.0.1` development release.
   Runtime end-to-end validation of the Apple-Event path needs a
   real macOS GUI session (`open jian://...` against a `cargo
   bundle`-built `.app`).
-- Windows `WM_COPYDATA` hidden message-only window + named-mutex
-  single-instance forwarding is **not yet** shipped — paired
-  Windows leg of the macOS Apple-Event receiver above.
+- `win_deeplink_receiver` module (Windows-only) — pairs with the
+  macOS Apple-Event receiver to land Plan 8 §T8 across both
+  desktop platforms. `try_acquire_singleton()` returns
+  `Singleton::{Primary(SingletonGuard) | Secondary}` via a named-
+  mutex (`Local\JianHostDesktop-Singleton`). Primary path also
+  pre-creates the named ready event
+  (`Local\JianHostDesktop-ReceiverReady`, manual-reset, initially
+  unsignaled) at mutex-acquire time so secondaries arriving
+  during cold-start always find a live event to wait on.
+  `install_receiver_window(&SingletonGuard)` registers a
+  `WNDCLASSEXW` (`JianDeepLinkReceiver`, idempotent across the
+  process via `OnceLock<Result<...>>` so transient register
+  failures don't memoise as "registered"), creates a
+  `HWND_MESSAGE` window with our `WindowProc`, and `SetEvent`s
+  the singleton's ready event. The `WindowProc` validates
+  `dwData == COPYDATA_TAG` (`'JDL1'`), `lpData != NULL`, alignment,
+  size + `cbData ≤ COPYDATA_MAX_BYTES` (4 KiB), then decodes
+  UTF-16 LE → `String::from_utf16` → `crate::win_deeplink::dispatch_url`.
+  `forward_url_to_primary(url)` opens the ready event with
+  `SYNCHRONIZE` only, waits up to 5 s with explicit
+  `WAIT_OBJECT_0 / WAIT_TIMEOUT / WAIT_FAILED` handling, then
+  `FindWindowExW(HWND_MESSAGE, NULL, JianDeepLinkReceiver, NULL)`
+  + `SendMessageTimeoutW(SMTO_BLOCK, 5_000ms)`. Returns a typed
+  `ForwardOutcome` with `Delivered / NoPeer / SendTimedOut /
+  SendFailed { last_error } / PrimaryRejected` so the CLI can
+  surface accurate diagnostics (codex caught the prior single
+  `Ok(false)` collapsing access-denied / UIPI / hung-pump cases).
+- The `extern "system"` `WindowProc` wraps its body in
+  `catch_unwind` + `mem::forget(payload)` + panic-safe
+  `writeln!(io::stderr(), …)` (mirrors the macOS Apple-Event
+  receiver) so a handler panic never escapes the FFI frame.
+- Cargo-feature additions for windows-sys 0.61: `Win32_Foundation`,
+  `Win32_Security`, `Win32_Storage_FileSystem` (`SYNCHRONIZE`
+  constant), `Win32_System_DataExchange` (`COPYDATASTRUCT`),
+  `Win32_System_LibraryLoader` (`GetModuleHandleW`),
+  `Win32_System_Threading` (`CreateMutexW`/`CreateEventW`/
+  `OpenEventW`/`SetEvent`/`WaitForSingleObject`),
+  `Win32_UI_WindowsAndMessaging`, `Win32_Graphics_Gdi`
+  (`WNDCLASSEXW.hbrBackground`).
+- `cross-app spoofing via FindWindowExW` is a documented threat-
+  model gap (defense-in-depth follow-up: switch to a named pipe
+  with explicit user-SID DACL, mirror of `jian-asp`'s pattern).
+- `cold-start message-pump latency` is a documented limitation:
+  the ready event signals when the HWND exists, not when the
+  main thread enters winit's message pump, so a 30-100 ms gap
+  exists between primary acquiring the singleton and the message
+  loop dispatching. Bounded by the 5 s `SendMessageTimeoutW`
+  budget. Clean fix is a dedicated message-pump thread for the
+  receiver window, deferred.
+- Windows-only `Cargo.toml` target table for `windows-sys` 0.61
+  (separate from macOS's `objc2*` deps).
+- Six codex review rounds; final pass clean. cargo check on
+  `x86_64-pc-windows-msvc` clean. End-to-end runtime validation
+  needs a real Windows GUI session.
 - Per-platform Skia surface factories for Metal / D3D12 / OpenGL /
   Vulkan / WebGL are **not yet** shipped — each warrants its own
   session against real hardware. The `jian-skia` skeleton stubs
