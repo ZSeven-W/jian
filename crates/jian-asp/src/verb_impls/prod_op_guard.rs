@@ -183,10 +183,51 @@ pub fn validate_prod_op_target(
         ));
     }
 
-    Ok(Selector {
+    // Codex C5 round 1 MEDIUM: defend against duplicate node ids in
+    // the document. `derive_actions` walks the schema and may emit an
+    // action whose `source_node_id` collides with another node's id;
+    // `NodeTree::insert_subtree` is the wrong place to enforce
+    // uniqueness (overwrites silently). We resolve the rewritten
+    // selector here and require *exactly one* hit, refusing
+    // ambiguous documents at the prod-op gate rather than dispatching
+    // to whichever node the resolver happened to keep.
+    let rewritten = Selector {
         id: Some(action.source_node_id.clone()),
         ..Default::default()
-    })
+    };
+    let hits = rewritten.resolve(&doc.tree).map_err(|e| {
+        OutcomePayload::error(
+            verb,
+            &format!(
+                "internal: rewritten id selector failed to resolve: {}",
+                e
+            ),
+        )
+    })?;
+    if hits.is_empty() {
+        return Err(OutcomePayload::not_found(
+            verb,
+            &format!(
+                "action `{}` declares source node `{}` but the runtime tree \
+                 has no such node (likely a stale document or hot-reload race)",
+                id, action.source_node_id
+            ),
+        ));
+    }
+    if hits.len() > 1 {
+        return Err(OutcomePayload::invalid(
+            verb,
+            &format!(
+                "document has {} nodes with id `{}` — refusing prod op dispatch \
+                 because the source node is ambiguous (Plan 18 C5 / codex review). \
+                 Fix the document to give every node a unique id.",
+                hits.len(),
+                action.source_node_id
+            ),
+        ));
+    }
+
+    Ok(rewritten)
 }
 
 /// Pre-dispatch hook: if `verb` is an op verb (tap/type/scroll/swipe),
@@ -250,23 +291,48 @@ pub fn rewrite_op_verb_for_prod(
 /// what spec §9 C5 calls out — a prod agent has to derive its target
 /// from `list_actions` ids, never from a structural query, so any
 /// extra field is a red flag.
+///
+/// **Future-proof field coverage** (codex C5 round 1, MEDIUM): the
+/// body uses exhaustive struct destructuring without `..`, so adding
+/// a 17th field to `Selector` becomes a *compile error* here rather
+/// than silent acceptance. If the new field is structural, refuse
+/// it; if it's id-shaped (an alternative resolver hint that
+/// preserves single-target semantics), opt it in here explicitly.
 fn is_action_id_only(s: &Selector) -> bool {
-    s.id.is_some()
-        && s.alias.is_none()
-        && s.role.is_none()
-        && s.text.is_none()
-        && s.text_contains.is_none()
-        && s.visible.is_none()
-        && s.focused.is_none()
-        && s.enabled.is_none()
-        && s.near.is_none()
-        && s.child_of.is_none()
-        && s.parent_of.is_none()
-        && s.all_of.is_none()
-        && s.any_of.is_none()
-        && s.not.is_none()
-        && s.first.is_none()
-        && s.index.is_none()
+    let Selector {
+        id,
+        alias,
+        role,
+        text,
+        text_contains,
+        visible,
+        focused,
+        enabled,
+        near,
+        child_of,
+        parent_of,
+        all_of,
+        any_of,
+        not,
+        first,
+        index,
+    } = s;
+    id.is_some()
+        && alias.is_none()
+        && role.is_none()
+        && text.is_none()
+        && text_contains.is_none()
+        && visible.is_none()
+        && focused.is_none()
+        && enabled.is_none()
+        && near.is_none()
+        && child_of.is_none()
+        && parent_of.is_none()
+        && all_of.is_none()
+        && any_of.is_none()
+        && not.is_none()
+        && first.is_none()
+        && index.is_none()
 }
 
 #[cfg(test)]
@@ -431,5 +497,196 @@ mod tests {
         };
         let err = rewrite_op_verb_for_prod(&v, &rt).unwrap_err();
         assert_eq!(err.error.as_deref(), Some("Invalid"));
+    }
+
+    // Codex C5 round 1 LOW — additional coverage:
+
+    fn input_doc() -> &'static str {
+        // A SetValue action via `bind:value` on a text-input rectangle.
+        r##"{
+          "formatVersion":"1.0","version":"1.0.0","id":"x",
+          "app":{"name":"x","version":"1","id":"x"},
+          "state":{"email":{"type":"string","default":""}},
+          "children":[
+            { "type":"frame","id":"root","width":480,"height":320,"x":0,"y":0,
+              "children":[
+                { "type":"rectangle","id":"email-input","x":50,"y":50,"width":300,"height":40,
+                  "bindings":{"bind:value":"$state.email"},
+                  "semantics":{"role":"text"}
+                }
+              ]
+            }
+          ]
+        }"##
+    }
+
+    #[test]
+    fn rewrite_type_succeeds_on_set_value_action() {
+        // Pin codex's "test gap": end-to-end Verb::Type rewrite
+        // against a SetValue action — the action_surface emits a
+        // `set_*` action whose source_kind is SetValue, the guard
+        // accepts it under ProdEvent::Set, and the rewrite returns
+        // the source_node_id.
+        let rt = rt_with(input_doc());
+        let id = first_action_id(&rt);
+        let v = Verb::Type {
+            selector: Selector {
+                id: Some(id),
+                ..Default::default()
+            },
+            text: "user@example.com".into(),
+            clear: Some(true),
+        };
+        let rewritten = rewrite_op_verb_for_prod(&v, &rt).unwrap().unwrap();
+        match rewritten {
+            Verb::Type {
+                selector,
+                text,
+                clear,
+            } => {
+                assert_eq!(selector.id.as_deref(), Some("email-input"));
+                assert_eq!(text, "user@example.com");
+                assert_eq!(clear, Some(true));
+            }
+            other => panic!("expected Type, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn aihidden_action_returns_not_found_through_guard() {
+        // An `aiHidden: true` ancestor must hide its children's
+        // actions from the guard's projection (mirrors C2 logic).
+        let doc = r##"{
+          "formatVersion":"1.0","version":"1.0.0","id":"x",
+          "app":{"name":"x","version":"1","id":"x"},
+          "state":{"count":{"type":"int","default":0}},
+          "children":[
+            { "type":"frame","id":"root","width":480,"height":320,"x":0,"y":0,
+              "semantics":{"aiHidden":true},
+              "children":[
+                { "type":"rectangle","id":"hidden-btn","x":0,"y":0,"width":100,"height":40,
+                  "events":{"onTap":[{"set":{"$app.count":"$app.count + 1"}}]}
+                }
+              ]
+            }
+          ]
+        }"##;
+        let rt = rt_with(doc);
+        let doc_ref = rt.document.as_ref().unwrap();
+        // Find the action by walking derive_actions output directly
+        // (not list_actions, which would already have filtered it).
+        let acts = derive_actions(&doc_ref.schema, &BUILD_SALT);
+        let hidden_action = acts
+            .iter()
+            .find(|a| a.source_node_id == "hidden-btn")
+            .expect("hidden-btn action exists pre-projection");
+        let id = hidden_action.full_name();
+        let sel = Selector {
+            id: Some(id),
+            ..Default::default()
+        };
+        let err = validate_prod_op_target("tap", ProdEvent::Tap, &sel, &rt).unwrap_err();
+        assert_eq!(
+            err.error.as_deref(),
+            Some("NotFound"),
+            "aiHidden ancestor must hide the action: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn rewrite_scroll_verb_succeeds_on_scroll_action() {
+        let doc = r##"{
+          "formatVersion":"1.0","version":"1.0.0","id":"x",
+          "app":{"name":"x","version":"1","id":"x"},
+          "state":{"page":{"type":"int","default":0}},
+          "children":[
+            { "type":"frame","id":"root","width":480,"height":600,"x":0,"y":0,
+              "children":[
+                { "type":"frame","id":"feed","x":0,"y":0,"width":480,"height":600,
+                  "events":{"onScroll":[{"set":{"$app.page":"$app.page + 1"}}]}
+                }
+              ]
+            }
+          ]
+        }"##;
+        let rt = rt_with(doc);
+        let id = first_action_id(&rt);
+        let v = Verb::Scroll {
+            selector: Selector {
+                id: Some(id),
+                ..Default::default()
+            },
+            direction: crate::protocol::ScrollDir::Down,
+            distance: Some(120.0),
+        };
+        let rewritten = rewrite_op_verb_for_prod(&v, &rt).unwrap().unwrap();
+        match rewritten {
+            Verb::Scroll {
+                selector,
+                direction,
+                distance,
+            } => {
+                assert_eq!(selector.id.as_deref(), Some("feed"));
+                assert!(matches!(direction, crate::protocol::ScrollDir::Down));
+                assert_eq!(distance, Some(120.0));
+            }
+            other => panic!("expected Scroll, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rewrite_swipe_verb_succeeds_on_swipe_action() {
+        // Swipe actions derive from `onPanStart` + `onPanEnd`
+        // (spec §3.2): both required, action_surface emits four
+        // directional swipe_*_<slug> actions sharing the onPanEnd
+        // handler. Pick the swipe_left_* one for this test.
+        let doc = r##"{
+          "formatVersion":"1.0","version":"1.0.0","id":"x",
+          "app":{"name":"x","version":"1","id":"x"},
+          "state":{"step":{"type":"int","default":0}},
+          "children":[
+            { "type":"frame","id":"root","width":480,"height":320,"x":0,"y":0,
+              "children":[
+                { "type":"rectangle","id":"deck","x":0,"y":0,"width":300,"height":200,
+                  "events":{
+                    "onPanStart":[{"set":{"$app.step":"$app.step"}}],
+                    "onPanEnd":[{"set":{"$app.step":"$app.step + 1"}}]
+                  }
+                }
+              ]
+            }
+          ]
+        }"##;
+        let rt = rt_with(doc);
+        // Pick a SwipeLeft action specifically (first_action_id
+        // could return any of the four directions).
+        let doc_ref = rt.document.as_ref().unwrap();
+        let acts = derive_actions(&doc_ref.schema, &BUILD_SALT);
+        let id = acts
+            .iter()
+            .find(|a| matches!(a.source_kind, SourceKind::SwipeLeft))
+            .map(|a| a.full_name())
+            .expect("at least one SwipeLeft action");
+        let v = Verb::Swipe {
+            selector: Selector {
+                id: Some(id),
+                ..Default::default()
+            },
+            direction: crate::protocol::ScrollDir::Left,
+            distance: None,
+        };
+        let rewritten = rewrite_op_verb_for_prod(&v, &rt).unwrap().unwrap();
+        match rewritten {
+            Verb::Swipe {
+                selector,
+                direction,
+                ..
+            } => {
+                assert_eq!(selector.id.as_deref(), Some("deck"));
+                assert!(matches!(direction, crate::protocol::ScrollDir::Left));
+            }
+            other => panic!("expected Swipe, got {:?}", other),
+        }
     }
 }
