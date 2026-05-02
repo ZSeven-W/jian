@@ -137,9 +137,16 @@ impl TokenValidator for FileTokenValidator {
             Err(_) => return Err("token unavailable"),
         };
         // Strip a trailing newline (the CLI's token writer appends
-        // one so an operator can `cat` the file safely). Both
-        // sides are compared in constant time.
+        // one so an operator can `cat` the file safely).
         let expected = expected.trim_end_matches(['\n', '\r']);
+        // **Refuse empty tokens.** An operator who truncates the
+        // file (`: > <token-file>`) expecting "revoke" must not
+        // accidentally grant access to any client sending an empty
+        // handshake. Same outcome as a missing file: `token
+        // unavailable`. (Codex post-audit MEDIUM #11.)
+        if expected.is_empty() {
+            return Err("token unavailable");
+        }
         if constant_time_eq(token.as_bytes(), expected.as_bytes()) {
             Ok(self.grant)
         } else {
@@ -355,6 +362,31 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let err = v.validate("live").unwrap_err();
         assert_eq!(err, "token unavailable");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Codex post-audit MEDIUM: an empty token file (operator
+    /// `: > <file>` thinking that's revoke) must NOT silently grant
+    /// access to any agent sending an empty token. Same outcome as
+    /// a missing file: `token unavailable`.
+    #[test]
+    fn file_validator_refuses_empty_file_as_revocation() {
+        let dir = std::env::temp_dir().join(format!(
+            "jian-asp-file-validator-empty-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token");
+        std::fs::write(&path, "").unwrap();
+        let v = FileTokenValidator::new(path.clone(), Permission::Act);
+        assert_eq!(v.validate("").unwrap_err(), "token unavailable");
+        assert_eq!(v.validate("anything").unwrap_err(), "token unavailable");
+
+        // Just a newline (operator typed `echo > file`) is also
+        // empty after trim — same refusal.
+        std::fs::write(&path, "\n").unwrap();
+        assert_eq!(v.validate("").unwrap_err(), "token unavailable");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

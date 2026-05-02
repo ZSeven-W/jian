@@ -61,11 +61,16 @@ re-handshake.
 alongside the listener. Two operator-side controls are wired
 through the [`session::FileTokenValidator`]:
 
-- **Revoke**: `rm <token-file>`. The next handshake fails with
+- **Revoke**: `rm <token-file>` *or* truncate it to empty
+  (`: > <token-file>`). The next handshake fails with
   `token unavailable`; existing sessions stay live until the
   agent disconnects on its own.
 - **Rotate**: `echo <new-token> > <token-file>`. New connections
   must use the new secret; old in-flight sessions are unaffected.
+  Rotation does **not** change the permission tier — that's
+  fixed at `jian player --asp-permission` time and stays the
+  same for the listener's whole lifetime. To change tiers,
+  restart the player.
 
 The `--asp-permission <observe|act|full>` flag picks the tier the
 listener grants on a successful handshake. Default is `act`
