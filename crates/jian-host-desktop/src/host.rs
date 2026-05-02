@@ -117,6 +117,29 @@ pub struct DesktopHost {
     /// hot-reload, matching designer expectations for `jian dev`).
     #[cfg(feature = "mcp")]
     pub mcp_audit: Option<Rc<ActionAuditLog>>,
+    /// Plan 18 ASP prod mode (C4 follow-up): main-thread end of the
+    /// listener↔runtime bridge. Drained once per `about_to_wait`;
+    /// each pending verb is dispatched via
+    /// `jian_asp::dispatch_with_mode(_, _, _, Mode::Prod)` against
+    /// the live runtime + a co-located prod `Session` and the
+    /// outcome is written back through the request's reply channel.
+    /// `None` when the host wasn't wired with `with_asp` (the
+    /// common case: only `jian player --asp <path>` populates it).
+    #[cfg(feature = "prod-asp")]
+    pub asp_drain: Option<jian_asp::bridge::AspDrain>,
+    /// Co-located ASP session — owns the audit ring + permission
+    /// tier for the agent connection the drain serves. Same
+    /// lifetime as `asp_drain`. Held here (not on `asp_drain`)
+    /// because `AspDrain` deliberately has no `Session` borrow,
+    /// so the host must keep one alongside.
+    #[cfg(feature = "prod-asp")]
+    pub asp_session: Option<jian_asp::session::Session>,
+    /// Wall-clock zero point for the ASP audit ring (monotonic).
+    /// Set when the listener thread is wired and never bumped on
+    /// reload — the audit timeline stays continuous so an agent
+    /// reading `audit_tail` sees a single stream.
+    #[cfg(feature = "prod-asp")]
+    pub asp_session_start: Option<Instant>,
     /// Cumulative startup report from the data-path bootstrap
     /// (Plan 19 capstone B4). Defaults to `StartupReport::default()`
     /// when the host is constructed without a bootstrap (existing
@@ -226,6 +249,12 @@ impl DesktopHost {
             mcp_salt: [0u8; 16],
             #[cfg(feature = "mcp")]
             mcp_audit: None,
+            #[cfg(feature = "prod-asp")]
+            asp_drain: None,
+            #[cfg(feature = "prod-asp")]
+            asp_session: None,
+            #[cfg(feature = "prod-asp")]
+            asp_session_start: None,
             startup_report: StartupReport::default(),
             pending_hidden_bboxes: None,
             launch_epoch: Instant::now(),
@@ -249,6 +278,12 @@ impl DesktopHost {
             mcp_salt: [0u8; 16],
             #[cfg(feature = "mcp")]
             mcp_audit: None,
+            #[cfg(feature = "prod-asp")]
+            asp_drain: None,
+            #[cfg(feature = "prod-asp")]
+            asp_session: None,
+            #[cfg(feature = "prod-asp")]
+            asp_session_start: None,
             startup_report: StartupReport::default(),
             pending_hidden_bboxes: None,
             launch_epoch: Instant::now(),
@@ -448,6 +483,36 @@ impl DesktopHost {
         self.mcp_surface = surface;
         self.mcp_salt = salt;
         self.mcp_audit = Some(audit);
+        self
+    }
+
+    /// Plan 18 ASP prod mode (C4 follow-up): wire a listener-side
+    /// `AspDrain` so the event-loop owner drains pending agent
+    /// dispatches once per `about_to_wait` and replies via the
+    /// per-request oneshot reply channel.
+    ///
+    /// `permission` is the permission tier the agent earned at
+    /// handshake (the listener does the auth gate locally). Stored
+    /// on a freshly-installed `Session` so the audit ring records
+    /// every dispatch; the agent reads its own audit history with
+    /// the `audit` verb (dev only — prod refuses `audit` per spec
+    /// §3, but the host-side ring still grows for operator
+    /// post-mortem).
+    #[cfg(feature = "prod-asp")]
+    pub fn with_asp(
+        mut self,
+        drain: jian_asp::bridge::AspDrain,
+        permission: jian_asp::session::Permission,
+        client: impl Into<String>,
+        version: impl Into<String>,
+    ) -> Self {
+        self.asp_drain = Some(drain);
+        self.asp_session = Some(jian_asp::session::Session::new(
+            permission,
+            client.into(),
+            version.into(),
+        ));
+        self.asp_session_start = Some(Instant::now());
         self
     }
 

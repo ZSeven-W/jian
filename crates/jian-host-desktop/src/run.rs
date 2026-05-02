@@ -101,7 +101,8 @@ impl DesktopHost {
         // Dev / MCP modes poll ~5×/sec so the run loop stays warm for
         // file events + bridge drains; default keeps the original
         // `Wait` so idle CPU is zero.
-        let needs_polling = self.reload_rx.is_some() || self.has_mcp_drain();
+        let needs_polling =
+            self.reload_rx.is_some() || self.has_mcp_drain() || self.has_asp_drain();
         let initial_flow = if needs_polling {
             ControlFlow::WaitUntil(Instant::now() + RELOAD_POLL_INTERVAL)
         } else {
@@ -119,6 +120,16 @@ impl DesktopHost {
 
     #[cfg(not(feature = "mcp"))]
     fn has_mcp_drain(&self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "prod-asp")]
+    fn has_asp_drain(&self) -> bool {
+        self.asp_drain.is_some()
+    }
+
+    #[cfg(not(feature = "prod-asp"))]
+    fn has_asp_drain(&self) -> bool {
         false
     }
 }
@@ -783,6 +794,17 @@ impl ApplicationHandler for RunApp {
             needs_redraw = true;
         }
 
+        // ASP prod-mode bridge drain (Plan 18 C4 follow-up). Same
+        // shape as the MCP drain: pop pending verbs, dispatch each
+        // via `dispatch_with_mode(_, _, _, Mode::Prod)`, reply via
+        // the per-request oneshot. Op verbs (tap/type/scroll/swipe)
+        // mutate the runtime, so we request a redraw whenever any
+        // verb actually ran.
+        #[cfg(feature = "prod-asp")]
+        if self.drain_asp_requests() {
+            needs_redraw = true;
+        }
+
         // Native menu drain (cfg-gated by `menus`). `muda::MenuEvent`
         // ships through a global mpsc receiver so any menu wired via
         // `init_menu_for_window` lands here regardless of which
@@ -794,9 +816,10 @@ impl ApplicationHandler for RunApp {
             needs_redraw = true;
         }
 
-        // Re-arm the polling timer when either reload or mcp wired the
-        // host into poll-mode; default Wait stays untouched.
-        let needs_polling = self.host.reload_rx.is_some() || self.has_mcp_drain();
+        // Re-arm the polling timer when reload, mcp, or asp wired
+        // the host into poll-mode; default Wait stays untouched.
+        let needs_polling =
+            self.host.reload_rx.is_some() || self.has_mcp_drain() || self.has_asp_drain();
         if needs_polling {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + RELOAD_POLL_INTERVAL,
@@ -889,6 +912,89 @@ impl RunApp {
         {
             false
         }
+    }
+
+    fn has_asp_drain(&self) -> bool {
+        #[cfg(feature = "prod-asp")]
+        {
+            self.host.asp_drain.is_some()
+        }
+        #[cfg(not(feature = "prod-asp"))]
+        {
+            false
+        }
+    }
+
+    /// Plan 18 ASP prod mode (C4 follow-up): drain pending agent
+    /// dispatches sent over the listener-side bridge. Each request
+    /// carries a `Verb` and a oneshot reply channel; we dispatch
+    /// against the live runtime via `dispatch_with_mode(Mode::Prod)`,
+    /// fold the outcome into the host's per-session ring, and reply
+    /// through the request's channel. Returns `true` if any verb
+    /// actually ran (mutated state) so the caller requests a redraw.
+    ///
+    /// Send failures (the listener's reply receiver was dropped —
+    /// peer disconnected mid-dispatch) are non-fatal; we just
+    /// continue draining. The next listener accept will create a
+    /// new bridge end if needed.
+    #[cfg(feature = "prod-asp")]
+    fn drain_asp_requests(&mut self) -> bool {
+        use jian_asp::bridge::DispatchResponse;
+        use jian_asp::verb_impls::{dispatch_with_mode, Mode};
+
+        let drain = match self.host.asp_drain.as_ref() {
+            Some(d) => d,
+            None => return false,
+        };
+        // Take ownership of the session-state borrow once; using
+        // `as_mut()` per iteration would re-borrow the host
+        // mutably and clash with `drain`'s shared borrow above.
+        // We `take` and reinstall to side-step the conflict.
+        let mut session = match self.host.asp_session.take() {
+            Some(s) => s,
+            None => return false,
+        };
+        let session_start = self
+            .host
+            .asp_session_start
+            .unwrap_or(self.host.launch_epoch);
+
+        let mut state_changed = false;
+        // `try_recv` is non-blocking; loop until empty.
+        while let Some(req) = drain.try_recv() {
+            let (payload, control) = dispatch_with_mode(
+                &req.verb,
+                &mut self.host.runtime,
+                &mut session,
+                Mode::Prod,
+            );
+            // op verbs (tap/type/scroll/swipe) and accepted state
+            // mutations bump the dirty bit. Heuristic: any `ok`
+            // response on a non-discovery verb is treated as
+            // potentially state-changing.
+            let writes_state = payload.ok
+                && !matches!(
+                    payload.verb,
+                    "list_actions" | "handshake" | "exit" | "audit"
+                );
+            if writes_state {
+                state_changed = true;
+            }
+            // Audit + reply.
+            session.record_outcome(
+                session_start.elapsed().as_millis() as u64,
+                &payload,
+            );
+            let _ = req.reply.send(DispatchResponse { payload, control });
+            // We deliberately don't act on `control == Exit` here:
+            // the listener side is the one that tears the session
+            // down (close transport + thread exit), and the host
+            // simply stops seeing dispatches once the listener
+            // returns. Forcing event-loop exit on agent `exit` would
+            // close the user's window, which is the wrong contract.
+        }
+        self.host.asp_session = Some(session);
+        state_changed
     }
 
     /// Drain `muda::MenuEvent::receiver()` once per `about_to_wait`.
