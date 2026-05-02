@@ -63,6 +63,8 @@ pub mod list_actions;
 #[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod node_helpers;
 #[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod prod_op_guard;
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod scroll_verb;
 #[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod swipe_verb;
@@ -1201,6 +1203,16 @@ pub fn dispatch_with_mode(
             &format!("verb not available in production mode (allowed: {allowed})"),
         );
         return (payload, DispatchControl::Continue);
+    }
+    if mode == Mode::Prod {
+        // Plan 18 ASP prod mode / C5: narrow op-verb selectors to
+        // `list_actions` ids and rewrite to source-node-id selectors
+        // before dispatch. Pass-through for non-op verbs.
+        match prod_op_guard::rewrite_op_verb_for_prod(verb, runtime) {
+            Ok(Some(rewritten)) => return dispatch(&rewritten, runtime, session),
+            Ok(None) => { /* not an op verb — fall through to plain dispatch */ }
+            Err(payload) => return (payload, DispatchControl::Continue),
+        }
     }
     dispatch(verb, runtime, session)
 }
