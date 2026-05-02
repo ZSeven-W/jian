@@ -94,8 +94,20 @@ impl UnixSocketListener {
                             path.display()
                         )));
                     }
-                    Err(_) => {
-                        // Stale — unlink and continue.
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::ConnectionRefused
+                                | std::io::ErrorKind::NotFound
+                        ) =>
+                    {
+                        // The two error kinds that unambiguously
+                        // mean "socket file exists but no listener
+                        // is bound" — safe to unlink. Any other
+                        // error (permission denied, EINTR, custom
+                        // FS errno) is *not* proof of staleness, so
+                        // we surface it rather than risk unlinking
+                        // a path under a still-live peer.
                         if let Err(e) = std::fs::remove_file(&path) {
                             return Err(TransportError::Io(format!(
                                 "stale socket at {} could not be removed: {}",
@@ -103,6 +115,14 @@ impl UnixSocketListener {
                                 e
                             )));
                         }
+                    }
+                    Err(e) => {
+                        return Err(TransportError::Io(format!(
+                            "could not probe existing socket at {}: {} \
+                             — refusing to unlink without proof it's stale",
+                            path.display(),
+                            e
+                        )));
                     }
                 }
             }
