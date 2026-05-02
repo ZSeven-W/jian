@@ -92,6 +92,13 @@ pub mod session;
 #[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 pub mod server;
 
+// Plan 18 ASP prod mode (C4 follow-up) — listener ↔ runtime
+// bridge. Lets a multi-threaded transport listener (Unix socket /
+// Named Pipe) ferry verb dispatches to the single-threaded runtime
+// the host's event loop owns. See `bridge.rs` for the design notes.
+#[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
+pub mod bridge;
+
 #[cfg(test)]
 mod tests {
     /// Phase 0 sanity: the crate links and is *empty* under default

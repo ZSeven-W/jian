@@ -26,6 +26,7 @@
 
 use std::time::Instant;
 
+use crate::bridge::AspBridge;
 use crate::protocol::{OutcomePayload, Request, Response, Verb};
 use crate::session::{Session, TokenValidator};
 use crate::transport::{Transport, TransportError};
@@ -297,6 +298,118 @@ pub fn run_prod_session(
     }
 }
 
+/// Run one prod ASP session whose dispatch is ferried over an
+/// [`AspBridge`] (Plan 18 ASP prod mode / C4 follow-up).
+///
+/// Identical lifecycle to [`run_prod_session`] except every verb
+/// (post-handshake) is sent to the runtime thread via the bridge
+/// instead of being dispatched against a borrowed `&mut Runtime`
+/// here. Use this entry point when the runtime lives on a different
+/// thread than the transport listener — e.g. `jian player --asp`,
+/// where winit owns the runtime.
+///
+/// Pre-conditions:
+/// - The host's runtime side must call [`crate::bridge::AspDrain::try_recv`]
+///   in its event loop, dispatch each request via
+///   [`dispatch_with_mode`] with [`Mode::Prod`], and reply through
+///   the request's `reply` channel. The
+///   `jian_host_desktop::run::about_to_wait` hook does this when
+///   `with_asp` is wired.
+/// - **No document/capability check is performed here.** The caller
+///   is expected to gate the listener by verifying both BEFORE
+///   binding (the `jian player --asp` command refuses to start the
+///   listener thread when the loaded document lacks
+///   `app.capabilities`). Splitting the check out of this function
+///   keeps the bridge variant runtime-borrow-free.
+pub fn run_prod_session_via_bridge(
+    transport: &mut dyn Transport,
+    validator: &dyn TokenValidator,
+    bridge: &AspBridge,
+    start: Instant,
+) -> Result<(), ServerError> {
+    // 1. Handshake — same parser as run_prod_session. Token
+    //    validation runs locally so the bridge round-trip is
+    //    skipped for the auth gate.
+    let line = transport.read_line()?;
+    let req: Request = serde_json::from_str(&line)
+        .map_err(|e| ServerError::BadHandshake(format!("first line is not a Request: {}", e)))?;
+    let (token, client, version) = match req.verb {
+        Verb::Handshake {
+            token,
+            client,
+            version,
+        } => (token, client, version),
+        other => {
+            return Err(ServerError::BadHandshake(format!(
+                "first verb must be `handshake`, got `{}`",
+                verb_name(&other)
+            )))
+        }
+    };
+    let permission = match validator.validate(&token) {
+        Ok(p) => p,
+        Err(reason) => {
+            let payload = OutcomePayload::denied(
+                "handshake",
+                reason,
+                Some("re-handshake with a token granting the required tier"),
+            );
+            let _ = write_response(transport, req.id, &payload);
+            return Err(ServerError::AuthFailed(reason.to_owned()));
+        }
+    };
+    let mut session = Session::new(permission, client, version);
+    let ack = OutcomePayload::ok(
+        "handshake",
+        None,
+        format!("handshake ok (prod-bridge), permission={:?}", permission),
+    );
+    write_response(transport, req.id, &ack)?;
+    session.record_outcome(start.elapsed().as_millis() as u64, &ack);
+
+    // 2. Steady state — read line → parse → bridge → write reply.
+    loop {
+        let line = match transport.read_line() {
+            Ok(s) => s,
+            Err(TransportError::Eof) => return Ok(()),
+            Err(e) => return Err(ServerError::Transport(e)),
+        };
+        if line.is_empty() {
+            continue;
+        }
+        let req: Request = match serde_json::from_str(&line) {
+            Ok(r) => r,
+            Err(e) => {
+                let payload =
+                    OutcomePayload::invalid("request", &format!("could not parse request: {}", e));
+                write_response(transport, 0, &payload)?;
+                session.record_outcome(start.elapsed().as_millis() as u64, &payload);
+                continue;
+            }
+        };
+        // Send to the runtime thread; block on the reply. `None`
+        // means the host dropped its drain (event loop quit) — we
+        // tear the session down so the agent learns the upstream
+        // is gone.
+        let resp = match bridge.dispatch_blocking(req.verb) {
+            Some(r) => r,
+            None => {
+                let payload = OutcomePayload::error(
+                    "session",
+                    "runtime bridge closed (host event loop exited)",
+                );
+                let _ = write_response(transport, req.id, &payload);
+                return Ok(());
+            }
+        };
+        write_response(transport, req.id, &resp.payload)?;
+        session.record_outcome(start.elapsed().as_millis() as u64, &resp.payload);
+        if resp.control == DispatchControl::Exit {
+            return Ok(());
+        }
+    }
+}
+
 fn write_response(
     transport: &mut dyn Transport,
     id: u64,
@@ -555,5 +668,181 @@ not-json
         assert!(!r2.ok);
         let payload: serde_json::Value = serde_json::from_str(&r2.body).unwrap();
         assert_eq!(payload["error"], "UnsupportedVerbInProd");
+    }
+
+    // C4 follow-up — `run_prod_session_via_bridge` round-trip.
+    //
+    // The bridge tests run the session on a *separate thread* so we
+    // can drain dispatch requests from the "main thread" (the test
+    // body). `StdioTransport`'s `Box<dyn BufRead>` / `Box<dyn Write>`
+    // are not `Send`, so we use a tiny mpsc-backed `ChannelTransport`
+    // instead — naturally `Send` because every captured field is
+    // `Send`.
+
+    use std::sync::mpsc;
+
+    /// Test-only Send transport. `read_line` pulls strings from a
+    /// `Receiver<String>`; `write_line` pushes into a
+    /// `Sender<String>`. The closed-channel side surfaces as
+    /// `TransportError::Eof` so the session loop exits cleanly.
+    struct ChannelTransport {
+        reader: mpsc::Receiver<String>,
+        writer: mpsc::Sender<String>,
+    }
+
+    impl Transport for ChannelTransport {
+        fn read_line(&mut self) -> Result<String, TransportError> {
+            self.reader
+                .recv()
+                .map_err(|_| TransportError::Eof)
+        }
+        fn write_line(&mut self, line: &str) -> Result<(), TransportError> {
+            self.writer
+                .send(line.to_owned())
+                .map_err(|e| TransportError::Io(format!("channel send: {}", e)))
+        }
+    }
+
+    /// Build a `ChannelTransport` plus the test-side handles. The
+    /// test feeds request lines through `request_tx` and receives
+    /// the session's responses on `response_rx`. Closing
+    /// `request_tx` (drop) signals EOF and ends the session loop.
+    fn channel_rig() -> (ChannelTransport, mpsc::Sender<String>, mpsc::Receiver<String>) {
+        let (req_tx, req_rx) = mpsc::channel::<String>();
+        let (resp_tx, resp_rx) = mpsc::channel::<String>();
+        let transport = ChannelTransport {
+            reader: req_rx,
+            writer: resp_tx,
+        };
+        (transport, req_tx, resp_rx)
+    }
+
+    #[test]
+    fn run_prod_session_via_bridge_round_trips_handshake_and_exit() {
+        // The transport carries handshake + exit; the bridge thread
+        // drives the session, the "main thread" (this test) drains
+        // the bridge once to dispatch `exit`. Pins the contract that
+        // the bridge variant lifecycles cleanly without ever touching
+        // a `Runtime` value.
+        use crate::bridge::{channel, DispatchResponse};
+        use std::thread;
+
+        let (mut transport, req_tx, resp_rx) = channel_rig();
+        req_tx
+            .send(r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}"#.into())
+            .unwrap();
+        req_tx
+            .send(r#"{"id":2,"verb":"exit"}"#.into())
+            .unwrap();
+        let (bridge, drain) = channel();
+        let validator = StaticTokenValidator::new("s", Permission::Act);
+
+        let session_thread = thread::spawn(move || {
+            crate::server::run_prod_session_via_bridge(
+                &mut transport,
+                &validator,
+                &bridge,
+                Instant::now(),
+            )
+            .unwrap();
+        });
+
+        // Drain one request — the `exit` verb. Reply with a stock
+        // exit outcome + Exit control. The handshake never reaches
+        // the bridge because it's dispatched locally for the auth
+        // check.
+        let req = loop {
+            if let Some(r) = drain.try_recv() {
+                break r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        assert!(matches!(req.verb, Verb::Exit));
+        req.reply
+            .send(DispatchResponse {
+                payload: OutcomePayload::ok("exit", None, "session ended"),
+                control: DispatchControl::Exit,
+            })
+            .unwrap();
+
+        session_thread.join().expect("session thread");
+
+        // Two written lines: handshake ack + exit response.
+        let line1 = resp_rx.recv().expect("first response");
+        let line2 = resp_rx.recv().expect("second response");
+        let r1: Response = serde_json::from_str(&line1).unwrap();
+        assert_eq!(r1.id, 1);
+        assert!(r1.ok);
+        let r2: Response = serde_json::from_str(&line2).unwrap();
+        assert_eq!(r2.id, 2);
+        assert!(r2.ok);
+        // No further responses expected — drop is enough to close.
+        drop(req_tx);
+    }
+
+    #[test]
+    fn run_prod_session_via_bridge_tears_down_when_bridge_closes() {
+        // If the host's event loop drops the drain mid-session, the
+        // listener-side dispatch_blocking returns None — the session
+        // surfaces that as a transport-level "runtime gone" error
+        // and exits cleanly so the agent's transport sees the
+        // session end.
+        use crate::bridge::channel;
+        use std::thread;
+
+        let (mut transport, req_tx, resp_rx) = channel_rig();
+        req_tx
+            .send(r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}"#.into())
+            .unwrap();
+        req_tx
+            .send(r#"{"id":2,"verb":"list_actions"}"#.into())
+            .unwrap();
+        let (bridge, drain) = channel();
+        let validator = StaticTokenValidator::new("s", Permission::Observe);
+
+        let session_thread = thread::spawn(move || {
+            crate::server::run_prod_session_via_bridge(
+                &mut transport,
+                &validator,
+                &bridge,
+                Instant::now(),
+            )
+        });
+
+        // Wait until the session has produced the handshake ack +
+        // started waiting for the dispatch reply, then drop the
+        // drain to simulate the host event loop quitting.
+        let req = loop {
+            if let Some(r) = drain.try_recv() {
+                break r;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        // Drop the drain *and* the request handle (which holds the
+        // reply sender) so dispatch_blocking sees a closed reply
+        // channel.
+        drop(drain);
+        drop(req);
+
+        let result = session_thread.join().unwrap();
+        // Clean termination — the session interpreted the
+        // closed-bridge as a teardown, not an error.
+        assert!(result.is_ok(), "session should exit Ok on closed bridge");
+        // It also wrote a session-level error response back to the
+        // agent for the in-flight verb so the client can resync.
+        let _ack = resp_rx.recv().expect("handshake ack");
+        let last_line = resp_rx.recv().expect("closed-bridge response");
+        let last: Response = serde_json::from_str(&last_line).unwrap();
+        assert!(!last.ok);
+        let body: serde_json::Value = serde_json::from_str(&last.body).unwrap();
+        assert!(
+            body["narrative"]
+                .as_str()
+                .map(|s| s.contains("runtime bridge closed"))
+                .unwrap_or(false),
+            "narrative should mention bridge close: {}",
+            last.body
+        );
+        drop(req_tx);
     }
 }
