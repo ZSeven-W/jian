@@ -281,7 +281,9 @@ cargo run --release -p jian -- perf startup app.op --runs 20 --format json > cur
 cargo run --release -p jian -- perf compare baseline.json current.json \
     --threshold 0.15 --noise-floor-ms 1.0 --label macos-aarch64
 
-# AOT pre-bake (writes aot/initial_layout.bin into the .op.pack)
+# AOT pre-bake (writes aot/initial_layout.bin + aot/default_state.bin
+# into the .op.pack — runtime preloads both to skip ComputeFirstLayout
+# and re-seed StateGraph defaults from the canonical snapshot)
 cargo run --release -p jian -- pack --aot --aot-viewport 800x600 app.op out.op.pack
 ```
 
@@ -304,8 +306,8 @@ against `main`'s most recent green baseline (15% regression threshold,
 - ✅ Plan 22 `jian-action-surface` Phase 1 + MCP stdio server (`rmcp`) + `jian dev --mcp`
 - ✅ Plan 18 Agent Shell Protocol — full dev verb set (Tap / Type / Scroll / Swipe / Find / Inspect / Snapshot / Audit + state writes via `dev-asp`) AND prod surface (`prod-asp`: handshake / list_actions / tap / type / scroll / swipe / exit) wired into `jian player --asp <path>` over a Unix socket / Windows Named Pipe with explicit user-SID DACL, file-based token revoke + rotate, `--asp-permission <observe|act|full>`, and a 3.65× smaller wire shape than MCP on a 50-action screen. Codex-reviewed across C0–C6 + post-audit fixes; `asp-features × {linux,macos,windows} × {dev-asp,prod-asp}` matrix runs on every push.
 - ✅ Plan 19 cold-start capstone — typed three-stage `StartupDriver` (`DataPath` / `Visual` / `Background`), `HostAgnosticBootstrap` for DataPath, visual-stage runner for the first `RedrawRequested` after `resumed()`, `jian player` two-stage launch with unified-launch-epoch report timeline
-- ✅ Plan 19 D1 `.op.pack` AOT initial-layout writer + reader (`OPL1` little-endian SoA format, `jian pack --aot`); D2 font subsetter wiring (`FontPlan::scan_subtrees` populates `BootstrapHandles::take_core_font_plan`); D3 per-platform startup budget tests; D4 `jian perf compare` CI diff bot + 15% threshold gate + single rolling PR comment
-- ✅ Plan 8 §T7 native menu bar · §T8 deep-link trait-routing seam (`app_delegate.rs` macOS / `win_deeplink.rs` Windows) · §T9 updater trait + `selfupdate` feature · §T10 packaging configs (`cargo bundle` macOS .app · `cargo wix` Windows MSI · `cargo deb` + AppImage Linux · `.icns` generator · Sparkle appcast template · AppImageUpdate metadata)
+- ✅ Plan 19 D1 `.op.pack` AOT initial-layout writer + reader (`OPL1` little-endian SoA format, `jian pack --aot`) **plus runtime preload** (`LayoutEngine::preload_initial` + `HostAgnosticBootstrap::install_data_path_with_aot` short-circuit `ComputeFirstLayout` when coverage is total + viewport bit-matches); AOT default-state writer + reader (`OPS1` framed canonicalised JSON for app/page/self/route/storage/vars scopes; `StateGraph::dump_default_state`/`restore_default_state` reuse Signal slot identity so binding subscribers survive); D2 font subsetter wiring (`FontPlan::scan_subtrees` populates `BootstrapHandles::take_core_font_plan`); D3 per-platform startup budget tests; D4 `jian perf compare` CI diff bot + 15% threshold gate + single rolling PR comment
+- ✅ Plan 8 §T7 native menu bar · §T8 deep-link trait-routing seam (`app_delegate.rs` macOS / `win_deeplink.rs` Windows) **plus macOS `kAEGetURL` Apple-Event receiver** (`apple_event_receiver.rs` — JianAppleEventReceiver `NSObject` subclass registered with `NSAppleEventManager`; main-thread asserted via `pthread_main_np`; `extern "C"` IMP wrapped in `catch_unwind` + `mem::forget(payload)` + panic-safe `writeln!(io::stderr(), …)` so handler panics never cross the FFI frame); cross-platform `deeplink::install_deeplink_handler` shim · §T9 updater trait + `selfupdate` feature · §T10 packaging configs (`cargo bundle` macOS .app · `cargo wix` Windows MSI · `cargo deb` + AppImage Linux · `.icns` generator · Sparkle appcast template · AppImageUpdate metadata)
 - ✅ §3.3 CJK transliteration · §3.4 collision detection · §6.3 swipe throttle · §8.1 AuditLog
 - ✅ §3.1 `BUILD_SALT` build-time injection (`crates/jian-core/build.rs` — env override → git+semver → semver fallback; mac `.git` worktree resolved; FNV-1a double-hash → 16 bytes)
 - ✅ Bubble-style event dispatch · binding-aware scene walker
@@ -314,9 +316,9 @@ against `main`'s most recent green baseline (15% regression threshold,
 
 **Up next (each warrants its own session):**
 
-- ⏳ Plan 19 follow-ups — runtime preload of `aot/initial_layout.bin` (skip `ComputeFirstLayout` via `LayoutEngine::preload_initial`); `aot/expressions.bin` precompiled bytecode; `aot/default_state.bin` serialised initial state
-- ⏳ Plan 8 §T8 platform receivers — macOS `NSApplicationDelegate` Apple-Event subclass; Windows `WM_COPYDATA` hidden-window `WindowProc`; single-instance forwarding so `jian://` URL-scheme registration can flip back on across all three platforms
-- ⏳ Plan 8 / 11 / 12 — GPU surface factories (Metal · D3D12 · OpenGL / WebGL · Vulkan)
+- ⏳ Plan 19 follow-ups — `aot/expressions.bin` precompiled bytecode (blocked on `jian_core::expression::Chunk: Serialize` refactor); `.op.pack` archive reader in the player path so a published pack actually drives `install_data_path_with_aot` end-to-end (today the runtime hooks are wired and tested but the player still loads raw `.op` only)
+- ⏳ Plan 8 §T8 — Windows `WM_COPYDATA` hidden-window `WindowProc` + named-mutex single-instance forwarding so `jian://` URL-scheme registration can flip back on across all three platforms (macOS receiver shipped above)
+- ⏳ Plan 8 / 11 / 12 — GPU surface factories (Metal · D3D12 · OpenGL / WebGL · Vulkan); each backend warrants its own session against real hardware (CAMetalLayer drawable lifecycle, IDXGI swapchain present cadence, GL context current, Vulkan surface/swapchain). Existing `surface/{metal,d3d,gl}.rs` skeletons return `Err("…not yet implemented…")` with full implementation outlines.
 - ⏳ Plan 11 — OpenPencil canvas swap (replace `pen-renderer` via `napi-rs`)
 - ⏳ Plan 13 — Electron → Tauri migration
 - ⏳ Plan 14 — `pen-mcp` Rust port (byte-level parity gate)
@@ -334,7 +336,7 @@ The full design lives next to the code:
 
 ## 📜 License
 
-MIT © Jian contributors
+MIT — see [LICENSE](LICENSE).
 
 <div align="center">
 <sub>built with 🦀, <code>winit</code>, <code>skia-safe</code>, <code>taffy</code>, and one stubborn <code>.op</code> file.</sub>

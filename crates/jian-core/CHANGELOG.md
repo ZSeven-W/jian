@@ -1,156 +1,142 @@
 # Changelog
 
-## [0.5.0] — Plan 6 — Capability Gate (full enforcement)
+All entries roll up into the workspace's `0.0.1` development release;
+sections within tag the originating Plan for traceability.
 
-### Fixed (post-Codex-review)
-
-- `LongPressRecognizer` claiming via `tick()` now resolves the arena so a
-  subsequent Up event cannot also let `TapRecognizer` claim on the same
-  pointer sequence (Plan 5 bug). `Arena::tick(now)` is the new
-  timer-aware variant that mirrors the event-driven `dispatch` path.
-- `open_url` now consults the capability gate and records to the audit
-  log. Undeclared `network` → `CapabilityDenied`. (Plan 6 bug — the
-  action previously only emitted a warning.)
-- `DoubleTap` is now detected at the `PointerRouter` level by pairing
-  consecutive `Tap` emissions per node (≤ 300 ms, ≤ 16 px). The in-arena
-  `DoubleTapRecognizer` couldn't see across arenas; this wiring makes
-  `onDoubleTap` handlers fire end-to-end.
+## [0.0.1] - Unreleased
 
 ### Added
 
-### Added
+**Plan 19 D1 cold-start runtime preload:**
 
-- Top-level `crate::capability` module (moved from `action::capability`;
-  old path still re-exports for backwards compat):
-  - `CapabilityGate` trait: `check(needed: Capability, action: &'static str) -> bool`.
-    Every IO action now passes its registered name so audit entries can
-    identify which call tripped the gate.
-  - `DeclaredCapabilityGate::new(caps, Some(audit))` writes an
-    `AuditEntry` for every check (Allowed or Denied); passing `None` is
-    silent and suitable for unit tests.
-  - `AuditLog` with a ring buffer (`max_size`) + `snapshot` /
-    `allowed_count` / `denied_count` accessors.
-  - `map::required_capabilities(action_name) -> &'static [Capability]`
-    — single source of truth for the Action→Capability table (spec
-    §A.8.2).
-  - `AutomationLevel { Observe, Act, Full }` with a `covers` lattice
-    (Full ⊇ Act ⊇ Observe) for future Tier-3 automation capabilities.
-  - `PermissionBroker` trait + `NullPermissionBroker` stub. Real OS-level
-    brokers ship with host crates in Plan 14+.
-- `Runtime::new_from_document(schema) -> Runtime` factory: reads
+- `LayoutEngine::preload_initial(snapshot, doc_tree)` — installs an
+  `aot/initial_layout.bin` snapshot into a `SecondaryMap<NodeKey, Rect>`
+  cache so the first paint can serve scene-coord rects without running
+  `compute_layout_with_measure`. `node_rect()` short-circuits on the
+  cache; the next `build()` clears it so a resize-driven relayout falls
+  back to taffy compute. Companion APIs: `has_preload()`,
+  `preload_len()`, `preload_covers(doc_tree)`, `drop_preload()`.
+- `Runtime::preload_initial_layout(snapshot)` delegates to the layout
+  engine; `Runtime::replace_document` now calls `drop_preload()` so a
+  hot-reload to a fresh doc never serves stale rects against new slot
+  keys.
+- `HostAgnosticBootstrap::install_data_path_with_aot(driver, source,
+  viewport, Some(snapshot))` — bootstrap variant that preloads the
+  snapshot from `SeedStateGraph` (only when `snap.viewport` bit-matches
+  the bootstrap viewport) and short-circuits `ComputeFirstLayout` only
+  when the preload covers every doc node. Partial coverage drops the
+  cache and runs a real compute so new nodes never go rect-less.
+- `StateGraph::dump_default_state()` / `restore_default_state(&snap)` —
+  capture / re-seed the six scopes for `aot/default_state.bin`. Restore
+  reuses existing Signal slots (via `app_set` / `page_set` / `self_set`
+  / `route_set` / `storage_set` / `vars_set`) so binding subscribers
+  survive the AOT seed.
+- New `route_set` / `storage_set` setters mirroring `app_set`'s
+  slot-reuse pattern; previously these scopes had no public setter.
+- Tests: 4 layout-level preload + 4 bootstrap-level (full-coverage skip,
+  partial-coverage fallback, viewport-mismatch fallback, resize clears)
+  + 3 state-graph dump/restore. 399 jian-core lib tests pass.
+- Codex-reviewed across 3 rounds; final pass clean.
+
+**Plan 19 cold-start capstone (B-series):**
+
+- Typed three-stage `StartupDriver` (`DataPath` pre-window · `Visual`
+  first-redraw · `Background` post-paint) with per-phase dependency
+  graph and `StartupReport`/`StartupConfig` typed surface.
+- `HostAgnosticBootstrap::install_data_path` registers DataPath phases:
+  `ReadFile` (`std::fs::read_to_string`), `ParseSchema`
+  (`jian_ops_schema::load_str`), `SeedStateGraph` (`Runtime::
+  new_from_document`), `BuildNodeTree` (no-op marker),
+  `InitGpuContext` (host-overrides), `LoadCoreFonts`
+  (`FontPlan::scan_subtrees`), `ComputeFirstLayout`
+  (`Runtime::build_layout`), `BuildVisibleSpatial`
+  (`rebuild_spatial_for_first_frame`).
+- `Runtime::rebuild_spatial_for_first_frame(viewport)` cold-start
+  variant that bulk-loads only nodes intersecting the viewport;
+  `SpatialIndex::fill_rest` folds in the remainder from the
+  Background stage.
+- `LazyBinding` / `DeferredBindingQueue` so off-viewport bindings
+  evaluate after the first paint.
+
+**Plan 6 — Capability gate:**
+
+- Top-level `crate::capability` module:
+  `CapabilityGate::check(needed, action)`,
+  `DeclaredCapabilityGate::new(caps, Some(audit))` writes
+  `AuditEntry` per check, `AuditLog` ring buffer + accessors,
+  `map::required_capabilities(action_name)` single source of truth,
+  `AutomationLevel { Observe, Act, Full }` lattice,
+  `PermissionBroker` trait + `NullPermissionBroker` stub.
+- `Runtime::new_from_document(schema)` factory: reads
   `schema.app.capabilities`, builds a `DeclaredCapabilityGate` with a
-  1000-entry `AuditLog`, and stores both on the runtime.
-- `Runtime::make_action_ctx()` is now public so tests and embedders can
-  build an `ActionContext` that shares the runtime's services.
+  1000-entry `AuditLog`, stores both on the runtime.
+- `Runtime::make_action_ctx()` is now public.
 - Plan 4 IO action call sites (`fetch`, `storage_set`, `storage_clear`,
   `storage_wipe`, platform stubs) updated to pass the action name.
-- Integration suite `tests/capability_enforcement.rs` (10 tests):
-  fetch denied without declare; fetch allowed with declare; audit
-  accumulates across calls; storage allowed when declared; pure actions
-  bypass audit; ring-buffer drops oldest; default `Runtime::new()` keeps
-  Dummy gate with no audit.
+- Integration suite `tests/capability_enforcement.rs` (10 tests).
 
-## [0.4.0] — Plan 5 — Gesture Arena
+**Plan 5 — Gesture arena:**
 
-### Added
+- Flutter-style gesture pipeline under `gesture/`: `PointerEvent`
+  with unified `PointerKind` / `PointerPhase` / `MouseButtons` /
+  `Modifiers`; `hit_test` over `SpatialIndex` returning a z-ordered
+  `HitPath`; `Recognizer` trait + `RecognizerState` state machine;
+  per-pointer `Arena` with priority-based arbitration on Up.
+- MVP recognizers: `TapRecognizer`, `DoubleTapRecognizer`,
+  `LongPressRecognizer`, `PanRecognizer`, `HoverRecognizer`. (Scale /
+  Rotate landed alongside multi-pointer host-desktop in Plan 9.)
+- `SemanticEvent` enum with `handler_key()` mapping to schema
+  `events.*` names (camelCase).
+- `PointerRouter` top-level dispatcher; `tick(now)` drives timer-
+  based recognizers (LongPress).
+- `rawPointer` escape hatch.
+- `FocusManager` MVP.
+- `EventDispatcher` (`dispatch_event`) resolves `events.<key>` and
+  runs through Plan 4's `execute_list_shared`.
+- Runtime wiring: `gestures: PointerRouter`, `actions:
+  SharedRegistry`, `expr_cache`, injected services with Null defaults.
+- `dispatch_pointer(event)` / `tick(now)` end-to-end.
 
-- Flutter-style gesture pipeline under `gesture/`:
-  - `PointerEvent` with unified `PointerKind` / `PointerPhase` /
-    `MouseButtons` / `Modifiers`.
-  - `hit_test` over `SpatialIndex` returning a z-ordered `HitPath` that walks
-    parent ancestors for bubbling.
-  - `Recognizer` trait (`handle_pointer` / `accept` / `reject` / `tick`) and
-    `RecognizerState` state machine (Possible / Eager / Defer / Claimed /
-    Rejected).
-  - Per-pointer `Arena` with priority-based arbitration on Up.
-  - MVP recognizers: `TapRecognizer`, `DoubleTapRecognizer`,
-    `LongPressRecognizer`, `PanRecognizer`, `HoverRecognizer`.
-    (Scale/Rotate deferred to Plan 9 when host-desktop multi-pointer lands.)
-  - `SemanticEvent` enum with `handler_key()` mapping to schema
-    `events.*` names (camelCase: `onTap`, `onPanUpdate`, …).
-  - `PointerRouter` top-level dispatcher: creates arenas on Down, routes
-    Move/Up into the winning recognizer, separates Hover state-tracking, and
-    exposes `tick(now)` for timer-driven recognizers (LongPress).
-  - `rawPointer` escape hatch: any ancestor declaring
-    `gestures.rawPointer: true` bypasses arena arbitration and receives
-    `SemanticEvent::RawPointer` directly.
-  - `FocusManager` MVP (request/clear) — full Tab-tree traversal lands with
-    host-desktop in Plan 9.
-  - `EventDispatcher` (`dispatch_event`) resolves the node's `events.<key>`
-    ActionList and runs it through Plan 4's `execute_list_shared`.
-- `Runtime` wiring:
-  - New fields: `gestures: PointerRouter`, `actions: SharedRegistry`,
-    `expr_cache`, and injected services (network/storage/nav/feedback/
-    async_feedback/clipboard/capabilities) with Null defaults.
-  - `dispatch_pointer(event)` and `tick(now)` drive the gesture pipeline and
-    fire action handlers end-to-end.
-- Integration tests (`tests/gesture_tap_counter.rs`): Tap increments
-  `$app.count`; drag past slop rejects Tap; miss outside node fires nothing.
+**Plan 4 — Tier 2 Action DSL:**
 
-## [0.3.0] — Unreleased (Plan 4)
+- `ActionImpl` (`async_trait(?Send)`) + `ActionChain::run_serial`
+  driver. `ActionRegistry` + `SharedRegistry` (`Rc<RefCell<...>>`)
+  for nested re-parse of control-flow action bodies. `execute_list`
+  facade powered by `futures::executor::block_on`.
+- Action catalogue: state (`set` / `delete` / `reset`); control flow
+  (`if` / `abort` / `delay` / `for_each` / `parallel` / `race`);
+  navigation (`push` / `replace` / `pop` / `reset` / `open_url`);
+  network (`fetch` with `loading` / `into` / `on_error` chain +
+  `Capability::Network` gate); storage (`storage_set` /
+  `storage_clear` / `storage_wipe`); UI feedback (`toast` / `alert`
+  / `confirm`); L4 platform stubs (`vibrate` / `haptic` / `share` /
+  `notify`); Tier 3 (`call` via `LogicProvider`).
+- Platform service traits + Null impls in `services/`.
+- `CancellationToken` honoured between awaits.
+- `Expression::eval_with_locals` for `for_each` HOF locals.
 
-### Added
+**Plan 3 — Tier 1 expressions:**
 
-- Tier 2 Action DSL interpreter with async execution:
-  - `ActionImpl` (`async_trait(?Send)`) + `ActionChain::run_serial` driver.
-  - `ActionRegistry` + `SharedRegistry` (Rc<RefCell<...>>) for nested
-    re-parse of control-flow action bodies.
-  - `execute_list` facade powered by `futures::executor::block_on`.
-- Action catalogue:
-  - **State**: `set` (shorthand + target/value), `delete`, `reset`.
-  - **Control flow**: `if` (then/else), `abort`, `delay` (MVP passthrough),
-    `for_each` (`$item`/`$index` locals), `parallel`, `race`.
-  - **Navigation**: `push`, `replace`, `pop`, `reset` (string→nav, scope→state),
-    `open_url`.
-  - **Network**: `fetch` with `loading` / `into` / `on_error` chain + explicit
-    `Capability::Network` gate.
-  - **Storage**: `storage_set`, `storage_clear`, `storage_wipe` with
-    `Capability::Storage` gate.
-  - **UI feedback**: `toast`, `alert`, `confirm` (async confirm branches on
-    `on_confirm` / `on_cancel`).
-  - **L4 platform stubs**: `vibrate`, `haptic`, `share`, `notify` (emit
-    warnings until real adapters land).
-  - **Tier 3**: `call` dispatches through `LogicProvider`; Null provider
-    errors flow to `on_error`.
-- Platform service traits + Null implementations in `services/`:
-  `NetworkClient`, `StorageBackend`, `Router`, `FeedbackSink`,
-  `AsyncFeedback`, `ClipboardService`, `WebSocketSession`.
-- `CapabilityGate` trait with `DummyCapabilityGate` (allow-all) +
-  `DeclaredCapabilityGate` (whitelist) implementations.
-- `CancellationToken` honoured by every async action between awaits.
-- `Expression::eval_with_locals` enables `for_each` / HOF-style lambdas
-  to pass `$item` / `$index` / `$acc` overrides into sub-expressions.
+- Lexer, recursive-descent parser, AST, bytecode, stack-machine VM.
+- Scope references (`$app / $page / $self / $route / $storage /
+  $vars`, contextual `$state`, local `$item / $index / $acc`).
+- Template literals (`` `text ${expr}` ``).
+- Builtins: math (10), string (11), array + HOF
+  (filter/map/sort/reduce), object (4), date (3 MVP), type ops (5).
+- `Expression` facade + `ExpressionCache`.
+- `BindingEffect` for reactive scene-property updates.
+- Fine-grained Signal subscription: static member chains fold into
+  a single `PushScopeRef`.
+- Proptest fuzz (512 cases) + criterion `expr_eval` benches.
 
-## [0.2.0] — Unreleased (Plan 3)
-
-### Added
-
-- Tier 1 expression language:
-  - Lexer, recursive-descent parser, AST, bytecode, stack-machine VM.
-  - Scope references (`$app / $page / $self / $route / $storage / $vars`,
-    contextual `$state`, local `$item / $index / $acc`).
-  - Template literals (`` `text ${expr}` ``).
-  - Builtins: math (10), string (11), array + HOF (filter/map/sort/reduce),
-    object (4), date (3 MVP), type ops (5).
-  - `Expression` facade + `ExpressionCache`.
-  - `BindingEffect` for reactive scene-property updates.
-  - Fine-grained Signal subscription: static member chains fold into a single
-    `PushScopeRef` so only the referenced variable's Signal is subscribed.
-  - Proptest fuzz (512 cases) + criterion `expr_eval` benches.
-
-### Changed
-
-- `Runtime::state` is now `Rc<StateGraph>` (was `StateGraph` by value) so
-  bindings can capture shared state into effect closures.
-
-## [0.1.0] — Unreleased
-
-### Added
+**Plan 2 — Runtime baseline:**
 
 - Runtime composition root (`Runtime`).
 - Document runtime (SlotMap-backed tree + ID index).
-- Fine-grained reactive primitives: `Signal<T>`, `Scheduler`, `Effect`.
-- State graph with six scopes: `$app`, `$page`, `$self`, `$route`, `$storage`, `$vars`.
+- Fine-grained reactive primitives: `Signal<T>`, `Scheduler`,
+  `Effect`.
+- State graph with six scopes: `$app`, `$page`, `$self`, `$route`,
+  `$storage`, `$vars`.
 - Layout engine via `taffy` 0.5 (basic flexbox mapping).
 - Spatial index via `rstar` (hit + rect queries).
 - Viewport math with screen↔scene transforms.
@@ -158,3 +144,23 @@
 - `LogicProvider` trait (Tier 3, L4 reserved).
 - End-to-end pipeline smoke test (`counter.op` fixture).
 - Signal update microbenchmark (10/100/1000 subscribers).
+
+### Changed
+
+- `Runtime::state` is `Rc<StateGraph>` (Plan 3) so bindings can
+  capture shared state into effect closures.
+
+### Fixed
+
+**Post-Codex review (Plan 5/6):**
+
+- `LongPressRecognizer` claiming via `tick()` now resolves the arena
+  so a subsequent Up event cannot also let `TapRecognizer` claim on
+  the same pointer sequence. `Arena::tick(now)` is the new timer-
+  aware variant that mirrors the event-driven `dispatch` path.
+- `open_url` consults the capability gate and records to the audit
+  log. Undeclared `network` → `CapabilityDenied`.
+- `DoubleTap` is detected at the `PointerRouter` level by pairing
+  consecutive `Tap` emissions per node (≤ 300 ms, ≤ 16 px). The
+  in-arena `DoubleTapRecognizer` couldn't see across arenas; this
+  wiring makes `onDoubleTap` handlers fire end-to-end.

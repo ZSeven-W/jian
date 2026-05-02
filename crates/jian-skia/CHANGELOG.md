@@ -1,8 +1,13 @@
 # Changelog
 
-## [0.1.0] — Plan 7 — jian-skia MVP
+All entries roll up into the workspace's `0.0.1` development release;
+sections within tag the originating Plan for traceability.
+
+## [0.0.1] - Unreleased
 
 ### Added
+
+**Plan 7 — `jian-skia` MVP:**
 
 - `SkiaBackend` implementing `jian_core::render::RenderBackend`:
   - `new_surface` / `begin_frame` / `end_frame` against a raster
@@ -29,3 +34,7 @@
   is enabled + wired through (Plan 8+).
 - `DrawOp::Image` paints a grey placeholder pending image cache
   (Task 8 lands with Plan 12 once a network-aware host provides bytes).
+- GPU surface factories (`surface/{metal,d3d,gl}.rs`) ship as
+  feature-gated skeletons returning a typed `Err("not yet implemented")`
+  with full implementation outlines in the source. Each backend lands
+  in its own focused session against real hardware (Plan 11 / 12).
