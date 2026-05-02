@@ -13,8 +13,11 @@
 //!   [`unix_socket::UnixSocketTransport`] — bound to a filesystem
 //!   path with `0600` socket / `0700` parent-dir perms, used by
 //!   `jian player --asp <path>` on macOS / Linux. Spec §6.
-//! - [`named_pipe::NamedPipeListener`] — typed stub on Windows; the
-//!   real `windows-sys`-backed implementation lands in a follow-up.
+//! - [`named_pipe::NamedPipeListener`] / [`named_pipe::NamedPipeTransport`]
+//!   on Windows — `CreateNamedPipeW` + `ConnectNamedPipe` with a
+//!   protected DACL granting `GENERIC_ALL` only to the calling
+//!   user's resolved SID (no Everyone, no Anonymous). Bound on
+//!   `\\.\pipe\jian\<pid>\asp` by `jian player --asp`.
 //! - [`socket_path::resolve_bind_arg`] — translates `--asp <arg>`
 //!   into a [`socket_path::BindTarget`] and refuses any value that
 //!   looks like a network bind (TCP / `host:port` / URL with
