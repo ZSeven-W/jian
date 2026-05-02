@@ -10,19 +10,26 @@
 //! Security boundary (spec §6: "Windows should use a Named Pipe
 //! such as `\\.\pipe\jian\<pid>\asp` with a current-user ACL only"):
 //!
-//! - We pass `lpSecurityAttributes = NULL` to `CreateNamedPipeW`,
-//!   which means the pipe inherits the **default DACL of the
-//!   creating process's token**. Per Microsoft's ACL docs, that
-//!   default grants access to the user who created the object,
-//!   the LocalSystem account, and members of the Administrators
-//!   group — the canonical "user-private" pattern on Windows.
-//!   No other user account can open the pipe.
+//! - The DACL is built explicitly from the **calling user's SID**,
+//!   resolved at runtime via `OpenProcessToken` +
+//!   `GetTokenInformation(TokenUser)` + `ConvertSidToStringSidW`.
+//!   The SDDL we feed to
+//!   `ConvertStringSecurityDescriptorToSecurityDescriptorW` is
+//!   `D:P(A;;GA;;;<user_sid>)` — `D:P` is a *protected* DACL (sets
+//!   `SE_DACL_PROTECTED`, blocks the kernel from adding any
+//!   inherited ACEs), and the single Allow ACE grants
+//!   `GENERIC_ALL` to exactly the user who created the pipe. No
+//!   Everyone, no Anonymous, no Admins.
 //!
-//!   We considered an explicit SDDL string (`D:(A;;GA;;;OW)`)
-//!   but the `OW` (OWNER) SID resolves to the token's *default
-//!   owner SID*, which on an admin token is the Administrators
-//!   group — broader than the operator typically expects. The
-//!   default DACL is the cleaner, well-understood pattern.
+//!   We deliberately do NOT use the kernel's "default DACL on
+//!   NULL `lpSecurityAttributes`" — per Microsoft's named-pipe
+//!   docs that default grants READ to Everyone and Anonymous
+//!   Logon, which violates the spec's confidentiality boundary
+//!   (codex C4-B round 2 HIGH).
+//!
+//!   We also avoid SDDL aliases like `OW` (OWNER) because the
+//!   token's default owner SID can resolve to the Administrators
+//!   group on elevated tokens — broader than "current user".
 //!
 //! - `nMaxInstances = 1` keeps a second `CreateNamedPipeW` from
 //!   stealing the name. A duplicate-bind attempt fails with
@@ -57,8 +64,13 @@ use std::os::windows::ffi::OsStrExt;
 #[cfg(windows)]
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, FALSE, HANDLE, INVALID_HANDLE_VALUE,
+        CloseHandle, GetLastError, LocalFree, ERROR_PIPE_CONNECTED, FALSE, HANDLE,
+        INVALID_HANDLE_VALUE,
     },
+    Security::Authorization::{
+        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+    },
+    Security::{GetTokenInformation, TokenUser, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER},
     Storage::FileSystem::{
         FlushFileBuffers, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
     },
@@ -66,6 +78,7 @@ use windows_sys::Win32::{
         ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
         PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
     },
+    System::Threading::{GetCurrentProcess, OpenProcessToken},
 };
 
 /// Buffer size advertised to `CreateNamedPipeW` for the in/out pipe
@@ -373,21 +386,51 @@ fn write_all(handle: HANDLE, buf: &[u8]) -> Result<(), TransportError> {
 /// The unsafe-FFI core of `bind`. Kept narrow so the public method
 /// can stay a thin wrapper and the unsafe footprint is auditable.
 ///
-/// Passes `lpSecurityAttributes = NULL` so the pipe inherits the
-/// default DACL of the creating process's token (user-private +
-/// Admins + LocalSystem — the canonical "user-private" pattern).
+/// Builds an explicit user-only DACL (see module docs) instead of
+/// relying on the kernel default — the default grants Everyone
+/// READ access on named pipes, which violates the spec.
 #[cfg(windows)]
 unsafe fn bind_inner(name: String) -> Result<NamedPipeListener, TransportError> {
-    // Encode the pipe name as wide UTF-16 + null terminator.
+    // 1. Resolve the calling user's SID, format as the SDDL string.
+    let user_sid = current_user_sid_string()?;
+    let sddl = format!("D:P(A;;GA;;;{})", user_sid);
+    let sddl_w: Vec<u16> = OsStr::new(&sddl)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // 2. Convert SDDL → SECURITY_DESCRIPTOR. The kernel takes a
+    //    snapshot during `CreateNamedPipeW`, so we `LocalFree` the
+    //    descriptor immediately after the create call.
+    let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
+    let conv_ok = ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        sddl_w.as_ptr(),
+        1, // SDDL_REVISION_1
+        &mut sd,
+        std::ptr::null_mut(),
+    );
+    if conv_ok == FALSE {
+        let err = GetLastError();
+        return Err(TransportError::Io(format!(
+            "ConvertStringSecurityDescriptorToSecurityDescriptorW(`{}`) failed (code {})",
+            sddl, err
+        )));
+    }
+    let mut sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd,
+        bInheritHandle: FALSE,
+    };
+
+    // 3. Encode the pipe name as wide UTF-16 + null terminator.
     let name_w: Vec<u16> = OsStr::new(&name)
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
 
-    // Create the pipe. `FILE_FLAG_FIRST_PIPE_INSTANCE` refuses if
-    // the name is already taken — analogous to the Unix transport's
-    // stale-socket check. NULL `lpSecurityAttributes` → kernel uses
-    // the default DACL from the token (user + Admins + LocalSystem).
+    // 4. Create the pipe. `FILE_FLAG_FIRST_PIPE_INSTANCE` refuses
+    //    if the name is already taken — analogous to the Unix
+    //    transport's stale-socket check.
     let handle = CreateNamedPipeW(
         name_w.as_ptr(),
         PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -396,8 +439,13 @@ unsafe fn bind_inner(name: String) -> Result<NamedPipeListener, TransportError> 
         PIPE_BUFFER_BYTES,
         PIPE_BUFFER_BYTES,
         0, // default 50ms client timeout for WaitNamedPipe; unused here
-        std::ptr::null_mut(),
+        &mut sa,
     );
+
+    // SECURITY_DESCRIPTOR is process-heap; free now that the
+    // kernel has captured it. (`LocalFree` accepts NULL gracefully
+    // but `sd` is non-null on this path.)
+    LocalFree(sd as *mut _);
 
     if handle == INVALID_HANDLE_VALUE {
         let err = GetLastError();
@@ -412,6 +460,103 @@ unsafe fn bind_inner(name: String) -> Result<NamedPipeListener, TransportError> 
         handle,
         connected: std::cell::Cell::new(false),
     })
+}
+
+/// Resolve the calling process's user SID and return it formatted
+/// for SDDL (e.g. `"S-1-5-21-…"`). Used to build the user-only
+/// DACL for the named pipe.
+///
+/// Steps:
+/// 1. `OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &h)`.
+/// 2. `GetTokenInformation(h, TokenUser, NULL, 0, &needed)` — first
+///    call returns `ERROR_INSUFFICIENT_BUFFER` and writes the
+///    required size into `needed`.
+/// 3. Allocate a buffer of that size, call again to populate it.
+///    Cast to `*const TOKEN_USER` to access `User.Sid`.
+/// 4. `ConvertSidToStringSidW(sid, &out)` — `out` is `LocalAlloc`-
+///    owned wide string.
+/// 5. Copy into a Rust `String`, `LocalFree` the original.
+#[cfg(windows)]
+unsafe fn current_user_sid_string() -> Result<String, TransportError> {
+    let mut token: HANDLE = std::ptr::null_mut();
+    let proc_h = GetCurrentProcess();
+    let opened = OpenProcessToken(proc_h, TOKEN_QUERY, &mut token);
+    if opened == FALSE {
+        let err = GetLastError();
+        return Err(TransportError::Io(format!(
+            "OpenProcessToken failed (code {})",
+            err
+        )));
+    }
+
+    // Probe required size.
+    let mut needed: u32 = 0;
+    let _ = GetTokenInformation(
+        token,
+        TokenUser,
+        std::ptr::null_mut(),
+        0,
+        &mut needed,
+    );
+    if needed == 0 {
+        let err = GetLastError();
+        let _ = CloseHandle(token);
+        return Err(TransportError::Io(format!(
+            "GetTokenInformation(probe) failed (code {})",
+            err
+        )));
+    }
+
+    // Real fetch.
+    let mut buf: Vec<u8> = vec![0u8; needed as usize];
+    let mut returned: u32 = 0;
+    let got = GetTokenInformation(
+        token,
+        TokenUser,
+        buf.as_mut_ptr() as *mut _,
+        needed,
+        &mut returned,
+    );
+    let _ = CloseHandle(token);
+    if got == FALSE {
+        let err = GetLastError();
+        return Err(TransportError::Io(format!(
+            "GetTokenInformation failed (code {})",
+            err
+        )));
+    }
+
+    // SAFETY: buf is at least `sizeof(TOKEN_USER)` bytes, and the
+    // kernel populated it with a TOKEN_USER struct whose `User.Sid`
+    // points into the same buffer (or is heap-allocated alongside).
+    let token_user = &*(buf.as_ptr() as *const TOKEN_USER);
+    let sid = token_user.User.Sid;
+    if sid.is_null() {
+        return Err(TransportError::Io(
+            "GetTokenInformation returned a null SID pointer".into(),
+        ));
+    }
+
+    let mut sid_str_ptr: *mut u16 = std::ptr::null_mut();
+    let ok = ConvertSidToStringSidW(sid, &mut sid_str_ptr);
+    if ok == FALSE || sid_str_ptr.is_null() {
+        let err = GetLastError();
+        return Err(TransportError::Io(format!(
+            "ConvertSidToStringSidW failed (code {})",
+            err
+        )));
+    }
+
+    // Walk the wide string, find its length, copy into a Rust
+    // `String`. Then `LocalFree` the original.
+    let mut len = 0usize;
+    while *sid_str_ptr.add(len) != 0 {
+        len += 1;
+    }
+    let slice = std::slice::from_raw_parts(sid_str_ptr, len);
+    let owned = String::from_utf16_lossy(slice);
+    LocalFree(sid_str_ptr as *mut _);
+    Ok(owned)
 }
 
 #[cfg(test)]

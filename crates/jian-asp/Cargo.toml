@@ -77,16 +77,17 @@ jian-ops-schema = { path = "../jian-ops-schema", optional = true }
 # Plan 18 ASP prod mode (C4 follow-up B): Windows Named Pipe
 # transport. `windows-sys` is already in the workspace via winit /
 # tokio transitives — pulling it directly here lets us call
-# `CreateNamedPipeW` + `ConnectNamedPipe` for the prod ASP
-# listener on Windows. Pipe security uses the default DACL on the
-# creating token (user + Admins + LocalSystem — the canonical
-# "user-private" pattern), so we don't need the `Win32_Security`
-# / `Win32_Security_Authorization` feature trees. Gated to the
-# windows target so non-Windows builds skip the crate compile
-# cost.
+# `CreateNamedPipeW` + `ConnectNamedPipe` and build a real
+# user-private DACL (kernel default DACL on a named pipe grants
+# READ to Everyone — not user-private; codex C4-B round 2 HIGH).
+# Gated to the windows target so non-Windows builds skip the
+# crate compile cost.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", optional = true, features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
 ] }
