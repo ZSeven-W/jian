@@ -226,6 +226,69 @@ impl DeepLinkHandler for NullDeepLinkHandler {
     }
 }
 
+/// Cross-platform install shim. Wires `handler` into the
+/// platform-specific receiver registry so OS-delivered URLs route
+/// through it:
+///
+/// - **macOS**: stores the handler in
+///   [`crate::app_delegate`]'s thread-local registry AND registers
+///   the `kAEGetURL` Apple-Event handler via
+///   [`crate::apple_event_receiver`].
+/// - **Windows**: stores the handler in [`crate::win_deeplink`]'s
+///   thread-local registry. The `WM_COPYDATA` message-only-window
+///   listener is a separate follow-up (Plan 8 §T8 / Windows leg).
+/// - **Linux / other**: stores the handler in a no-op registry —
+///   the `.desktop` MIME entry can dispatch via the player's
+///   command-line argv path, which is host-driven.
+///
+/// Idempotent across calls — the previous handler (if any) is
+/// returned. Hosts typically call this exactly once during
+/// startup, before `event_loop.run_app`.
+pub fn install_deeplink_handler(
+    handler: Box<dyn DeepLinkHandler>,
+) -> Option<Box<dyn DeepLinkHandler>> {
+    #[cfg(target_os = "macos")]
+    {
+        let prev = crate::app_delegate::install_handler(handler);
+        // The Apple-Event handler must register AFTER the registry
+        // holds the handler, so a URL arriving immediately on launch
+        // (process started by `open jian://...`) finds a live target.
+        crate::apple_event_receiver::install_apple_event_handler();
+        return prev;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return crate::win_deeplink::install_handler(handler);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        // Suppress unused-variable on non-Mac/Win targets without
+        // pretending to install — Linux deeplinks land via argv from
+        // the .desktop entry's `%U`, not through a process registry.
+        let _ = handler;
+        None
+    }
+}
+
+/// Inverse of [`install_deeplink_handler`]. Used during host
+/// teardown so the boxed handler doesn't outlive its captures and
+/// the platform-specific registry returns to its pre-install state.
+pub fn take_deeplink_handler() -> Option<Box<dyn DeepLinkHandler>> {
+    #[cfg(target_os = "macos")]
+    {
+        crate::apple_event_receiver::uninstall_apple_event_handler();
+        return crate::app_delegate::take_handler();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return crate::win_deeplink::take_handler();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

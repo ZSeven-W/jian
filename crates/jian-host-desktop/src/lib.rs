@@ -31,6 +31,8 @@
 
 #[cfg(target_os = "macos")]
 pub mod app_delegate;
+#[cfg(target_os = "macos")]
+pub mod apple_event_receiver;
 pub mod app_icon;
 pub mod deeplink;
 pub mod host;
