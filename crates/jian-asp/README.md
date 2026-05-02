@@ -78,14 +78,33 @@ shapes; prod ASP is local-only by spec §6.
 
 ## Acceptance gate (spec §10)
 
-The `tests/prod_acceptance.rs` integration suite pins the spec's
-acceptance gate:
+`tests/prod_acceptance.rs` pins these spec §10 bullets:
 
-- Prod `list_actions` rows have *only* `id` and `events` (no leaked
-  structural fields).
-- Prod rejects `find`, `inspect`, `snapshot`, `audit` with the
-  stable `UnsupportedVerbInProd` error tag.
+- **Bullet 1**: prod `list_actions` rows have *only* `id` and
+  `events` (no leaked structural fields).
+- **Bullet 2**: prod op response bodies don't carry `.op` tree
+  structure — `target` is the action id (not the schema node id),
+  and `narrative` doesn't include layout-rect coordinates.
+- **Bullet 3**: prod rejects `find` / `inspect` / `snapshot` /
+  `audit` / `set_state` (and the other dev-only verbs) with the
+  stable `UnsupportedVerbInProd` error tag *and* never runs the
+  handler's side-effects.
+- **Bullet 9**: dev mode dispatches `list_actions` for portable
+  clients.
 
-`tests/byte_budget.rs` pins the token-savings claim with a
-regression-guard ratio (currently ≥ 3× vs MCP on a 50-action
-screen).
+The other §10 bullets are pinned at the layer they belong to:
+
+- **Bullets 4 / 5**: prod-op selector narrowing + `aiHidden`
+  filtering — `verb_impls/prod_op_guard.rs` + `verb_impls/list_actions.rs`.
+- **Bullet 6**: prod refuses startup without app capabilities —
+  `server.rs` (run_prod_session preconditions).
+- **Bullet 7**: token validation is delegated to a host-installed
+  `TokenValidator`. The crate cannot structurally prove the host
+  isn't a no-op — that's a host contract documented at
+  `session.rs`.
+- **Bullet 8**: TCP / network bind refusal — `transport/socket_path.rs`
+  + `crates/jian-cli/tests/cli_subcommands.rs`.
+- **Bullet 10**: three-tier token comparison —
+  `tests/byte_budget.rs` prints MCP vs ASP-dev vs ASP-prod and
+  asserts the prod ratio ≥ 3× MCP on a 50-action screen
+  (currently 3.65×).

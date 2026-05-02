@@ -116,11 +116,19 @@ fn empty_returns_schema() -> serde_json::Value {
     serde_json::json!({"ok": "boolean"})
 }
 
-/// Render the ASP prod `list_actions` body — the full
-/// `OutcomePayload` JSON the wire emits, including the flat
-/// `ActionList` detail. Includes the response envelope so we're
-/// comparing apples-to-apples against MCP's response body.
-fn render_asp_prod_body(rt: &mut Runtime) -> String {
+/// Render an ASP `list_actions` response body in the requested
+/// mode. The full `OutcomePayload` JSON the wire emits, including
+/// the flat `ActionList` detail. Includes the response envelope so
+/// we're comparing apples-to-apples against MCP's response body.
+///
+/// `Mode::Dev` and `Mode::Prod` produce byte-identical output for
+/// `list_actions` because the projection logic is the same in both
+/// modes (spec §7's "portable client" migration policy: dev MUST
+/// support `list_actions` additively). The two-tier ratio is a
+/// property of the *protocol envelope shape*, not the dispatch
+/// mode — the bench renders both rows so the §10-bullet-10
+/// "three-tier comparison" is visible at the same time.
+fn render_asp_body(rt: &mut Runtime, mode: Mode) -> String {
     let mut session = Session::new(Permission::Observe, "test", "0.1");
     let (out, _) = dispatch_with_mode(
         &Verb::ListActions {
@@ -129,7 +137,7 @@ fn render_asp_prod_body(rt: &mut Runtime) -> String {
         },
         rt,
         &mut session,
-        Mode::Prod,
+        mode,
     );
     assert!(out.ok, "list_actions should succeed");
     serde_json::to_string(&out).unwrap()
@@ -147,19 +155,27 @@ fn prod_asp_is_at_least_3x_smaller_than_mcp_on_50_action_screen() {
     );
 
     let mcp_body = render_mcp_list(&actions);
-    let asp_body = render_asp_prod_body(&mut rt);
+    let asp_dev_body = render_asp_body(&mut rt, Mode::Dev);
+    let asp_prod_body = render_asp_body(&mut rt, Mode::Prod);
 
     let mcp_bytes = mcp_body.len();
-    let asp_bytes = asp_body.len();
-    let ratio = mcp_bytes as f64 / asp_bytes as f64;
+    let asp_dev_bytes = asp_dev_body.len();
+    let asp_prod_bytes = asp_prod_body.len();
+    let ratio = mcp_bytes as f64 / asp_prod_bytes as f64;
 
     // Visible to `cargo test -- --nocapture`. Surfaces the actual
     // numbers as a record artifact for the spec §10 acceptance
     // gate ("benchmarks show the three-tier token comparison").
     println!("--- list_actions byte budget on a {TARGET_ACTIONS}-action screen ---");
-    println!("MCP   tools/list_available_actions response body : {mcp_bytes:>6} bytes");
-    println!("ASP   list_actions response body (prod, flat)    : {asp_bytes:>6} bytes");
-    println!("ratio (mcp / asp)                                : {ratio:>6.2}×");
+    println!("MCP     tools/list_available_actions response body : {mcp_bytes:>6} bytes");
+    println!("ASP dev list_actions response body                 : {asp_dev_bytes:>6} bytes");
+    println!("ASP prd list_actions response body                 : {asp_prod_bytes:>6} bytes");
+    println!("ratio (mcp / asp prod)                             : {ratio:>6.2}×");
+    if asp_dev_bytes == asp_prod_bytes {
+        println!(
+            "(dev == prod for list_actions: portable-client guarantee per spec §7)"
+        );
+    }
 
     // Spec §1 claims "~4-8×". Assert the looser 3× lower-bound so
     // routine field churn (e.g. an additional event tag) doesn't
@@ -167,10 +183,22 @@ fn prod_asp_is_at_least_3x_smaller_than_mcp_on_50_action_screen() {
     assert!(
         ratio >= 3.0,
         "expected ASP prod to be at least 3× smaller than MCP for {} actions; \
-         got ratio {:.2}× (mcp={}, asp={})",
+         got ratio {:.2}× (mcp={}, asp_prod={})",
         TARGET_ACTIONS,
         ratio,
         mcp_bytes,
-        asp_bytes
+        asp_prod_bytes
+    );
+    // Spec §7's "portable-client" promise: dev list_actions returns
+    // the same projection prod does. If they ever diverge, an agent
+    // that worked in dev would silently break in prod (or vice
+    // versa); pin the byte-equality here so a future dev-mode
+    // sidecar ("list_actions_with_tree" or similar) doesn't slip
+    // in unobserved.
+    assert_eq!(
+        asp_dev_bytes, asp_prod_bytes,
+        "portable-client invariant: list_actions wire bytes must match between \
+         Mode::Dev and Mode::Prod (got dev={} prod={})",
+        asp_dev_bytes, asp_prod_bytes
     );
 }

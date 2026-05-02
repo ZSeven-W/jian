@@ -23,6 +23,7 @@ use jian_asp::protocol::{ActionRow, DetailKind, Verb};
 use jian_asp::selector::Selector;
 use jian_asp::session::{Permission, Session};
 use jian_asp::verb_impls::{dispatch_with_mode, Mode};
+use jian_core::action_surface::{derive_actions, AvailabilityStatic, BUILD_SALT};
 use jian_core::Runtime;
 use jian_ops_schema::document::PenDocument;
 
@@ -102,11 +103,23 @@ fn prod_list_actions_row_has_only_id_and_events() {
 /// **Acceptance §10**: prod rejects `find`, `inspect`, `snapshot`,
 /// `audit`. Pinned externally because the in-crate test version is
 /// a private-to-`verb_impls` regression check; this one verifies
-/// the public dispatch contract.
+/// the public dispatch contract AND that no handler side-effect ran
+/// before the rejection (codex C6 round 1, MEDIUM 2b).
 #[test]
 fn prod_dispatch_rejects_each_structural_verb() {
     let mut rt = rt_with(COUNTER_DOC);
     let mut session = Session::new(Permission::Full, "test", "0.1");
+
+    // Snapshot the runtime's mutable state BEFORE running rejected
+    // verbs. After every rejection the state must be byte-identical —
+    // a buggy prod gate that ran handler side-effects before returning
+    // the rejection would mutate state here (e.g. set_state writing,
+    // navigate pushing a route).
+    let initial_count = rt
+        .state
+        .app_get("count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(-1);
 
     let cases: &[(Verb, &str)] = &[
         (
@@ -125,6 +138,16 @@ fn prod_dispatch_rejects_each_structural_verb() {
         ),
         (Verb::Snapshot { format: None }, "snapshot"),
         (Verb::Audit { last_n: None }, "audit"),
+        // `set_state` is the canary side-effect verb: if a prod
+        // gate-bypass let it run, the runtime's `count` would change.
+        (
+            Verb::SetState {
+                scope: "$app".into(),
+                key: "count".into(),
+                value_json: "999".into(),
+            },
+            "set_state",
+        ),
     ];
     for (verb, expected_name) in cases {
         let (out, _) = dispatch_with_mode(verb, &mut rt, &mut session, Mode::Prod);
@@ -139,5 +162,115 @@ fn prod_dispatch_rejects_each_structural_verb() {
             out.error
         );
         assert_eq!(out.verb, *expected_name);
+        // Side-effect canary: state must still equal the initial
+        // value, proving the handler never ran.
+        let now = rt
+            .state
+            .app_get("count")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
+        assert_eq!(
+            now, initial_count,
+            "verb `{expected_name}` rejection must not have mutated state \
+             (count went {initial_count}→{now}, indicating the handler ran \
+             before the rejection)",
+        );
     }
+}
+
+/// **Acceptance §10 bullet 9**: dev mode supports `list_actions`
+/// additively for portable clients. Codex C6 round 1, MEDIUM gap.
+#[test]
+fn dev_mode_dispatches_list_actions() {
+    let mut rt = rt_with(COUNTER_DOC);
+    let mut session = Session::new(Permission::Observe, "test", "0.1");
+    let (out, _) = dispatch_with_mode(
+        &Verb::ListActions {
+            cursor: None,
+            limit: None,
+        },
+        &mut rt,
+        &mut session,
+        Mode::Dev,
+    );
+    assert!(
+        out.ok,
+        "dev mode must support list_actions for portable clients, got {out:?}"
+    );
+    let actions = match out.detail {
+        Some(DetailKind::ActionList { actions, .. }) => actions,
+        other => panic!("expected ActionList detail in dev mode, got {other:?}"),
+    };
+    assert!(
+        !actions.is_empty(),
+        "dev list_actions should project the same fixture rows prod does"
+    );
+}
+
+/// **Acceptance §10 bullet 2**: prod op response bodies must not
+/// carry `.op` tree structure. Codex C6 round 1 surfaced two
+/// concrete leaks — the dev op handlers populate `target` with the
+/// schema node id and bake layout-rect coordinates into `narrative`.
+/// `dispatch_with_mode(Mode::Prod)` now sanitizes both before
+/// returning to the agent.
+#[test]
+fn prod_tap_response_does_not_leak_node_id_or_coords() {
+    let mut rt = rt_with(COUNTER_DOC);
+    let mut session = Session::new(Permission::Act, "test", "0.1");
+
+    // Find the action id for the `btn` tap action.
+    let doc_ref = rt.document.as_ref().unwrap();
+    let actions = derive_actions(&doc_ref.schema, &BUILD_SALT);
+    let action = actions
+        .iter()
+        .find(|a| matches!(a.status, AvailabilityStatic::Available))
+        .expect("at least one action");
+    let action_id = action.full_name();
+    let source_node_id = action.source_node_id.clone();
+    let _ = doc_ref;
+
+    let (out, _) = dispatch_with_mode(
+        &Verb::Tap {
+            selector: Selector {
+                id: Some(action_id.clone()),
+                ..Default::default()
+            },
+        },
+        &mut rt,
+        &mut session,
+        Mode::Prod,
+    );
+    assert!(out.ok, "tap should dispatch, got {out:?}");
+
+    // `target` must be the action id, not the schema node id.
+    assert_eq!(
+        out.target.as_deref(),
+        Some(action_id.as_str()),
+        "prod target should be action id, not source_node_id `{}`",
+        source_node_id
+    );
+
+    // `narrative` must NOT contain the source node id (the dev
+    // handler's narrative was `tapped node `<id>` at (X.X, Y.Y)`).
+    assert!(
+        !out.narrative.contains(&source_node_id),
+        "narrative leaked source node id `{}`: {}",
+        source_node_id,
+        out.narrative
+    );
+    // `narrative` must NOT contain digits-with-decimal (a coarse
+    // proxy for layout-rect coords like `(110.0, 120.0)`). The
+    // sanitized narrative is `action `<id>` dispatched`, no coords.
+    let has_decimal = out.narrative.chars().enumerate().any(|(i, c)| {
+        c == '.'
+            && i > 0
+            && i + 1 < out.narrative.len()
+            && out.narrative.as_bytes()[i - 1].is_ascii_digit()
+            && out.narrative.as_bytes()[i + 1].is_ascii_digit()
+    });
+    assert!(
+        !has_decimal,
+        "narrative may have leaked layout-rect coords: {}",
+        out.narrative
+    );
 }

@@ -1209,7 +1209,23 @@ pub fn dispatch_with_mode(
         // `list_actions` ids and rewrite to source-node-id selectors
         // before dispatch. Pass-through for non-op verbs.
         match prod_op_guard::rewrite_op_verb_for_prod(verb, runtime) {
-            Ok(Some(rewritten)) => return dispatch(&rewritten, runtime, session),
+            Ok(Some(rewritten)) => {
+                // Plan 18 C6 / spec §10 bullet 2 (codex round 1):
+                // the dev op handlers populate `target` /
+                // `narrative` with the schema *node* id and the
+                // matched node's layout rect coordinates. Both are
+                // `.op` tree structure that prod responses must not
+                // leak. Capture the original action id from the
+                // pre-rewrite verb selector and rewrite the response
+                // back to the agent-visible identifier.
+                let action_id = prod_op_guard::extract_action_id(verb);
+                let (payload, control) = dispatch(&rewritten, runtime, session);
+                let payload = match action_id {
+                    Some(id) => prod_op_guard::sanitize_prod_op_payload(payload, &id),
+                    None => payload,
+                };
+                return (payload, control);
+            }
             Ok(None) => { /* not an op verb — fall through to plain dispatch */ }
             Err(payload) => return (payload, DispatchControl::Continue),
         }

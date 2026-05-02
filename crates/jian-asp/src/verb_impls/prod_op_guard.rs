@@ -287,6 +287,62 @@ pub fn rewrite_op_verb_for_prod(
     }
 }
 
+/// Extract the action id from an op-verb's pre-rewrite selector.
+/// Returns `None` for non-op verbs or for an empty / missing id —
+/// callers fall back to a no-op sanitization in those cases.
+pub fn extract_action_id(verb: &Verb) -> Option<String> {
+    let sel = match verb {
+        Verb::Tap { selector } => selector,
+        Verb::Type { selector, .. } => selector,
+        Verb::Scroll { selector, .. } => selector,
+        Verb::Swipe { selector, .. } => selector,
+        _ => return None,
+    };
+    sel.id
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned())
+}
+
+/// Sanitize an op verb's response so prod-mode wire bodies don't
+/// carry `.op` tree structure (Plan 18 spec §10 bullet 2 / codex C6
+/// round 1).
+///
+/// The dev-mode op handlers (`run_tap` / `run_type` / `run_scroll` /
+/// `run_swipe`) populate `target` with the schema node id and bake
+/// the matched node's layout-rect coordinates into `narrative` —
+/// useful diagnostic context for a debugging agent, but a leak in
+/// prod where the agent only has business with the action id.
+///
+/// This function:
+/// - Replaces `target` with the action id the agent passed in.
+/// - Replaces `narrative` with a generic outcome string keyed off
+///   the action id + the response shape (`ok` / `error`).
+/// - Preserves `deltas` (state-graph mutations are *business*
+///   state, not document structure — the agent needs them).
+/// - Preserves `hints` (current ops emit only generic hints; a
+///   future structural hint would need a separate stripping
+///   mechanism, tracked by codex C6 round 2).
+/// - Preserves `detail` and `error`.
+pub fn sanitize_prod_op_payload(
+    mut p: OutcomePayload,
+    action_id: &str,
+) -> OutcomePayload {
+    // Always set `target` to the agent-visible id, even when the
+    // dev handler returned `None` — the agent then has a stable
+    // anchor for the response without us guessing whether to
+    // populate it.
+    p.target = Some(action_id.to_owned());
+    p.narrative = if p.ok {
+        format!("action `{}` dispatched", action_id)
+    } else if let Some(err) = p.error.as_deref() {
+        format!("action `{}` rejected: {}", action_id, err)
+    } else {
+        format!("action `{}` failed", action_id)
+    };
+    p
+}
+
 /// True when `s` has *only* the `id` field set. The strict shape is
 /// what spec §9 C5 calls out — a prod agent has to derive its target
 /// from `list_actions` ids, never from a structural query, so any
