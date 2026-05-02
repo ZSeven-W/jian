@@ -9,24 +9,35 @@
 //! state when their verb is a writer, and synthesise pointer
 //! events for `tap` / `type` / `scroll` / `swipe`.
 //!
-//! ## What this commit ships
+//! ## Implemented surface (Plan 18 + ASP prod mode complete)
 //!
-//! - [`Permission`]-based gating wired through [`min_permission`].
-//! - Real implementations:
-//!   - `find` (resolver-driven; emits the matched ids)
-//!   - `inspect what=node_props` (compact node summary)
-//!   - `inspect what=route` (current path + stack depth via
-//!     `Runtime`'s router)
-//!   - `audit` (last_n entries from the session ring)
-//!   - `exit` (cooperative shutdown signal)
-//! - Everything else returns
-//!   `OutcomePayload::error("not yet implemented")` so the wire
-//!   surface stays uniform; Phase 3 fills these in:
-//!   `tap` / `type` / `scroll` / `swipe` (need pointer synth +
-//!   gesture-arena coupling), `wait_for` / `assert` (need the
-//!   expression evaluator borrows resolved against an
-//!   `&Runtime`), `navigate` / `set_state` / `snapshot` /
-//!   `inspect ax_tree | state`.
+//! - [`Permission`]-based gating wired through [`min_permission`];
+//!   [`dispatch_with_mode`] adds the prod / dev split with the
+//!   prod allow-list ([`PROD_ALLOWED_VERBS`]) and the
+//!   prod-op-guard selector rewrite ([`prod_op_guard`]).
+//! - Discovery:
+//!   - `list_actions` — flat `[{id, events}]` projection over
+//!     [`jian_action_surface`] (paginated; revision-tagged
+//!     opaque cursor; `aiHidden` subtree filter). Available in
+//!     dev AND prod.
+//!   - `find` — resolver-driven; emits the matched ids
+//!     (`dev-asp` only).
+//!   - `inspect what=node_props | route` — compact node summary
+//!     and route stack depth (`dev-asp` only).
+//!   - `inspect what=ax_tree | state` — accessibility tree text
+//!     and matched-scope state (`dev-asp` only).
+//!   - `snapshot` — base64 PNG / text-tree (`dev-asp` only).
+//!   - `audit` — session ring tail (`dev-asp` only).
+//! - Operation verbs (dev + prod):
+//!   - `tap` / `type` / `scroll` / `swipe` — synthesized pointer
+//!     events through `Runtime::dispatch_pointer` and direct
+//!     state writes for `bind:value`.
+//! - Side channels (`dev-asp` only):
+//!   - `wait_for` / `assert` — expression evaluation with the
+//!     scheduler tick.
+//!   - `navigate` — push/replace/pop/reset on the route stack.
+//!   - `set_state` — direct state-graph write.
+//! - `exit` — cooperative shutdown signal.
 
 use crate::protocol::{DetailKind, OutcomePayload, Verb};
 #[cfg(feature = "dev-asp")]
