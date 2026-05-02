@@ -449,17 +449,35 @@ fn player_asp_permission_rejects_unknown_value() {
 #[cfg(all(feature = "player", feature = "prod-asp"))]
 #[test]
 fn player_asp_refuses_when_capabilities_absent() {
+    // The capability check fires AFTER `socket_path::resolve_bind_arg`
+    // accepts the `--asp <arg>` shape. On Unix any absolute path is
+    // accepted; on Windows the resolver requires `\\.\pipe\jian\...`,
+    // so a filesystem path would be rejected as a network bind
+    // BEFORE the capability check runs and produce a different
+    // refusal narrative. Pick the platform-appropriate path so the
+    // test exercises the capability gate on both. (Codex CI catch.)
     let dir = TempDir::new().unwrap();
-    // CLEAN_OP fixture has no capabilities — exactly the case we
-    // want to catch.
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let sock = dir.path().join("asp.sock");
+
+    #[cfg(unix)]
+    let asp_arg: String = dir
+        .path()
+        .join("asp.sock")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    #[cfg(windows)]
+    let asp_arg: String = format!(
+        r"\\.\pipe\jian-test\{}-cap-check",
+        std::process::id()
+    );
+
     let out = Command::cargo_bin("jian")
         .unwrap()
         .args([
             "player",
             "--asp",
-            sock.to_str().unwrap(),
+            asp_arg.as_str(),
             path.to_str().unwrap(),
         ])
         .output()
