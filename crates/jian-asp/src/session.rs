@@ -136,14 +136,21 @@ impl TokenValidator for FileTokenValidator {
             Ok(s) => s,
             Err(_) => return Err("token unavailable"),
         };
-        // Strip a trailing newline (the CLI's token writer appends
-        // one so an operator can `cat` the file safely).
-        let expected = expected.trim_end_matches(['\n', '\r']);
-        // **Refuse empty tokens.** An operator who truncates the
-        // file (`: > <token-file>`) expecting "revoke" must not
-        // accidentally grant access to any client sending an empty
-        // handshake. Same outcome as a missing file: `token
-        // unavailable`. (Codex post-audit MEDIUM #11.)
+        // Trim ALL leading + trailing whitespace (the CLI's token
+        // writer appends `\n` for `cat`-friendliness, but an
+        // operator who truncates with `: > file` may accidentally
+        // leave a stray space + newline). Full `trim()` matches
+        // the operator's intuition: "if the file looks empty when
+        // I `cat` it, treat it as revoked." (Codex post-audit
+        // round 2 MEDIUM — `trim_end_matches(['\n', '\r'])` alone
+        // let `" \n"` slip through as a single-space token.)
+        let expected = expected.trim();
+        // **Refuse empty / whitespace-only tokens.** An operator
+        // who truncates the file (`: > <token-file>`) expecting
+        // "revoke" must not accidentally grant access to any
+        // client sending an empty handshake. Same outcome as a
+        // missing file: `token unavailable`. (Codex post-audit
+        // round 1 MEDIUM #11.)
         if expected.is_empty() {
             return Err("token unavailable");
         }
@@ -364,27 +371,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Codex post-audit MEDIUM: an empty token file (operator
-    /// `: > <file>` thinking that's revoke) must NOT silently grant
-    /// access to any agent sending an empty token. Same outcome as
-    /// a missing file: `token unavailable`.
+    /// Codex post-audit MEDIUM: an empty / whitespace-only token
+    /// file (operator `: > <file>` or `echo > file` thinking
+    /// that's revoke) must NOT silently grant access. Covers all
+    /// four corners — empty content, newline-only, whitespace +
+    /// newline (round-2 footgun), and CRLF — against both an
+    /// empty client token and a non-empty client token.
     #[test]
-    fn file_validator_refuses_empty_file_as_revocation() {
+    fn file_validator_refuses_empty_or_whitespace_file_as_revocation() {
         let dir = std::env::temp_dir().join(format!(
             "jian-asp-file-validator-empty-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("token");
-        std::fs::write(&path, "").unwrap();
-        let v = FileTokenValidator::new(path.clone(), Permission::Act);
-        assert_eq!(v.validate("").unwrap_err(), "token unavailable");
-        assert_eq!(v.validate("anything").unwrap_err(), "token unavailable");
 
-        // Just a newline (operator typed `echo > file`) is also
-        // empty after trim — same refusal.
-        std::fs::write(&path, "\n").unwrap();
-        assert_eq!(v.validate("").unwrap_err(), "token unavailable");
+        for content in ["", "\n", "\r\n", " \n", "\t \n", "  "] {
+            std::fs::write(&path, content).unwrap();
+            let v = FileTokenValidator::new(path.clone(), Permission::Act);
+            assert_eq!(
+                v.validate("").unwrap_err(),
+                "token unavailable",
+                "empty client token must be refused for content {:?}",
+                content
+            );
+            // Codex round-2 LOW: pin the non-empty-client-token
+            // case too, so a "found" client token can't accidentally
+            // match a whitespace-only file.
+            assert_eq!(
+                v.validate("anything").unwrap_err(),
+                "token unavailable",
+                "non-empty client token must be refused for content {:?}",
+                content
+            );
+            // And specifically a single-space client token can't
+            // match a single-space file (the round-2 round-trip
+            // case).
+            assert_eq!(
+                v.validate(" ").unwrap_err(),
+                "token unavailable",
+                "single-space client token must be refused for content {:?}",
+                content
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
