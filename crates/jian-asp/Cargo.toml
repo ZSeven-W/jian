@@ -90,4 +90,9 @@ windows-sys = { version = "0.61", optional = true, features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_System_Threading",
+    # `Win32_System_IO::CancelSynchronousIo` lets the host's `Drop`
+    # unblock the accept thread parked in `ConnectNamedPipe`. Without
+    # it the thread would leak on shutdown — process-exit reaps it
+    # but the listener's own `Drop` never runs gracefully.
+    "Win32_System_IO",
 ] }

@@ -197,10 +197,11 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
 /// Live state of an ASP listener bound to `--asp <path>`. Holding
 /// the value alive keeps the listener thread (and the bridge end
 /// the host's drain talks to) running for the whole `host.run()`
-/// lifetime. Drop sets the quit flag, joins the accept thread, and
-/// removes the token file. The listener's own `Drop` (inside the
-/// joined thread) unlinks the socket + parent dir, so the file
-/// system is clean when the player exits.
+/// lifetime. Drop sets the quit flag, cancels any pending blocking
+/// I/O on the accept thread (Windows only), joins, and removes the
+/// token file. The listener's own `Drop` (inside the joined thread)
+/// unlinks the socket + parent dir, so the file system is clean
+/// when the player exits.
 #[cfg(feature = "prod-asp")]
 struct AspSession {
     /// Drain handed off to the host via `with_asp`. Wrapped in
@@ -216,8 +217,16 @@ struct AspSession {
     /// `Option` so `Drop` can `take()` the `JoinHandle` and `join`
     /// it without borrowing `&mut self` across the move.
     accept_thread: Option<std::thread::JoinHandle<()>>,
-    /// Path to the generated `<socket>.token` file. Removed on drop.
+    /// Path to the generated token file. Removed on drop.
     token_path: std::path::PathBuf,
+    /// Win32 thread id of the accept thread. Used by `Drop` on
+    /// Windows to call `CancelSynchronousIo` — the accept thread
+    /// is parked in `ConnectNamedPipe` (a synchronous syscall the
+    /// quit flag can't reach), and only an explicit cancel
+    /// unblocks it. The Unix accept thread polls in non-blocking
+    /// mode, so this id is unused there.
+    #[cfg(windows)]
+    accept_thread_id: u32,
 }
 
 #[cfg(feature = "prod-asp")]
@@ -226,15 +235,39 @@ impl Drop for AspSession {
         // 1. Signal the accept loop to stop.
         self.quit_flag
             .store(true, std::sync::atomic::Ordering::Release);
-        // 2. Join — the next poll tick (≤ 50 ms) sees the flag,
-        //    breaks the loop, and the listener's own Drop unlinks
-        //    the socket file + reaps the parent dir. If the thread
-        //    has somehow already exited (panic), `join()` returns
-        //    Err and we ignore it.
+        // 2. On Windows, the accept thread is parked in
+        //    `ConnectNamedPipe`; only `CancelSynchronousIo` can
+        //    unblock it. Pop the thread out of the syscall so the
+        //    next loop iteration sees the quit flag and returns.
+        //    `OpenThread` with `THREAD_TERMINATE` access is the
+        //    minimum the cancel API needs (per MSDN).
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::{OpenThread, THREAD_TERMINATE};
+            // SAFETY: `accept_thread_id` was captured at thread
+            // start (see the spawn site below); the OS thread is
+            // guaranteed alive until our `join` completes. Even if
+            // the thread already exited on its own, `OpenThread`
+            // returns NULL which we handle gracefully.
+            let h = OpenThread(THREAD_TERMINATE, 0, self.accept_thread_id);
+            if !h.is_null() {
+                // `CancelSynchronousIo` lives in `Win32_System_IO`.
+                use windows_sys::Win32::System::IO::CancelSynchronousIo;
+                let _ = CancelSynchronousIo(h);
+                let _ = CloseHandle(h);
+            }
+        }
+        // 3. Join — the next loop tick (Unix: ≤ 50 ms; Windows:
+        //    immediately after the cancel above unblocks accept)
+        //    sees the flag, breaks, and the listener's own Drop
+        //    unlinks the socket file. `join()` returning Err means
+        //    the thread panicked; we ignore it (the listener was
+        //    already dropped on the way out).
         if let Some(handle) = self.accept_thread.take() {
             let _ = handle.join();
         }
-        // 3. Best-effort token file cleanup. A crash that reaches
+        // 4. Best-effort token file cleanup. A crash that reaches
         //    process-exit before our Drop runs leaves the token
         //    file orphaned, but a stale token is harmless once the
         //    socket is gone (no listener, no attack surface).
@@ -515,51 +548,76 @@ fn start_asp_listener_session(
     let quit_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let quit_flag_thread = quit_flag.clone();
 
+    // Channel for the accept thread to report its OS thread id back
+    // to the main thread. `Drop` uses the id to call
+    // `CancelSynchronousIo` and unblock the thread parked in
+    // `ConnectNamedPipe`. `sync_channel(1)` keeps the spawn cost
+    // bounded (one slot, no allocation in the common path).
+    let (tid_tx, tid_rx) = std::sync::mpsc::sync_channel::<u32>(1);
+
     let accept_thread = std::thread::Builder::new()
         .name("jian-asp-listener".into())
-        .spawn(move || loop {
-            if quit_flag_thread.load(std::sync::atomic::Ordering::Acquire) {
-                return;
-            }
-            // Named Pipe `accept()` is blocking; the quit-flag
-            // pattern can't interrupt it the way `try_accept` does
-            // on Unix. Drop relies on the parent process exiting
-            // for now — same pragmatic compromise the rest of the
-            // Win32 ecosystem uses for blocking-accept servers.
-            // A future revision can switch to overlapped I/O with
-            // `CancelIoEx` for cleaner shutdown.
-            let mut transport = match listener.accept() {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("jian player: ASP accept ended: {}", e);
+        .spawn(move || {
+            // First action: report our thread id so main can cancel
+            // us at shutdown. Failure to send means the main thread
+            // already gave up before we reported — proceed anyway;
+            // worst case the thread is reaped by process-exit.
+            // SAFETY: GetCurrentThreadId is a stateless thread-
+            // local query; safe to call without preconditions.
+            let tid = unsafe {
+                use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+                GetCurrentThreadId()
+            };
+            let _ = tid_tx.send(tid);
+
+            loop {
+                if quit_flag_thread.load(std::sync::atomic::Ordering::Acquire) {
                     return;
                 }
-            };
-            let session_result = jian_asp::server::run_prod_session_via_bridge(
-                &mut transport,
-                &validator,
-                &bridge,
-                Instant::now(),
-            );
-            if let Err(e) = session_result {
-                eprintln!("jian player: ASP session ended: {}", e);
-            }
-            // Re-arm for the next agent.
-            if let Err(e) = listener.disconnect_and_reuse() {
-                eprintln!(
-                    "jian player: ASP disconnect failed; ending listener: {}",
-                    e
+                // Named Pipe `accept()` is blocking; on shutdown
+                // `AspSession::Drop` calls
+                // `CancelSynchronousIo(thread_handle)` which makes
+                // this call return Err and the loop exit.
+                let mut transport = match listener.accept() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("jian player: ASP accept ended: {}", e);
+                        return;
+                    }
+                };
+                let session_result = jian_asp::server::run_prod_session_via_bridge(
+                    &mut transport,
+                    &validator,
+                    &bridge,
+                    Instant::now(),
                 );
-                return;
+                if let Err(e) = session_result {
+                    eprintln!("jian player: ASP session ended: {}", e);
+                }
+                // Re-arm for the next agent.
+                if let Err(e) = listener.disconnect_and_reuse() {
+                    eprintln!(
+                        "jian player: ASP disconnect failed; ending listener: {}",
+                        e
+                    );
+                    return;
+                }
             }
         })
         .map_err(|e| anyhow!("--asp: spawn listener thread: {}", e))?;
+
+    // Block on the thread reporting its id. `unwrap_or` to a
+    // sentinel `0` value means an unhealthy spawn still produces a
+    // valid (if unjoinable) `AspSession` — Drop then no-ops the
+    // cancel because `OpenThread(0)` returns NULL.
+    let accept_thread_id = tid_rx.recv().unwrap_or(0);
 
     Ok(AspSession {
         drain: std::sync::Mutex::new(Some(drain)),
         quit_flag,
         accept_thread: Some(accept_thread),
         token_path,
+        accept_thread_id,
     })
 }
 
