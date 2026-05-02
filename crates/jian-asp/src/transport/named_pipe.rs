@@ -442,13 +442,21 @@ unsafe fn bind_inner(name: String) -> Result<NamedPipeListener, TransportError> 
         &mut sa,
     );
 
+    // CAPTURE GetLastError() BEFORE LocalFree — `LocalFree` can
+    // overwrite the thread last-error, which would mask the
+    // CreateNamedPipeW failure code (codex C4-B round 3 MEDIUM).
+    let create_err = if handle == INVALID_HANDLE_VALUE {
+        Some(GetLastError())
+    } else {
+        None
+    };
+
     // SECURITY_DESCRIPTOR is process-heap; free now that the
     // kernel has captured it. (`LocalFree` accepts NULL gracefully
     // but `sd` is non-null on this path.)
     LocalFree(sd as *mut _);
 
-    if handle == INVALID_HANDLE_VALUE {
-        let err = GetLastError();
+    if let Some(err) = create_err {
         return Err(TransportError::Io(format!(
             "CreateNamedPipeW({}) failed (code {})",
             name, err
@@ -526,10 +534,13 @@ unsafe fn current_user_sid_string() -> Result<String, TransportError> {
         )));
     }
 
-    // SAFETY: buf is at least `sizeof(TOKEN_USER)` bytes, and the
-    // kernel populated it with a TOKEN_USER struct whose `User.Sid`
-    // points into the same buffer (or is heap-allocated alongside).
-    let token_user = &*(buf.as_ptr() as *const TOKEN_USER);
+    // SAFETY: buf is at least `sizeof(TOKEN_USER)` bytes (the
+    // kernel populated it). `Vec<u8>`'s allocator doesn't guarantee
+    // `align_of::<TOKEN_USER>()`, so we read the SID via
+    // `read_unaligned` rather than forming a misaligned Rust
+    // reference (codex C4-B round 3 MEDIUM — alignment UB).
+    let token_user_ptr = buf.as_ptr() as *const TOKEN_USER;
+    let token_user = std::ptr::read_unaligned(token_user_ptr);
     let sid = token_user.User.Sid;
     if sid.is_null() {
         return Err(TransportError::Io(
