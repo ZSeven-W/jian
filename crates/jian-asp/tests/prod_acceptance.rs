@@ -250,11 +250,15 @@ fn prod_tap_response_does_not_leak_node_id_or_coords() {
         source_node_id
     );
 
-    // `narrative` must NOT contain the source node id (the dev
-    // handler's narrative was `tapped node `<id>` at (X.X, Y.Y)`).
+    // `narrative` must NOT contain the source node id outside the
+    // action id substring (action ids encode the slug, which is
+    // derived from the source node id; the dev handler's narrative
+    // was `tapped node `<id>` at (X.X, Y.Y)` — that's the leak we're
+    // closing).
+    let stripped_narr = out.narrative.replacen(&action_id, "", 1);
     assert!(
-        !out.narrative.contains(&source_node_id),
-        "narrative leaked source node id `{}`: {}",
+        !stripped_narr.contains(&source_node_id),
+        "narrative leaked source node id `{}` outside the action id: {}",
         source_node_id,
         out.narrative
     );
@@ -273,4 +277,148 @@ fn prod_tap_response_does_not_leak_node_id_or_coords() {
         "narrative may have leaked layout-rect coords: {}",
         out.narrative
     );
+}
+
+/// **Bullet 2 (codex round 2 LOW #4): per-verb leak coverage.** The
+/// shared sanitizer is exercised by every prod op verb, but the
+/// previous test only pinned `tap`. This case-set runs every verb
+/// against an action of the right kind and asserts the same
+/// invariants — `target` ≠ schema node id and `narrative` carries
+/// no `digit.digit` substring — so a future divergent path on any
+/// of the four would surface here.
+#[test]
+fn prod_response_does_not_leak_node_id_or_coords_for_each_op_verb() {
+    // A doc with one action of each kind.
+    let doc = r##"{
+      "formatVersion":"1.0","version":"1.0.0","id":"x",
+      "app":{"name":"x","version":"1","id":"x","capabilities":["storage"]},
+      "state":{"count":{"type":"int","default":0},"email":{"type":"string","default":""},"page":{"type":"int","default":0},"step":{"type":"int","default":0}},
+      "children":[
+        { "type":"frame","id":"root","width":480,"height":600,"x":0,"y":0,
+          "children":[
+            { "type":"rectangle","id":"tap-btn","x":0,"y":0,"width":100,"height":40,
+              "events":{"onTap":[{"set":{"$app.count":"$app.count + 1"}}]} },
+            { "type":"rectangle","id":"input-field","x":0,"y":50,"width":300,"height":40,
+              "bindings":{"bind:value":"$state.email"} },
+            { "type":"frame","id":"feed","x":0,"y":100,"width":300,"height":200,
+              "events":{"onScroll":[{"set":{"$app.page":"$app.page + 1"}}]} },
+            { "type":"rectangle","id":"deck","x":0,"y":350,"width":300,"height":200,
+              "events":{
+                "onPanStart":[{"set":{"$app.step":"$app.step"}}],
+                "onPanEnd":[{"set":{"$app.step":"$app.step + 1"}}]
+              } }
+          ]
+        }
+      ]
+    }"##;
+    let mut rt = rt_with(doc);
+    let mut session = Session::new(Permission::Act, "test", "0.1");
+
+    let doc_ref = rt.document.as_ref().unwrap();
+    let actions = derive_actions(&doc_ref.schema, &BUILD_SALT);
+    let _ = doc_ref;
+
+    // Pick one action per source_kind family the prod op verbs handle.
+    let pick = |needle_kind: jian_core::action_surface::SourceKind| -> (String, String) {
+        let a = actions
+            .iter()
+            .find(|a| a.source_kind == needle_kind)
+            .unwrap_or_else(|| panic!("no action with kind {:?} in fixture", needle_kind));
+        (a.full_name(), a.source_node_id.clone())
+    };
+    let (tap_id, tap_node) = pick(jian_core::action_surface::SourceKind::Tap);
+    let (set_id, set_node) = pick(jian_core::action_surface::SourceKind::SetValue);
+    // `onScroll` → `SourceKind::LoadMore` per derive.rs §3.2 (Scroll
+    // is the description-only label; LoadMore is what the projector
+    // actually emits). Both share the `events: ["scroll"]` mapping
+    // so the prod scroll verb's `ProdEvent::Scroll` matches them.
+    let (scroll_id, scroll_node) = pick(jian_core::action_surface::SourceKind::LoadMore);
+    let (swipe_id, swipe_node) = pick(jian_core::action_surface::SourceKind::SwipeLeft);
+
+    let cases: Vec<(&str, Verb, String, String)> = vec![
+        (
+            "tap",
+            Verb::Tap {
+                selector: Selector {
+                    id: Some(tap_id.clone()),
+                    ..Default::default()
+                },
+            },
+            tap_id,
+            tap_node,
+        ),
+        (
+            "type",
+            Verb::Type {
+                selector: Selector {
+                    id: Some(set_id.clone()),
+                    ..Default::default()
+                },
+                text: "x".into(),
+                clear: None,
+            },
+            set_id,
+            set_node,
+        ),
+        (
+            "scroll",
+            Verb::Scroll {
+                selector: Selector {
+                    id: Some(scroll_id.clone()),
+                    ..Default::default()
+                },
+                direction: jian_asp::protocol::ScrollDir::Down,
+                distance: None,
+            },
+            scroll_id,
+            scroll_node,
+        ),
+        (
+            "swipe",
+            Verb::Swipe {
+                selector: Selector {
+                    id: Some(swipe_id.clone()),
+                    ..Default::default()
+                },
+                direction: jian_asp::protocol::ScrollDir::Left,
+                distance: None,
+            },
+            swipe_id,
+            swipe_node,
+        ),
+    ];
+    for (name, verb, action_id, source_node_id) in cases {
+        let (out, _) = dispatch_with_mode(&verb, &mut rt, &mut session, Mode::Prod);
+        // `target` is the action id, not the schema node id.
+        assert_eq!(
+            out.target.as_deref(),
+            Some(action_id.as_str()),
+            "{name}: target should be action id, not schema node id `{source_node_id}`"
+        );
+        // `narrative` mentions the action id (sanitizer's standard
+        // form) and never leaks the schema node id *outside* the
+        // action id substring. The action id's slug is derived from
+        // the source node id (e.g. `global.load_more_feed_aa97`
+        // contains `feed`), so a naive `narrative.contains(node_id)`
+        // would false-positive — strip the action id first.
+        let stripped = out.narrative.replacen(&action_id, "", 1);
+        assert!(
+            !stripped.contains(&source_node_id),
+            "{name}: narrative leaked source node id `{source_node_id}` outside the action id: {}",
+            out.narrative
+        );
+        // No coord-shaped substrings (e.g. `120.0` from a rect).
+        let has_decimal = out.narrative.chars().enumerate().any(|(i, c)| {
+            c == '.'
+                && i > 0
+                && i + 1 < out.narrative.len()
+                && out.narrative.as_bytes()[i - 1].is_ascii_digit()
+                && out.narrative.as_bytes()[i + 1].is_ascii_digit()
+        });
+        assert!(
+            !has_decimal,
+            "{name}: narrative may have leaked layout-rect coords: {}",
+            out.narrative
+        );
+    }
 }

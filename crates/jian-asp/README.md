@@ -86,9 +86,10 @@ shapes; prod ASP is local-only by spec §6.
   structure — `target` is the action id (not the schema node id),
   and `narrative` doesn't include layout-rect coordinates.
 - **Bullet 3**: prod rejects `find` / `inspect` / `snapshot` /
-  `audit` / `set_state` (and the other dev-only verbs) with the
-  stable `UnsupportedVerbInProd` error tag *and* never runs the
-  handler's side-effects.
+  `audit` / `set_state` with the stable `UnsupportedVerbInProd`
+  error tag *and* never runs the handler's side-effects (the
+  in-crate test `prod_mode_rejects_structural_verbs_…` extends
+  the same coverage to `wait_for` / `assert` / `navigate`).
 - **Bullet 9**: dev mode dispatches `list_actions` for portable
   clients.
 
