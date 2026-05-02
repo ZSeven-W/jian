@@ -259,15 +259,22 @@ impl Session {
 }
 
 /// Constant-time byte compare. Returns `true` only if `a` and `b`
-/// are byte-identical and the same length. The wall-clock cost
-/// is `O(max(a.len, b.len))` so a timing attacker can't recover
-/// the secret one byte at a time NOR the expected length.
+/// are byte-identical and the same length. The wall-clock cost is
+/// `O(max(a.len, b.len))` so a timing attacker can't recover the
+/// secret bytes one at a time. **The expected length itself is
+/// observable** — the loop runs `max(a, b)` iterations, so an
+/// attacker probing with candidate lengths *can* still narrow
+/// `len(expected)` (codex C4 round 3 NIT). For ASP this is moot:
+/// the CLI emits a fixed 64-char hex token, so the length is
+/// public by construction. Hosts that wire a variable-length
+/// token format need to either pad to a fixed shape or accept the
+/// length-leak.
 ///
 /// Earlier draft short-circuited on length mismatch, which leaked
-/// `len(expected)` to a timing attacker that probes with various
-/// candidate lengths. The current form always loops to the
-/// longer of the two slices, treating missing bytes as `0` and
-/// folding the length difference into the same accumulator.
+/// the secret bytes one at a time on a length-matched probe. The
+/// current form always loops to the longer of the two slices,
+/// treating missing bytes as `0` and folding the length
+/// difference into the same accumulator.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     let len = a.len().max(b.len());
     let mut acc: u8 = 0;
@@ -386,7 +393,28 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("token");
 
-        for content in ["", "\n", "\r\n", " \n", "\t \n", "  "] {
+        // Six ASCII shapes plus three Unicode whitespace cases
+        // (NO-BREAK SPACE, EM SPACE, IDEOGRAPHIC SPACE — all in
+        // the Unicode `White_Space` table that `String::trim`
+        // covers). BOM (`\u{FEFF}`) and ZERO WIDTH SPACE
+        // (`\u{200B}`) are *not* in `White_Space`, so they don't
+        // trim to empty — they're handled by the constant-time
+        // compare returning `invalid handshake token` instead of
+        // `token unavailable`. We don't pin BOM here because
+        // operators don't typically type BOMs into token files
+        // and the refusal narrative shifting from `unavailable` to
+        // `invalid` isn't a security regression.
+        for content in [
+            "",
+            "\n",
+            "\r\n",
+            " \n",
+            "\t \n",
+            "  ",
+            "\u{00A0}",
+            "\u{2003}\n",
+            "\u{3000}",
+        ] {
             std::fs::write(&path, content).unwrap();
             let v = FileTokenValidator::new(path.clone(), Permission::Act);
             assert_eq!(
