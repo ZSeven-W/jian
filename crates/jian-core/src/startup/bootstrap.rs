@@ -72,6 +72,7 @@ use crate::Runtime;
 use jian_ops_schema::document::PenDocument;
 use jian_ops_schema::font_plan::FontPlan;
 use jian_ops_schema::node::PenNode;
+use jian_ops_schema::pack::initial_layout::InitialLayoutSnapshot;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -168,6 +169,13 @@ struct BootstrapShared {
     core_font_plan: RefCell<Option<FontPlan>>,
     /// Caller-supplied first-frame viewport, in logical pixels.
     viewport: (f32, f32),
+    /// Plan 19 D1 cold-start: optional pre-computed initial layout
+    /// from `aot/initial_layout.bin`. When `Some`, `SeedStateGraph`
+    /// preloads it into the runtime and `ComputeFirstLayout` falls
+    /// through to a no-op — saving the taffy compute on first frame.
+    /// A subsequent resize-driven `build_layout` clears the preload
+    /// and runs a fresh compute, so resize correctness is preserved.
+    aot_initial_layout: Option<InitialLayoutSnapshot>,
 }
 
 /// Host-agnostic DataPath bootstrap. Stateless type — every method
@@ -188,6 +196,26 @@ impl HostAgnosticBootstrap {
         source: BootstrapSource,
         viewport: (f32, f32),
     ) -> BootstrapHandles {
+        Self::install_data_path_with_aot(driver, source, viewport, None)
+    }
+
+    /// Plan 19 D1 cold-start variant: same as
+    /// [`install_data_path`](Self::install_data_path) but accepts an
+    /// optional `aot/initial_layout.bin` snapshot. When `Some`, the
+    /// `SeedStateGraph` phase preloads it into the runtime and
+    /// `ComputeFirstLayout` short-circuits to a no-op — the
+    /// host-supplied viewport at the snapshot's authored size sees
+    /// pre-baked rects on first paint.
+    ///
+    /// Hosts that don't ship a `.op.pack` (or whose pack omits the
+    /// AOT entry) call `install_data_path` and pay the regular
+    /// `ComputeFirstLayout` cost.
+    pub fn install_data_path_with_aot(
+        driver: &mut StartupDriver,
+        source: BootstrapSource,
+        viewport: (f32, f32),
+        aot_initial_layout: Option<InitialLayoutSnapshot>,
+    ) -> BootstrapHandles {
         let shared = Rc::new(BootstrapShared {
             source_text: RefCell::new(None),
             schema: RefCell::new(None),
@@ -196,6 +224,7 @@ impl HostAgnosticBootstrap {
             core_font_plan: RefCell::new(None),
             viewport,
             source,
+            aot_initial_layout,
         });
         // Pre-seed cells from the source variant so the relevant
         // phase impls below short-circuit (their bodies see the
@@ -283,8 +312,29 @@ fn register_seed_state_graph(driver: &mut StartupDriver, shared: &Rc<BootstrapSh
             .as_ref()
             .cloned()
             .ok_or_else(|| "ParseSchema produced no schema".to_owned())?;
-        let runtime = Runtime::new_from_document(schema)
+        let mut runtime = Runtime::new_from_document(schema)
             .map_err(|e| format!("Runtime::new_from_document: {e}"))?;
+        // Plan 19 D1 cold-start: preload the AOT initial-layout
+        // snapshot now so `ComputeFirstLayout` can short-circuit
+        // without racing a future host-side mutation. We feed
+        // `&InitialLayoutSnapshot` so the snapshot stays in the
+        // shared cell for the host (e.g. for diagnostics / replay).
+        //
+        // Codex round 2 MEDIUM: only preload when the snapshot was
+        // baked at the bootstrap's actual first-frame viewport. A
+        // snapshot authored at 800×600 fed into a 320×240 bootstrap
+        // would otherwise skip compute and feed mis-scaled rects
+        // into `BuildVisibleSpatial`. The match uses an f32-bit-
+        // exact comparison because both ends originate from the same
+        // `--size` / pack-manifest source — drift would indicate a
+        // bug, not legitimate flexibility, and the surface contract
+        // only promises the snapshot for the authored viewport.
+        if let Some(snap) = shared.aot_initial_layout.as_ref() {
+            let (vw, vh) = shared.viewport;
+            if snap.viewport.width == vw && snap.viewport.height == vh {
+                let _ = runtime.preload_initial_layout(snap);
+            }
+        }
         *shared.runtime.borrow_mut() = Some(runtime);
         Ok(())
     });
@@ -361,6 +411,27 @@ fn register_compute_first_layout(driver: &mut StartupDriver, shared: &Rc<Bootstr
         let rt = rt_cell
             .as_mut()
             .ok_or_else(|| "SeedStateGraph produced no runtime".to_owned())?;
+        // Plan 19 D1 cold-start: when the bootstrap source carried a
+        // `aot/initial_layout.bin` and `SeedStateGraph` preloaded
+        // it, the runtime already has authoritative first-frame rects
+        // FOR THE SNAPSHOT'S DOCUMENT. Only skip the taffy compute
+        // when the preload covers every node in the active doc — a
+        // partial preload (older pack + newer doc) paired with a
+        // skip would leave the new nodes rect-less in
+        // `BuildVisibleSpatial` (codex round 1 MEDIUM). Coverage
+        // mismatch falls through to a real compute and the partial
+        // preload is dropped first so it can't poison the result.
+        if rt.layout.has_preload() {
+            let covers = rt
+                .document
+                .as_ref()
+                .map(|doc| rt.layout.preload_covers(&doc.tree))
+                .unwrap_or(false);
+            if covers {
+                return Ok(());
+            }
+            rt.layout.drop_preload();
+        }
         rt.build_layout(shared.viewport)
             .map_err(|e| format!("build_layout: {e}"))?;
         Ok(())
@@ -752,5 +823,227 @@ mod tests {
             plan.for_family("Inter").is_some(),
             "empty pages list must fall back to root children, not produce empty plan"
         );
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Plan 19 D1 — AOT initial-layout preload bypasses ComputeFirstLayout
+    // ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn aot_initial_layout_preload_bypasses_compute_first_layout() {
+        // Snapshot baked for both nodes in counter_doc (`root` frame
+        // and `btn` rectangle). Authored rect for `btn` differs from
+        // what taffy compute would produce — after bootstrap runs,
+        // the runtime's `node_rect` must serve the snapshot rect,
+        // proving ComputeFirstLayout was skipped.
+        use jian_ops_schema::pack::initial_layout::{InitialLayoutSnapshot, PackedRect};
+        use jian_ops_schema::pack::manifest::DefaultViewport;
+        use std::collections::BTreeMap;
+
+        let mut rects = BTreeMap::new();
+        rects.insert(
+            "root".to_owned(),
+            PackedRect {
+                x: 0.0,
+                y: 0.0,
+                w: 320.0,
+                h: 240.0,
+            },
+        );
+        rects.insert(
+            "btn".to_owned(),
+            PackedRect {
+                x: 7.0,
+                y: 8.0,
+                w: 9.0,
+                h: 10.0,
+            },
+        );
+        let snap = InitialLayoutSnapshot {
+            viewport: DefaultViewport {
+                width: 320.0,
+                height: 240.0,
+            },
+            rects,
+        };
+
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path_with_aot(
+            &mut driver,
+            BootstrapSource::String(counter_doc().to_owned()),
+            (320.0, 240.0),
+            Some(snap),
+        );
+        let prior = StartupReport::default();
+        block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+            .expect("data path run ok");
+        let rt = handles.take_runtime().expect("runtime present");
+        let key = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+        let r = rt
+            .layout
+            .node_rect(key)
+            .expect("preload-served rect available");
+        // The taffy compute output for counter_doc places `btn` at
+        // (100, 100, 100, 40); the snapshot we supplied placed it at
+        // (7, 8, 9, 10). If ComputeFirstLayout had run, taffy would
+        // have replaced the preload with its own rect.
+        assert_eq!(r.origin.x, 7.0, "preload rect.x served, not compute output");
+        assert_eq!(r.origin.y, 8.0);
+        assert_eq!(r.size.width, 9.0);
+        assert_eq!(r.size.height, 10.0);
+        // And the preload cache is still live.
+        assert!(rt.layout.has_preload());
+    }
+
+    #[test]
+    fn aot_viewport_mismatch_falls_through_to_compute() {
+        // Codex round 2 MEDIUM: snapshot authored at 800×600 fed into
+        // a 320×240 bootstrap would feed mis-scaled rects into the
+        // first-frame spatial / render paths if the preload engaged.
+        // The bootstrap must skip the preload entirely when viewports
+        // disagree.
+        use jian_ops_schema::pack::initial_layout::{InitialLayoutSnapshot, PackedRect};
+        use jian_ops_schema::pack::manifest::DefaultViewport;
+        use std::collections::BTreeMap;
+
+        let mut rects = BTreeMap::new();
+        for id in &["root", "btn"] {
+            rects.insert(
+                (*id).to_owned(),
+                PackedRect {
+                    x: 999.0,
+                    y: 999.0,
+                    w: 1.0,
+                    h: 1.0,
+                },
+            );
+        }
+        let snap = InitialLayoutSnapshot {
+            viewport: DefaultViewport {
+                width: 800.0,
+                height: 600.0,
+            },
+            rects,
+        };
+
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path_with_aot(
+            &mut driver,
+            BootstrapSource::String(counter_doc().to_owned()),
+            (320.0, 240.0), // mismatched on purpose
+            Some(snap),
+        );
+        let prior = StartupReport::default();
+        block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+            .expect("mismatch falls through to compute");
+        let rt = handles.take_runtime().expect("runtime present");
+        // Preload was never installed — ComputeFirstLayout ran.
+        assert!(!rt.layout.has_preload(), "viewport mismatch must skip preload");
+        let btn_key = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+        let r = rt.layout.node_rect(btn_key).expect("compute rect");
+        // The (999, 999) sentinel from the rejected snapshot is gone.
+        assert!(r.origin.x < 500.0 && r.origin.y < 500.0);
+    }
+
+    #[test]
+    fn aot_partial_preload_falls_through_to_compute() {
+        // Codex round 1 MEDIUM: an older pack carrying only `btn`
+        // paired with a doc whose `root` frame must also have a rect
+        // would have silently skipped compute and left `root` rect-
+        // less. The bootstrap must drop the partial preload and run
+        // a real `build_layout` so every doc node lands in the
+        // spatial index.
+        use jian_ops_schema::pack::initial_layout::{InitialLayoutSnapshot, PackedRect};
+        use jian_ops_schema::pack::manifest::DefaultViewport;
+        use std::collections::BTreeMap;
+
+        let mut rects = BTreeMap::new();
+        rects.insert(
+            "btn".to_owned(),
+            PackedRect {
+                x: 7.0,
+                y: 8.0,
+                w: 9.0,
+                h: 10.0,
+            },
+        );
+        let snap = InitialLayoutSnapshot {
+            viewport: DefaultViewport {
+                width: 320.0,
+                height: 240.0,
+            },
+            rects,
+        };
+
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path_with_aot(
+            &mut driver,
+            BootstrapSource::String(counter_doc().to_owned()),
+            (320.0, 240.0),
+            Some(snap),
+        );
+        let prior = StartupReport::default();
+        block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+            .expect("partial-preload bootstrap still completes");
+        let rt = handles.take_runtime().expect("runtime present");
+        // Preload was dropped; taffy compute supplied the rects.
+        assert!(!rt.layout.has_preload(), "partial preload must be dropped");
+        let root_key = rt.document.as_ref().unwrap().tree.get("root").unwrap();
+        let btn_key = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+        // Both nodes have rects (real compute populated taffy).
+        assert!(rt.layout.node_rect(root_key).is_some(), "root has compute rect");
+        let r = rt.layout.node_rect(btn_key).expect("btn has compute rect");
+        // The (7, 8, 9, 10) sentinel from the partial preload is
+        // gone; taffy's real rect dominates.
+        assert!(r.origin.x != 7.0 || r.origin.y != 8.0);
+    }
+
+    #[test]
+    fn aot_preload_does_not_block_resize_relayout() {
+        // After the cold-start preload, a subsequent
+        // `Runtime::build_layout` (i.e. host-driven resize) must
+        // clear the preload and produce a fresh taffy compute. Without
+        // this, the first resize would keep stale AOT rects forever.
+        use jian_ops_schema::pack::initial_layout::{InitialLayoutSnapshot, PackedRect};
+        use jian_ops_schema::pack::manifest::DefaultViewport;
+        use std::collections::BTreeMap;
+
+        let mut rects = BTreeMap::new();
+        rects.insert(
+            "btn".to_owned(),
+            PackedRect {
+                x: 999.0,
+                y: 999.0,
+                w: 1.0,
+                h: 1.0,
+            },
+        );
+        let snap = InitialLayoutSnapshot {
+            viewport: DefaultViewport {
+                width: 320.0,
+                height: 240.0,
+            },
+            rects,
+        };
+
+        let mut driver = StartupDriver::new();
+        let handles = HostAgnosticBootstrap::install_data_path_with_aot(
+            &mut driver,
+            BootstrapSource::String(counter_doc().to_owned()),
+            (320.0, 240.0),
+            Some(snap),
+        );
+        let prior = StartupReport::default();
+        block_on(driver.run_stage(StartupStage::DataPath, &prior, StartupConfig::default()))
+            .unwrap();
+        let mut rt = handles.take_runtime().unwrap();
+        // Simulate a host-driven resize.
+        rt.build_layout((320.0, 240.0)).expect("relayout ok");
+        assert!(!rt.layout.has_preload(), "resize clears AOT preload");
+        let key = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+        let r = rt.layout.node_rect(key).unwrap();
+        // Sanity: post-resize rect is from taffy, not the (999,999)
+        // sentinel snapshot.
+        assert!(r.origin.x < 500.0 && r.origin.y < 500.0);
     }
 }

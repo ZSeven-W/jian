@@ -225,6 +225,14 @@ impl Runtime {
 
         let doc = loader::build_with(schema, &self.state, loader::SeedMode::PreserveExisting)?;
         self.document = Some(doc);
+        // Plan 19 D1 codex round 2 MEDIUM: a stale preload from a
+        // prior `.op.pack` load survives the doc swap and `node_rect`
+        // would serve rects keyed against the OLD slot keys whenever
+        // the new tree happens to fill matching SecondaryMap slots.
+        // Drop the cache unconditionally — hosts that hot-reload to
+        // a doc with a fresh `.op.pack` re-call `preload_initial_layout`
+        // explicitly.
+        self.layout.drop_preload();
         Ok(())
     }
 
@@ -235,6 +243,29 @@ impl Runtime {
             self.layout.compute(root, available)?;
         }
         Ok(())
+    }
+
+    /// Plan 19 D1 cold-start fast path: feed the runtime a pre-computed
+    /// `aot/initial_layout.bin` snapshot so the first paint can skip
+    /// `ComputeFirstLayout`. Returns the number of rects resolved
+    /// against the active document — `0` if no document is loaded yet
+    /// (the snapshot is silently ignored, mirroring `replace_document`'s
+    /// "no panic on stale data" contract).
+    ///
+    /// The host's startup driver typically calls this from inside (or
+    /// just after) `SeedStateGraph` when the bootstrap source carries
+    /// a `.op.pack` whose manifest declares
+    /// [`jian_ops_schema::pack::ENTRY_AOT_INITIAL_LAYOUT`], then
+    /// short-circuits the registered `ComputeFirstLayout` phase to a
+    /// no-op so the snapshot's rects survive into `BuildVisibleSpatial`.
+    pub fn preload_initial_layout(
+        &mut self,
+        snapshot: &jian_ops_schema::pack::initial_layout::InitialLayoutSnapshot,
+    ) -> usize {
+        let Some(doc) = self.document.as_ref() else {
+            return 0;
+        };
+        self.layout.preload_initial(snapshot, &doc.tree)
     }
 
     /// Variant of [`Self::build_layout`] that swaps the layout

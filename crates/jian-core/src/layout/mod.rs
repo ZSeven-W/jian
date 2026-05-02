@@ -19,6 +19,7 @@ pub mod resolve;
 use crate::document::{NodeKey, NodeTree};
 use crate::error::{CoreError, CoreResult};
 use crate::geometry::{rect, Rect};
+use jian_ops_schema::pack::initial_layout::InitialLayoutSnapshot;
 use measure::{default_backend, FontStyleKind, MeasureBackend, MeasureRequest, StyledRun};
 use slotmap::SecondaryMap;
 use std::rc::Rc;
@@ -82,6 +83,12 @@ pub struct LayoutEngine {
     /// accumulate per-parent offsets into an absolute scene coordinate.
     pub(crate) parent: SecondaryMap<NodeKey, NodeKey>,
     pub(crate) measure: Rc<dyn MeasureBackend>,
+    /// Plan 19 D1 cold-start: absolute scene-coord rects loaded from
+    /// `aot/initial_layout.bin` ahead of any taffy compute pass.
+    /// `node_rect` short-circuits against this map so the first paint
+    /// can read pre-baked geometry without touching taffy. Cleared on
+    /// the next `build()` because a relayout invalidates these rects.
+    pub(crate) preload: SecondaryMap<NodeKey, Rect>,
 }
 
 impl LayoutEngine {
@@ -99,6 +106,7 @@ impl LayoutEngine {
             map: SecondaryMap::new(),
             parent: SecondaryMap::new(),
             measure,
+            preload: SecondaryMap::new(),
         }
     }
 
@@ -117,6 +125,10 @@ impl LayoutEngine {
 
     /// Build a taffy tree mirroring the NodeTree. Returns the root NodeIds.
     pub fn build(&mut self, doc_tree: &NodeTree) -> CoreResult<Vec<NodeId>> {
+        // A real taffy compute supersedes any preload snapshot —
+        // post-compute `node_rect` reads must come from taffy, not
+        // stale AOT geometry. Plan 19 D1.
+        self.preload = SecondaryMap::new();
         self.tree = TaffyTree::new();
         self.map = SecondaryMap::new();
         self.parent = SecondaryMap::new();
@@ -174,6 +186,91 @@ impl LayoutEngine {
             .map_err(|e| CoreError::Layout(e.to_string()))
     }
 
+    /// Plan 19 D1 cold-start: load pre-computed first-frame rects from
+    /// `aot/initial_layout.bin` so the very first paint can skip
+    /// `compute_layout_with_measure`. The host calls this between
+    /// `Runtime::new_from_document` and the first `node_rect` read.
+    ///
+    /// Each id in the snapshot is resolved against `doc_tree.by_id`;
+    /// ids absent from the document are silently dropped (the writer
+    /// runs ahead of any document-level mutation, but a `.op.pack`
+    /// landing on a slightly newer schema must not panic). Returns
+    /// the count of rects that were resolved + populated.
+    ///
+    /// The next `build()` clears the preload, so a relayout caused by
+    /// resize / hot-reload falls back to taffy compute as usual.
+    /// Hosts that want to keep the preload across resizes should
+    /// re-call `preload_initial` after the resize-driven `build()`.
+    pub fn preload_initial(
+        &mut self,
+        snapshot: &InitialLayoutSnapshot,
+        doc_tree: &NodeTree,
+    ) -> usize {
+        // Codex follow-up reminder: this is a wholesale replacement,
+        // not a merge — a stale preload from a previous `.op.pack`
+        // load would otherwise serve rects from the old document.
+        self.preload = SecondaryMap::new();
+        let mut count = 0usize;
+        for (id, packed) in snapshot.rects.iter() {
+            let Some(key) = doc_tree.by_id.get(id).copied() else {
+                continue;
+            };
+            let (x, y, w, h) = packed.into_xywh();
+            self.preload.insert(key, rect(x, y, w, h));
+            count += 1;
+        }
+        count
+    }
+
+    /// True when [`Self::preload_initial`] has populated at least one
+    /// rect and no `build()` has cleared the cache since. Hosts use
+    /// this to decide whether to skip the `ComputeFirstLayout`
+    /// startup phase. **Prefer [`Self::preload_covers`]** when
+    /// deciding to short-circuit a real layout pass — partial
+    /// coverage paired with a `ComputeFirstLayout` skip would leave
+    /// new doc nodes rect-less (codex round 1 MEDIUM).
+    pub fn has_preload(&self) -> bool {
+        !self.preload.is_empty()
+    }
+
+    /// Number of preload entries currently cached. `0` after
+    /// `build()` (which clears the preload) or before any call to
+    /// [`Self::preload_initial`].
+    pub fn preload_len(&self) -> usize {
+        self.preload.len()
+    }
+
+    /// True when the cached preload covers every node in `doc_tree`.
+    /// The bootstrap path uses this to gate the `ComputeFirstLayout`
+    /// short-circuit: a partial preload (older `.op.pack` + newer
+    /// `.op` schema, slot keys reused) must NOT skip compute, or
+    /// the new nodes serve `None` from `node_rect` and disappear
+    /// from first-frame spatial / render paths. Plan 19 D1 codex
+    /// round 1 MEDIUM.
+    pub fn preload_covers(&self, doc_tree: &NodeTree) -> bool {
+        if self.preload.len() != doc_tree.nodes.len() {
+            return false;
+        }
+        // Length parity isn't enough: SecondaryMap uses the same
+        // SlotMap key space as `doc_tree.nodes`, but a stale preload
+        // could in theory carry equal-count keys that don't all
+        // belong to the current doc. Verify each doc key has a
+        // preload entry.
+        doc_tree
+            .nodes
+            .keys()
+            .all(|key| self.preload.contains_key(key))
+    }
+
+    /// Drop the cached preload without running a real compute pass.
+    /// Used by the bootstrap when the preload coverage is incomplete:
+    /// the partial cache must not poison the next `node_rect` read,
+    /// and the host runs `build_layout` to populate taffy from
+    /// scratch. Plan 19 D1 codex round 1 MEDIUM.
+    pub fn drop_preload(&mut self) {
+        self.preload = SecondaryMap::new();
+    }
+
     /// Absolute scene-coord rect for `key`: taffy's `layout.location` is
     /// relative to the node's flex parent, so we walk up the parent
     /// chain and accumulate each ancestor's location offset.
@@ -185,6 +282,12 @@ impl LayoutEngine {
     /// "missing layout" early-out) rather than hanging every paint
     /// frame.
     pub fn node_rect(&self, key: NodeKey) -> Option<Rect> {
+        // Plan 19 D1: preload short-circuit. Snapshot rects are
+        // already in absolute scene coords (mirroring `node_rect`'s
+        // post-compute output), so no parent-chain walk is needed.
+        if let Some(r) = self.preload.get(key) {
+            return Some(*r);
+        }
         let id = self.map.get(key)?;
         let l = self.tree.layout(*id).ok()?;
         let (mut ax, mut ay) = (l.location.x, l.location.y);
@@ -375,4 +478,110 @@ fn measure_text_for_taffy(
     };
     let height = known.height.unwrap_or(res.height);
     Size { width, height }
+}
+
+#[cfg(test)]
+mod preload_tests {
+    use super::*;
+    use jian_ops_schema::node::PenNode;
+    use jian_ops_schema::pack::initial_layout::{InitialLayoutSnapshot, PackedRect};
+    use jian_ops_schema::pack::manifest::DefaultViewport;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn rect_node(id: &str) -> PenNode {
+        serde_json::from_value(json!({"type":"rectangle","id":id})).unwrap()
+    }
+
+    fn frame_node(id: &str, children: Vec<PenNode>) -> PenNode {
+        let mut v = json!({"type":"frame","id":id});
+        v["children"] = serde_json::Value::Array(
+            children
+                .into_iter()
+                .map(|c| serde_json::to_value(c).unwrap())
+                .collect(),
+        );
+        serde_json::from_value(v).unwrap()
+    }
+
+    fn snapshot(pairs: &[(&str, [f32; 4])]) -> InitialLayoutSnapshot {
+        let mut rects = BTreeMap::new();
+        for (id, [x, y, w, h]) in pairs {
+            rects.insert(
+                (*id).to_string(),
+                PackedRect {
+                    x: *x,
+                    y: *y,
+                    w: *w,
+                    h: *h,
+                },
+            );
+        }
+        InitialLayoutSnapshot {
+            viewport: DefaultViewport {
+                width: 800.0,
+                height: 600.0,
+            },
+            rects,
+        }
+    }
+
+    #[test]
+    fn preload_serves_node_rect_without_compute() {
+        let mut tree = NodeTree::new();
+        tree.insert_subtree(
+            frame_node("root", vec![rect_node("a"), rect_node("b")]),
+            None,
+        );
+        let snap = snapshot(&[("a", [10.0, 20.0, 100.0, 50.0]), ("b", [10.0, 80.0, 100.0, 50.0])]);
+        let mut engine = LayoutEngine::new();
+        let n = engine.preload_initial(&snap, &tree);
+        assert_eq!(n, 2);
+        assert!(engine.has_preload());
+
+        let key_a = tree.get("a").unwrap();
+        let key_b = tree.get("b").unwrap();
+        assert_eq!(engine.node_rect(key_a), Some(rect(10.0, 20.0, 100.0, 50.0)));
+        assert_eq!(engine.node_rect(key_b), Some(rect(10.0, 80.0, 100.0, 50.0)));
+    }
+
+    #[test]
+    fn preload_drops_ids_absent_from_doc() {
+        let mut tree = NodeTree::new();
+        tree.insert_subtree(rect_node("a"), None);
+        let snap = snapshot(&[("a", [1.0, 2.0, 3.0, 4.0]), ("ghost", [9.0, 9.0, 9.0, 9.0])]);
+        let mut engine = LayoutEngine::new();
+        // Only the doc-resident id resolves; "ghost" is silently
+        // dropped (newer doc, older pack — not a panic case).
+        assert_eq!(engine.preload_initial(&snap, &tree), 1);
+    }
+
+    #[test]
+    fn build_clears_preload() {
+        let mut tree = NodeTree::new();
+        tree.insert_subtree(rect_node("a"), None);
+        let snap = snapshot(&[("a", [1.0, 2.0, 3.0, 4.0])]);
+        let mut engine = LayoutEngine::new();
+        engine.preload_initial(&snap, &tree);
+        assert!(engine.has_preload());
+
+        // A real taffy compute supersedes the preload.
+        let _ = engine.build(&tree).expect("taffy build");
+        assert!(!engine.has_preload());
+    }
+
+    #[test]
+    fn preload_replaces_prior_snapshot() {
+        let mut tree = NodeTree::new();
+        tree.insert_subtree(rect_node("a"), None);
+
+        let mut engine = LayoutEngine::new();
+        engine.preload_initial(&snapshot(&[("a", [1.0, 2.0, 3.0, 4.0])]), &tree);
+        engine.preload_initial(&snapshot(&[("a", [50.0, 60.0, 70.0, 80.0])]), &tree);
+        let key_a = tree.get("a").unwrap();
+        assert_eq!(
+            engine.node_rect(key_a),
+            Some(rect(50.0, 60.0, 70.0, 80.0))
+        );
+    }
 }
