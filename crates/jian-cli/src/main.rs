@@ -286,6 +286,37 @@ pub struct PlayerArgs {
     #[cfg(feature = "prod-asp")]
     #[arg(long = "asp")]
     pub asp: Option<String>,
+    /// Permission tier the connecting agent earns at handshake.
+    /// `observe` is read-only (only `list_actions` / `audit`-style
+    /// verbs reachable; in prod that's `list_actions` + `exit`).
+    /// `act` adds the operation verbs (`tap` / `type` / `scroll` /
+    /// `swipe`). `full` adds direct state writes (`set_state`),
+    /// which prod ASP refuses anyway, so `full` only matters in dev
+    /// builds. Defaults to `act`.
+    #[cfg(feature = "prod-asp")]
+    #[arg(long = "asp-permission", value_parser = parse_asp_permission, default_value = "act")]
+    pub asp_permission: AspPermissionLevel,
+}
+
+#[cfg(feature = "prod-asp")]
+#[derive(Debug, Clone, Copy)]
+pub enum AspPermissionLevel {
+    Observe,
+    Act,
+    Full,
+}
+
+#[cfg(feature = "prod-asp")]
+fn parse_asp_permission(s: &str) -> std::result::Result<AspPermissionLevel, String> {
+    match s.to_lowercase().as_str() {
+        "observe" => Ok(AspPermissionLevel::Observe),
+        "act" => Ok(AspPermissionLevel::Act),
+        "full" => Ok(AspPermissionLevel::Full),
+        other => Err(format!(
+            "unknown --asp-permission `{}` (expected: observe | act | full)",
+            other
+        )),
+    }
 }
 
 #[cfg(feature = "player")]

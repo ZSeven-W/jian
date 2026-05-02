@@ -410,6 +410,49 @@ fn player_help_advertises_asp_flag() {
 // useful guidance.
 #[cfg(all(feature = "player", feature = "prod-asp"))]
 #[test]
+fn player_help_advertises_asp_permission_flag() {
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args(["player", "--help"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--asp-permission"),
+        "expected --asp-permission in help"
+    );
+}
+
+#[cfg(all(feature = "player", feature = "prod-asp"))]
+#[test]
+fn player_asp_permission_rejects_unknown_value() {
+    // clap value-parser stops the run before binding the listener,
+    // so this test is fast and headless.
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "player",
+            "--asp",
+            "auto",
+            "--asp-permission",
+            "godmode",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown --asp-permission"),
+        "expected refusal narrative, got stderr={stderr:?}"
+    );
+}
+
+#[cfg(all(feature = "player", feature = "prod-asp"))]
+#[test]
 fn player_asp_refuses_when_capabilities_absent() {
     let dir = TempDir::new().unwrap();
     // CLEAN_OP fixture has no capabilities — exactly the case we

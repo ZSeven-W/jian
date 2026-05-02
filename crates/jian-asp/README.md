@@ -55,6 +55,24 @@ A misbehaving agent that calls a dev-only verb in prod gets
 the session stays open — the client can self-correct without a
 re-handshake.
 
+## Operator runtime controls
+
+`jian player --asp <path>` writes a per-process token file
+alongside the listener. Two operator-side controls are wired
+through the [`session::FileTokenValidator`]:
+
+- **Revoke**: `rm <token-file>`. The next handshake fails with
+  `token unavailable`; existing sessions stay live until the
+  agent disconnects on its own.
+- **Rotate**: `echo <new-token> > <token-file>`. New connections
+  must use the new secret; old in-flight sessions are unaffected.
+
+The `--asp-permission <observe|act|full>` flag picks the tier the
+listener grants on a successful handshake. Default is `act`
+(allows tap / type / scroll / swipe). Use `observe` to expose
+discovery-only (the agent can call `list_actions` but nothing
+mutating).
+
 ## Transport
 
 `Transport` is a synchronous read-line / write-line trait. Four

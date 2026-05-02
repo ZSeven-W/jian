@@ -98,6 +98,56 @@ impl TokenValidator for StaticTokenValidator {
     }
 }
 
+/// Token validator that re-reads its expected token from a file on
+/// every call. The CLI uses this so the operator can:
+///
+/// - **Revoke** an agent: `rm <token-file>`. The next handshake
+///   fails because the file is missing; existing sessions stay
+///   live until the agent disconnects (revoke is "no new
+///   connections", not "kick in-flight").
+/// - **Rotate** the secret: `echo new > <token-file>`. New
+///   handshakes accept the new token; old sessions stay live.
+///
+/// The constant per-handshake cost is one `read_to_string` of a
+/// ~65-byte file; agents handshake once per session so this is
+/// negligible. The validator never caches — that would defeat the
+/// "reflect file state immediately" property.
+pub struct FileTokenValidator {
+    pub path: std::path::PathBuf,
+    pub grant: Permission,
+}
+
+impl FileTokenValidator {
+    pub fn new(path: impl Into<std::path::PathBuf>, grant: Permission) -> Self {
+        Self {
+            path: path.into(),
+            grant,
+        }
+    }
+}
+
+impl TokenValidator for FileTokenValidator {
+    fn validate(&self, token: &str) -> Result<Permission, &'static str> {
+        // Read the current expected token from disk. Errors collapse
+        // to a stable "token unavailable" reason so the handshake
+        // ack stays opaque (no leak of which file path or which
+        // errno).
+        let expected = match std::fs::read_to_string(&self.path) {
+            Ok(s) => s,
+            Err(_) => return Err("token unavailable"),
+        };
+        // Strip a trailing newline (the CLI's token writer appends
+        // one so an operator can `cat` the file safely). Both
+        // sides are compared in constant time.
+        let expected = expected.trim_end_matches(['\n', '\r']);
+        if constant_time_eq(token.as_bytes(), expected.as_bytes()) {
+            Ok(self.grant)
+        } else {
+            Err("invalid handshake token")
+        }
+    }
+}
+
 /// Volatile session state. The server loop owns one of these
 /// per connection. `audit` is bounded by `audit_capacity`; older
 /// entries fall off the front when the cap is reached.
@@ -262,6 +312,68 @@ mod tests {
         assert!(!constant_time_eq(b"ab", b"a"));
         assert!(constant_time_eq(b"ab", b"ab"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    /// FileTokenValidator: rotate (rewrite the file) is reflected
+    /// on the next `validate` call. No caching.
+    #[test]
+    fn file_validator_re_reads_on_each_call() {
+        let dir = std::env::temp_dir().join(format!(
+            "jian-asp-file-validator-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token");
+        std::fs::write(&path, "first").unwrap();
+        let v = FileTokenValidator::new(path.clone(), Permission::Act);
+        assert_eq!(v.validate("first").unwrap(), Permission::Act);
+
+        // Rotate.
+        std::fs::write(&path, "second").unwrap();
+        assert!(v.validate("first").is_err(), "old token should now fail");
+        assert_eq!(v.validate("second").unwrap(), Permission::Act);
+
+        // Cleanup.
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FileTokenValidator: revoke (remove the file) makes every
+    /// subsequent handshake fail with `token unavailable`.
+    #[test]
+    fn file_validator_treats_missing_file_as_revoked() {
+        let dir = std::env::temp_dir().join(format!(
+            "jian-asp-file-validator-revoke-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token");
+        std::fs::write(&path, "live").unwrap();
+        let v = FileTokenValidator::new(path.clone(), Permission::Observe);
+        assert_eq!(v.validate("live").unwrap(), Permission::Observe);
+
+        // Revoke.
+        std::fs::remove_file(&path).unwrap();
+        let err = v.validate("live").unwrap_err();
+        assert_eq!(err, "token unavailable");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Trailing newline (the CLI writes `<token>\n`) is stripped
+    /// before comparison so an operator's `cat`-friendly file
+    /// works without a special encoding step.
+    #[test]
+    fn file_validator_strips_trailing_newline() {
+        let dir = std::env::temp_dir().join(format!(
+            "jian-asp-file-validator-newline-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("token");
+        std::fs::write(&path, "hello\n").unwrap();
+        let v = FileTokenValidator::new(path, Permission::Act);
+        assert_eq!(v.validate("hello").unwrap(), Permission::Act);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

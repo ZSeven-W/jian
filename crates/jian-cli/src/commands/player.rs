@@ -166,8 +166,10 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // the loaded `.op` doesn't opt in — easier diagnosis than
     // letting the agent connect and hit `ProdCapabilitiesEmpty`.
     #[cfg(feature = "prod-asp")]
+    let asp_permission = map_cli_permission(args.asp_permission);
+    #[cfg(feature = "prod-asp")]
     let _asp_session = match args.asp.as_deref() {
-        Some(arg) => Some(start_asp_listener_session(arg, &host)?),
+        Some(arg) => Some(start_asp_listener_session(arg, &host, asp_permission)?),
         None => None,
     };
 
@@ -183,7 +185,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
                 .unwrap()
                 .take()
                 .expect("drain already moved into host"),
-            jian_asp::session::Permission::Act,
+            asp_permission,
             "jian-player",
             env!("CARGO_PKG_VERSION"),
         ),
@@ -275,6 +277,19 @@ impl Drop for AspSession {
     }
 }
 
+/// Translate the CLI's `--asp-permission` value into the asp-side
+/// `Permission` enum. Pure helper, kept in this module so the CLI
+/// arg type doesn't leak into `jian-asp`.
+#[cfg(feature = "prod-asp")]
+fn map_cli_permission(level: crate::AspPermissionLevel) -> jian_asp::session::Permission {
+    use jian_asp::session::Permission;
+    match level {
+        crate::AspPermissionLevel::Observe => Permission::Observe,
+        crate::AspPermissionLevel::Act => Permission::Act,
+        crate::AspPermissionLevel::Full => Permission::Full,
+    }
+}
+
 /// Bind the listener, write the token file, and spawn the accept
 /// thread. Returns the live session whose lifetime keeps everything
 /// running.
@@ -282,8 +297,9 @@ impl Drop for AspSession {
 fn start_asp_listener_session(
     arg: &str,
     host: &jian_host_desktop::DesktopHost,
+    permission: jian_asp::session::Permission,
 ) -> Result<AspSession> {
-    use jian_asp::session::{Permission, StaticTokenValidator};
+    use jian_asp::session::FileTokenValidator;
     use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
     use std::time::Instant;
 
@@ -363,7 +379,14 @@ fn start_asp_listener_session(
     );
 
     let (bridge, drain) = jian_asp::bridge::channel();
-    let validator = StaticTokenValidator::new(token, Permission::Act);
+    // File-reading validator: the operator can `rm <token-file>`
+    // to revoke (next handshake fails with `token unavailable`) or
+    // `echo new > <token-file>` to rotate (new connections need
+    // the new secret). Existing sessions stay live until the agent
+    // disconnects on its own — revoke is "no new connections", not
+    // "kick in-flight".
+    let _ = token; // path is the source of truth from here on
+    let validator = FileTokenValidator::new(token_path.clone(), permission);
     let quit_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let quit_flag_thread = quit_flag.clone();
 
@@ -480,8 +503,9 @@ fn write_token_file(token_path: &std::path::Path) -> Result<String> {
 fn start_asp_listener_session(
     arg: &str,
     host: &jian_host_desktop::DesktopHost,
+    permission: jian_asp::session::Permission,
 ) -> Result<AspSession> {
-    use jian_asp::session::{Permission, StaticTokenValidator};
+    use jian_asp::session::FileTokenValidator;
     use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
     use std::time::Instant;
 
@@ -544,7 +568,10 @@ fn start_asp_listener_session(
     );
 
     let (bridge, drain) = jian_asp::bridge::channel();
-    let validator = StaticTokenValidator::new(token, Permission::Act);
+    // File-reading validator (operator-revoke + rotate path); see
+    // the Unix branch for design notes.
+    let _ = token;
+    let validator = FileTokenValidator::new(token_path.clone(), permission);
     let quit_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let quit_flag_thread = quit_flag.clone();
 
