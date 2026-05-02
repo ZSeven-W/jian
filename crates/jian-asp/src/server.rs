@@ -325,7 +325,15 @@ pub fn run_prod_session_via_bridge(
     transport: &mut dyn Transport,
     validator: &dyn TokenValidator,
     bridge: &AspBridge,
-    start: Instant,
+    // `_start` carries the `Instant::now()` the caller picked as t=0.
+    // The bridge variant doesn't keep a listener-side audit ring (the
+    // host's `asp_session` is the canonical one — see codex C4
+    // follow-up review LOW #7), so the timestamp is unused here. We
+    // keep the parameter so the function signature stays
+    // structurally identical to `run_prod_session`; a future
+    // revision that adds listener-side telemetry can read it without
+    // breaking call sites.
+    _start: Instant,
 ) -> Result<(), ServerError> {
     // 1. Handshake — same parser as run_prod_session. Token
     //    validation runs locally so the bridge round-trip is
@@ -358,14 +366,26 @@ pub fn run_prod_session_via_bridge(
             return Err(ServerError::AuthFailed(reason.to_owned()));
         }
     };
-    let mut session = Session::new(permission, client, version);
+    // The bridge variant deliberately *doesn't* maintain its own
+    // `Session` post-handshake. Audit accounting is the runtime
+    // thread's responsibility: the host's `with_asp(...)` installs
+    // a long-lived `Session` that `drain_asp_requests` records
+    // outcomes onto, and that's the audit ring an operator
+    // post-mortem reads. A second listener-side ring would be a
+    // duplicate that's discarded when this function returns
+    // (codex C4 follow-up round 1, LOW #7).
+    //
+    // We keep the locals `permission` / `client` / `version` for
+    // the handshake ack narrative + future telemetry hooks; if a
+    // future revision needs listener-side audit, build a `Session`
+    // here with a clear contract about which side owns the ring.
+    let _ = (client, version);
     let ack = OutcomePayload::ok(
         "handshake",
         None,
         format!("handshake ok (prod-bridge), permission={:?}", permission),
     );
     write_response(transport, req.id, &ack)?;
-    session.record_outcome(start.elapsed().as_millis() as u64, &ack);
 
     // 2. Steady state — read line → parse → bridge → write reply.
     loop {
@@ -383,7 +403,6 @@ pub fn run_prod_session_via_bridge(
                 let payload =
                     OutcomePayload::invalid("request", &format!("could not parse request: {}", e));
                 write_response(transport, 0, &payload)?;
-                session.record_outcome(start.elapsed().as_millis() as u64, &payload);
                 continue;
             }
         };
@@ -403,7 +422,6 @@ pub fn run_prod_session_via_bridge(
             }
         };
         write_response(transport, req.id, &resp.payload)?;
-        session.record_outcome(start.elapsed().as_millis() as u64, &resp.payload);
         if resp.control == DispatchControl::Exit {
             return Ok(());
         }

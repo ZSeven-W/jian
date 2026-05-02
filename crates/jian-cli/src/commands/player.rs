@@ -197,8 +197,10 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
 /// Live state of an ASP listener bound to `--asp <path>`. Holding
 /// the value alive keeps the listener thread (and the bridge end
 /// the host's drain talks to) running for the whole `host.run()`
-/// lifetime. Drop tears the listener down, removes the socket and
-/// the token file, and joins the accept thread.
+/// lifetime. Drop sets the quit flag, joins the accept thread, and
+/// removes the token file. The listener's own `Drop` (inside the
+/// joined thread) unlinks the socket + parent dir, so the file
+/// system is clean when the player exits.
 #[cfg(feature = "prod-asp")]
 struct AspSession {
     /// Drain handed off to the host via `with_asp`. Wrapped in
@@ -206,11 +208,14 @@ struct AspSession {
     /// once at host-build time without owning `&mut self` across
     /// the move.
     drain: std::sync::Mutex<Option<jian_asp::bridge::AspDrain>>,
-    /// Listener-side handle the accept thread parks on. Held here so
-    /// the thread's `Drop` removes the socket file + parent dir.
-    /// Wrapped in `Option` so we can move it into the thread on
-    /// spawn while keeping the `AspSession` struct populated.
-    _accept_thread: std::thread::JoinHandle<()>,
+    /// Quit flag the accept thread polls every poll-tick. Set on
+    /// `Drop` so the loop falls out and the listener (held inside
+    /// the thread) drops cleanly — its `Drop` impl unlinks the
+    /// socket file.
+    quit_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// `Option` so `Drop` can `take()` the `JoinHandle` and `join`
+    /// it without borrowing `&mut self` across the move.
+    accept_thread: Option<std::thread::JoinHandle<()>>,
     /// Path to the generated `<socket>.token` file. Removed on drop.
     token_path: std::path::PathBuf,
 }
@@ -218,11 +223,21 @@ struct AspSession {
 #[cfg(feature = "prod-asp")]
 impl Drop for AspSession {
     fn drop(&mut self) {
-        // The listener drops alongside the accept thread; the token
-        // file is ours to clean up explicitly. Best-effort — a
-        // crash leaves the token file orphaned, but a stale token
-        // is harmless once the socket is gone (no listener, no
-        // attack surface).
+        // 1. Signal the accept loop to stop.
+        self.quit_flag
+            .store(true, std::sync::atomic::Ordering::Release);
+        // 2. Join — the next poll tick (≤ 50 ms) sees the flag,
+        //    breaks the loop, and the listener's own Drop unlinks
+        //    the socket file + reaps the parent dir. If the thread
+        //    has somehow already exited (panic), `join()` returns
+        //    Err and we ignore it.
+        if let Some(handle) = self.accept_thread.take() {
+            let _ = handle.join();
+        }
+        // 3. Best-effort token file cleanup. A crash that reaches
+        //    process-exit before our Drop runs leaves the token
+        //    file orphaned, but a stale token is harmless once the
+        //    socket is gone (no listener, no attack surface).
         let _ = std::fs::remove_file(&self.token_path);
     }
 }
@@ -271,13 +286,19 @@ fn start_asp_listener_session(
     }
     let listener = jian_asp::transport::UnixSocketListener::bind(&path)
         .map_err(|e| anyhow!("--asp: {}", e))?;
+    // Non-blocking + poll loop so the accept thread can check the
+    // quit flag (set by `AspSession::Drop`) without blocking
+    // forever in `accept()` when the user closes the player.
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| anyhow!("--asp: set_nonblocking: {}", e))?;
     let socket_path = listener.path().to_path_buf();
 
-    // Token: 32 cryptographic-random bytes from /dev/urandom →
-    // 64-hex string. We avoid pulling in `rand` for this single
-    // call site; std + getrandom-style /dev/urandom read is enough.
-    let token = read_random_token_hex(32)
-        .map_err(|e| anyhow!("--asp: could not generate token: {}", e))?;
+    // Token file path: `<socket>.token` sibling. Lives in the
+    // same parent dir, which `UnixSocketListener::bind` already
+    // mode-locked to 0700, so even with `0644` perms the token
+    // wouldn't be reachable by another local user. The 0600 mode
+    // is belt-and-braces for backup tooling.
     let token_path = {
         let mut p = socket_path.clone();
         p.set_file_name(format!(
@@ -289,19 +310,20 @@ fn start_asp_listener_session(
         ));
         p
     };
-    {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&token_path)
-            .map_err(|e| anyhow!("--asp: write {}: {}", token_path.display(), e))?;
-        f.write_all(token.as_bytes())
-            .and_then(|_| f.write_all(b"\n"))
-            .map_err(|e| anyhow!("--asp: write {}: {}", token_path.display(), e))?;
-    }
+
+    // Generate the token + write the file. On any failure after the
+    // socket bound, drop the listener (which unlinks the socket)
+    // and the partial token file before returning the error so the
+    // file system is clean. (Codex C4-followup round 1 MEDIUM #6.)
+    let token = match write_token_file(&token_path) {
+        Ok(t) => t,
+        Err(e) => {
+            // Listener still owned locally; explicit drop unlinks
+            // the socket + parent dir.
+            drop(listener);
+            return Err(e);
+        }
+    };
     eprintln!(
         "jian player: ASP listening on {} (token file: {})",
         socket_path.display(),
@@ -309,7 +331,9 @@ fn start_asp_listener_session(
     );
 
     let (bridge, drain) = jian_asp::bridge::channel();
-    let validator = StaticTokenValidator::new(token.clone(), Permission::Act);
+    let validator = StaticTokenValidator::new(token, Permission::Act);
+    let quit_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let quit_flag_thread = quit_flag.clone();
 
     // Accept loop: one connection at a time. Concurrent agents are
     // out of scope for prod ASP today (an .op typically has a
@@ -318,16 +342,33 @@ fn start_asp_listener_session(
     let accept_thread = std::thread::Builder::new()
         .name("jian-asp-listener".into())
         .spawn(move || {
+            // 50 ms poll interval — fine-grained enough that
+            // `host.run()` returning unblocks within a frame, but
+            // coarse enough that an idle listener costs negligible
+            // CPU (the syscall is one accept attempt).
+            let poll_interval = std::time::Duration::from_millis(50);
             loop {
-                let mut transport = match listener.accept() {
-                    Ok(t) => t,
+                if quit_flag_thread.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                let mut transport = match listener.try_accept() {
+                    Ok(Some(t)) => t,
+                    Ok(None) => {
+                        // No pending connection — sleep + recheck
+                        // the quit flag.
+                        std::thread::sleep(poll_interval);
+                        continue;
+                    }
                     Err(e) => {
-                        // Listener was dropped or transport-level
-                        // failure. Either way the loop ends.
                         eprintln!("jian player: ASP accept ended: {}", e);
                         return;
                     }
                 };
+                // Each accepted session blocks until the agent
+                // exits or hangs up. The agent's transport is a
+                // brand-new `UnixStream` (blocking by default)
+                // even though the listener is non-blocking; we
+                // want the per-connection read to block normally.
                 let session_result = jian_asp::server::run_prod_session_via_bridge(
                     &mut transport,
                     &validator,
@@ -337,18 +378,70 @@ fn start_asp_listener_session(
                 if let Err(e) = session_result {
                     eprintln!("jian player: ASP session ended: {}", e);
                 }
-                // Loop and accept the next connection. The shared
-                // `bridge` clone lives for the whole listener
-                // lifetime; the host's drain stays the same end.
+                // Loop back and accept the next connection. The
+                // shared `bridge` clone lives for the whole
+                // listener lifetime; the host's drain stays the
+                // same end.
             }
         })
         .map_err(|e| anyhow!("--asp: spawn listener thread: {}", e))?;
 
     Ok(AspSession {
         drain: std::sync::Mutex::new(Some(drain)),
-        _accept_thread: accept_thread,
+        quit_flag,
+        accept_thread: Some(accept_thread),
         token_path,
     })
+}
+
+/// Generate a 32-byte random token from `/dev/urandom`, hex-encode
+/// it, and atomically write it to `token_path` with mode `0o600`.
+/// `create_new(true)` refuses to clobber an existing file — a
+/// pre-existing token from a crashed prior run is suspicious and
+/// reusing it would silently grant the old token's bearer access
+/// to the new session.
+///
+/// On any failure after the file was created, removes the partial
+/// file before returning so the caller's listener-drop cleanup
+/// leaves nothing behind.
+#[cfg(all(unix, feature = "prod-asp"))]
+fn write_token_file(token_path: &std::path::Path) -> Result<String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let token = read_random_token_hex(32)
+        .map_err(|e| anyhow!("--asp: could not generate token: {}", e))?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        // `create_new(true)` is `O_EXCL` on Unix — refuses if the
+        // file already exists, including a stale token from a
+        // crashed run. Operator must `rm` the stale file first;
+        // safer than silently reusing it (codex C4 follow-up
+        // round 1 MEDIUM #3).
+        .create_new(true)
+        .mode(0o600)
+        .open(token_path)
+        .map_err(|e| anyhow!(
+            "--asp: write {}: {} \
+             (if a previous run crashed, remove the stale token file and retry)",
+            token_path.display(),
+            e
+        ))?;
+    let written = f
+        .write_all(token.as_bytes())
+        .and_then(|_| f.write_all(b"\n"));
+    if let Err(e) = written {
+        // Partial write — drop the file handle and remove the
+        // half-written file before propagating.
+        drop(f);
+        let _ = std::fs::remove_file(token_path);
+        return Err(anyhow!(
+            "--asp: write {}: {} (partial write removed)",
+            token_path.display(),
+            e
+        ));
+    }
+    Ok(token)
 }
 
 #[cfg(all(windows, feature = "prod-asp"))]

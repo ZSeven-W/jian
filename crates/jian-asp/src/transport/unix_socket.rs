@@ -168,6 +168,30 @@ impl UnixSocketListener {
         UnixSocketTransport::from_stream(stream)
     }
 
+    /// Switch the listener into non-blocking mode (Plan 18 C4
+    /// follow-up: the CLI accept thread polls + checks a quit flag
+    /// so `host.run()` returning can join cleanly without leaking
+    /// a thread blocked on `accept()`). Idempotent — safe to call
+    /// after construction.
+    pub fn set_nonblocking(&self, nonblocking: bool) -> Result<(), TransportError> {
+        self.listener
+            .set_nonblocking(nonblocking)
+            .map_err(|e| TransportError::Io(format!("set_nonblocking: {}", e)))
+    }
+
+    /// Try to accept one connection without blocking. Returns
+    /// `Ok(None)` when there's no pending connection (the listener
+    /// must be in non-blocking mode for this to ever succeed —
+    /// callers pair this with [`set_nonblocking`]). `Ok(Some(_))`
+    /// for an accepted connection; `Err` for a real I/O failure.
+    pub fn try_accept(&self) -> Result<Option<UnixSocketTransport>, TransportError> {
+        match self.listener.accept() {
+            Ok((stream, _addr)) => Ok(Some(UnixSocketTransport::from_stream(stream)?)),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(TransportError::Io(format!("accept: {}", e))),
+        }
+    }
+
     /// The fully-resolved path the listener is bound to. Useful for
     /// the CLI to print so the agent client knows where to dial.
     pub fn path(&self) -> &Path {
