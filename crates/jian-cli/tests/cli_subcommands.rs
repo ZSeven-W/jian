@@ -403,6 +403,41 @@ fn player_help_advertises_asp_flag() {
     assert!(stdout.contains("--asp"), "expected --asp in help");
 }
 
+// Plan 18 ASP prod mode (C4 step 3 follow-up): the listener now
+// gates on `app.capabilities` before binding, so a `.op` without
+// capabilities refuses with a clear narrative. Pin both the
+// rejection and the spec-section reference so the operator gets
+// useful guidance.
+#[cfg(all(feature = "player", feature = "prod-asp"))]
+#[test]
+fn player_asp_refuses_when_capabilities_absent() {
+    let dir = TempDir::new().unwrap();
+    // CLEAN_OP fixture has no capabilities — exactly the case we
+    // want to catch.
+    let path = write_tmp(&dir, "anything.op", CLEAN_OP);
+    let sock = dir.path().join("asp.sock");
+    let out = Command::cargo_bin("jian")
+        .unwrap()
+        .args([
+            "player",
+            "--asp",
+            sock.to_str().unwrap(),
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("`app.capabilities` is empty or absent"),
+        "expected capability-refusal narrative, got stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("Plan 18 spec §4"),
+        "expected spec-section reference for operator follow-up, got stderr={stderr:?}"
+    );
+}
+
 #[test]
 fn pack_then_unpack_roundtrips_app_op() {
     let dir = TempDir::new().unwrap();

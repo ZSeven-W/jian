@@ -155,77 +155,228 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     let host = install_updater_from_doc(host);
 
     // Plan 18 ASP prod mode / C4: if `--asp <arg>` was passed, bind
-    // the listener BEFORE entering the winit event loop. We bind
-    // here (not inside the host) so a misconfigured path
-    // (`tcp://...`, a regular file the user typed by mistake,
-    // missing `XDG_RUNTIME_DIR` *and* unreadable `/tmp`) fails
-    // fast with a CLI-level error rather than killing the
-    // already-running render thread.
+    // the listener + spawn the accept thread BEFORE entering the
+    // winit event loop. The CLI generates a per-session secret,
+    // writes it to a `<socket>.token` file (mode 0600), and hands
+    // the bridge to the host so `about_to_wait` can drain pending
+    // verbs against the live runtime.
     //
-    // Live wiring of the accept loop into the runtime is a follow-up
-    // commit (`run_prod_session` needs `&mut Runtime`, which winit
-    // owns once `host.run()` is called). This commit lands the
-    // transport + flag plumbing so C4's deliverables are in tree
-    // and a packager who needs prod ASP can validate the path
-    // resolution / refusal contract today.
+    // Pre-flight check: prod ASP requires `app.capabilities` to be
+    // non-empty (spec §4 / C3b). Refuse to start the listener if
+    // the loaded `.op` doesn't opt in — easier diagnosis than
+    // letting the agent connect and hit `ProdCapabilitiesEmpty`.
     #[cfg(feature = "prod-asp")]
-    let _asp_listener = match args.asp.as_deref() {
-        Some(arg) => Some(bind_asp_listener(arg)?),
+    let _asp_session = match args.asp.as_deref() {
+        Some(arg) => Some(start_asp_listener_session(arg, &host)?),
         None => None,
+    };
+
+    #[cfg(feature = "prod-asp")]
+    let host = match _asp_session.as_ref() {
+        Some(s) => host.with_asp(
+            // SAFETY: `_asp_session` keeps the bridge alive; we hand
+            // the drain to the host and the listener thread keeps
+            // its bridge clone. The drain is `!Clone` so we can
+            // only install it once.
+            s.drain
+                .lock()
+                .unwrap()
+                .take()
+                .expect("drain already moved into host"),
+            jian_asp::session::Permission::Act,
+            "jian-player",
+            env!("CARGO_PKG_VERSION"),
+        ),
+        None => host,
     };
 
     host.run().map_err(|e| anyhow!("event loop error: {}", e))?;
     Ok(ExitCode::SUCCESS)
 }
 
-/// Resolve `--asp <arg>` and bind a local-only listener. Returns the
-/// listener so the caller can keep it alive (and print the path).
-/// Errors here surface verbatim from the CLI as
-/// `jian: error: --asp: ...`.
-#[cfg(all(unix, feature = "prod-asp"))]
-fn bind_asp_listener(arg: &str) -> Result<jian_asp::transport::UnixSocketListener> {
-    use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
+/// Live state of an ASP listener bound to `--asp <path>`. Holding
+/// the value alive keeps the listener thread (and the bridge end
+/// the host's drain talks to) running for the whole `host.run()`
+/// lifetime. Drop tears the listener down, removes the socket and
+/// the token file, and joins the accept thread.
+#[cfg(feature = "prod-asp")]
+struct AspSession {
+    /// Drain handed off to the host via `with_asp`. Wrapped in
+    /// `Mutex<Option<_>>` so the surrounding code can `.take()` it
+    /// once at host-build time without owning `&mut self` across
+    /// the move.
+    drain: std::sync::Mutex<Option<jian_asp::bridge::AspDrain>>,
+    /// Listener-side handle the accept thread parks on. Held here so
+    /// the thread's `Drop` removes the socket file + parent dir.
+    /// Wrapped in `Option` so we can move it into the thread on
+    /// spawn while keeping the `AspSession` struct populated.
+    _accept_thread: std::thread::JoinHandle<()>,
+    /// Path to the generated `<socket>.token` file. Removed on drop.
+    token_path: std::path::PathBuf,
+}
 
+#[cfg(feature = "prod-asp")]
+impl Drop for AspSession {
+    fn drop(&mut self) {
+        // The listener drops alongside the accept thread; the token
+        // file is ours to clean up explicitly. Best-effort — a
+        // crash leaves the token file orphaned, but a stale token
+        // is harmless once the socket is gone (no listener, no
+        // attack surface).
+        let _ = std::fs::remove_file(&self.token_path);
+    }
+}
+
+/// Bind the listener, write the token file, and spawn the accept
+/// thread. Returns the live session whose lifetime keeps everything
+/// running.
+#[cfg(all(unix, feature = "prod-asp"))]
+fn start_asp_listener_session(
+    arg: &str,
+    host: &jian_host_desktop::DesktopHost,
+) -> Result<AspSession> {
+    use jian_asp::session::{Permission, StaticTokenValidator};
+    use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::Instant;
+
+    // Path-shape validation runs first so a typo'd `--asp tcp://...`
+    // refuses with a clear arg-parsing error regardless of the
+    // loaded doc. Capability + bind happen after — by then the
+    // operator at least knows the path is well-formed.
     let target = resolve_bind_arg(arg, std::process::id(), |k| std::env::var(k).ok())
         .map_err(|e| anyhow!("--asp: {}", e))?;
     let BindTarget::UnixSocket(path) = target else {
-        // Unreachable on unix — `resolve_bind_arg` always picks
-        // UnixSocket here. Treat as a hard error to keep the type
-        // exhaustive without a panic.
         return Err(anyhow!("--asp: internal: unexpected bind target on unix"));
     };
+
+    // Capability gate: refuse to start the listener if the loaded
+    // doc has no `app.capabilities`. Same check `run_prod_session`
+    // applies at session-start; surfacing it now produces a clear
+    // CLI error rather than a confusing per-connection refusal
+    // after the operator has already run the agent.
+    let capabilities_opt_in = host
+        .runtime
+        .document
+        .as_ref()
+        .and_then(|d| d.schema.app.as_ref())
+        .and_then(|a| a.capabilities.as_ref())
+        .is_some_and(|caps| !caps.is_empty());
+    if !capabilities_opt_in {
+        return Err(anyhow!(
+            "--asp: refusing to start listener — `app.capabilities` is empty or absent. \
+             Prod ASP requires the .op author to declare at least one capability \
+             (Plan 18 spec §4)."
+        ));
+    }
     let listener = jian_asp::transport::UnixSocketListener::bind(&path)
         .map_err(|e| anyhow!("--asp: {}", e))?;
+    let socket_path = listener.path().to_path_buf();
+
+    // Token: 32 cryptographic-random bytes from /dev/urandom →
+    // 64-hex string. We avoid pulling in `rand` for this single
+    // call site; std + getrandom-style /dev/urandom read is enough.
+    let token = read_random_token_hex(32)
+        .map_err(|e| anyhow!("--asp: could not generate token: {}", e))?;
+    let token_path = {
+        let mut p = socket_path.clone();
+        p.set_file_name(format!(
+            "{}.token",
+            socket_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("asp.sock")
+        ));
+        p
+    };
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&token_path)
+            .map_err(|e| anyhow!("--asp: write {}: {}", token_path.display(), e))?;
+        f.write_all(token.as_bytes())
+            .and_then(|_| f.write_all(b"\n"))
+            .map_err(|e| anyhow!("--asp: write {}: {}", token_path.display(), e))?;
+    }
     eprintln!(
-        "jian player: ASP socket bound at {} \
-         (NOTE: accept loop not yet wired into the event loop — \
-         clients that connect will block until follow-up commit)",
-        listener.path().display()
+        "jian player: ASP listening on {} (token file: {})",
+        socket_path.display(),
+        token_path.display()
     );
-    Ok(listener)
+
+    let (bridge, drain) = jian_asp::bridge::channel();
+    let validator = StaticTokenValidator::new(token.clone(), Permission::Act);
+
+    // Accept loop: one connection at a time. Concurrent agents are
+    // out of scope for prod ASP today (an .op typically has a
+    // single live agent); a future revision can spawn per-conn
+    // threads off this loop.
+    let accept_thread = std::thread::Builder::new()
+        .name("jian-asp-listener".into())
+        .spawn(move || {
+            loop {
+                let mut transport = match listener.accept() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        // Listener was dropped or transport-level
+                        // failure. Either way the loop ends.
+                        eprintln!("jian player: ASP accept ended: {}", e);
+                        return;
+                    }
+                };
+                let session_result = jian_asp::server::run_prod_session_via_bridge(
+                    &mut transport,
+                    &validator,
+                    &bridge,
+                    Instant::now(),
+                );
+                if let Err(e) = session_result {
+                    eprintln!("jian player: ASP session ended: {}", e);
+                }
+                // Loop and accept the next connection. The shared
+                // `bridge` clone lives for the whole listener
+                // lifetime; the host's drain stays the same end.
+            }
+        })
+        .map_err(|e| anyhow!("--asp: spawn listener thread: {}", e))?;
+
+    Ok(AspSession {
+        drain: std::sync::Mutex::new(Some(drain)),
+        _accept_thread: accept_thread,
+        token_path,
+    })
 }
 
 #[cfg(all(windows, feature = "prod-asp"))]
-fn bind_asp_listener(arg: &str) -> Result<jian_asp::transport::NamedPipeListener> {
-    use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
-
-    let target = resolve_bind_arg(arg, std::process::id(), |k| std::env::var(k).ok())
-        .map_err(|e| anyhow!("--asp: {}", e))?;
-    let BindTarget::NamedPipe(name) = target else {
-        return Err(anyhow!(
-            "--asp: internal: unexpected bind target on windows"
-        ));
-    };
-    let listener = jian_asp::transport::NamedPipeListener::bind(&name)
-        .map_err(|e| anyhow!("--asp: {}", e))?;
-    eprintln!(
-        "jian player: ASP pipe bound at {} \
-         (NOTE: accept loop not yet wired into the event loop — \
-         clients that connect will block until follow-up commit)",
-        listener.name()
-    );
-    Ok(listener)
+fn start_asp_listener_session(
+    _arg: &str,
+    _host: &jian_host_desktop::DesktopHost,
+) -> Result<AspSession> {
+    Err(anyhow!(
+        "--asp on Windows: not yet implemented — Named Pipe transport is a stub. \
+         Tracking issue: jian-asp/src/transport/named_pipe.rs"
+    ))
 }
+
+/// Read `n` cryptographic-random bytes from `/dev/urandom` and
+/// hex-encode them. We avoid pulling in `rand` for one helper.
+#[cfg(all(unix, feature = "prod-asp"))]
+fn read_random_token_hex(n: usize) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut buf = vec![0u8; n];
+    let mut f = std::fs::File::open("/dev/urandom")?;
+    f.read_exact(&mut buf)?;
+    let mut hex = String::with_capacity(n * 2);
+    for b in buf {
+        hex.push_str(&format!("{:02x}", b));
+    }
+    Ok(hex)
+}
+
 
 /// Resolve a CLI argument that may be either a filesystem path or a
 /// `file://` / `jian://` URI (see `packaging/linux/jian.desktop`'s
