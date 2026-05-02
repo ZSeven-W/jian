@@ -10,10 +10,20 @@
 //! Security boundary (spec §6: "Windows should use a Named Pipe
 //! such as `\\.\pipe\jian\<pid>\asp` with a current-user ACL only"):
 //!
-//! - The pipe is created with an SDDL string `D:(A;;GA;;;OW)` —
-//!   one ACE granting `GENERIC_ALL` to the *owner* (current user
-//!   token). The Named Pipe namespace is global within a session,
-//!   so the DACL is the security boundary.
+//! - We pass `lpSecurityAttributes = NULL` to `CreateNamedPipeW`,
+//!   which means the pipe inherits the **default DACL of the
+//!   creating process's token**. Per Microsoft's ACL docs, that
+//!   default grants access to the user who created the object,
+//!   the LocalSystem account, and members of the Administrators
+//!   group — the canonical "user-private" pattern on Windows.
+//!   No other user account can open the pipe.
+//!
+//!   We considered an explicit SDDL string (`D:(A;;GA;;;OW)`)
+//!   but the `OW` (OWNER) SID resolves to the token's *default
+//!   owner SID*, which on an admin token is the Administrators
+//!   group — broader than the operator typically expects. The
+//!   default DACL is the cleaner, well-understood pattern.
+//!
 //! - `nMaxInstances = 1` keeps a second `CreateNamedPipeW` from
 //!   stealing the name. A duplicate-bind attempt fails with
 //!   `ERROR_PIPE_BUSY` (or `ERROR_ACCESS_DENIED` if the user
@@ -46,22 +56,17 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 #[cfg(windows)]
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, FALSE, HANDLE, INVALID_HANDLE_VALUE},
-    Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW,
-    Security::{LocalFree, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES},
-    Storage::FileSystem::{ReadFile, WriteFile, FlushFileBuffers, FILE_FLAG_FIRST_PIPE_INSTANCE},
+    Foundation::{
+        CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, FALSE, HANDLE, INVALID_HANDLE_VALUE,
+    },
+    Storage::FileSystem::{
+        FlushFileBuffers, ReadFile, WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
+    },
     System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_ACCESS_DUPLEX,
-        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+        ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
     },
 };
-
-/// SDDL granting GENERIC_ALL to the pipe creator (the current user)
-/// only. `D:` introduces the DACL; `(A;;GA;;;OW)` is one Allow ACE
-/// (`A`) with `GENERIC_ALL` (`GA`) for the OWNER (`OW`). No other
-/// ACEs → no other principals can open the pipe.
-#[cfg(windows)]
-const SDDL_OWNER_ONLY: &str = "D:(A;;GA;;;OW)";
 
 /// Buffer size advertised to `CreateNamedPipeW` for the in/out pipe
 /// queues. 64 KiB is plenty for ASP's NDJSON line shape (the largest
@@ -367,46 +372,22 @@ fn write_all(handle: HANDLE, buf: &[u8]) -> Result<(), TransportError> {
 
 /// The unsafe-FFI core of `bind`. Kept narrow so the public method
 /// can stay a thin wrapper and the unsafe footprint is auditable.
+///
+/// Passes `lpSecurityAttributes = NULL` so the pipe inherits the
+/// default DACL of the creating process's token (user-private +
+/// Admins + LocalSystem — the canonical "user-private" pattern).
 #[cfg(windows)]
 unsafe fn bind_inner(name: String) -> Result<NamedPipeListener, TransportError> {
-    // 1. Build a SECURITY_DESCRIPTOR from the SDDL string. The
-    //    descriptor + DACL it owns lives in process heap; we hold
-    //    onto the pointer for the lifetime of the
-    //    SECURITY_ATTRIBUTES we hand to CreateNamedPipeW, then
-    //    `LocalFree` it after the create call returns.
-    let sddl_w: Vec<u16> = OsStr::new(SDDL_OWNER_ONLY)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
-    let conv_ok = ConvertStringSecurityDescriptorToSecurityDescriptorW(
-        sddl_w.as_ptr(),
-        1, // SDDL_REVISION_1
-        &mut sd,
-        std::ptr::null_mut(),
-    );
-    if conv_ok == FALSE {
-        let err = GetLastError();
-        return Err(TransportError::Io(format!(
-            "ConvertStringSecurityDescriptorToSecurityDescriptorW failed (code {})",
-            err
-        )));
-    }
-    let mut sa = SECURITY_ATTRIBUTES {
-        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: sd as *mut _,
-        bInheritHandle: FALSE,
-    };
-
-    // 2. Encode the pipe name as wide UTF-16 + null terminator.
+    // Encode the pipe name as wide UTF-16 + null terminator.
     let name_w: Vec<u16> = OsStr::new(&name)
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
 
-    // 3. Create the pipe. `FILE_FLAG_FIRST_PIPE_INSTANCE` refuses
-    //    if the name is already taken — analogous to the Unix
-    //    transport's stale-socket check.
+    // Create the pipe. `FILE_FLAG_FIRST_PIPE_INSTANCE` refuses if
+    // the name is already taken — analogous to the Unix transport's
+    // stale-socket check. NULL `lpSecurityAttributes` → kernel uses
+    // the default DACL from the token (user + Admins + LocalSystem).
     let handle = CreateNamedPipeW(
         name_w.as_ptr(),
         PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -415,12 +396,8 @@ unsafe fn bind_inner(name: String) -> Result<NamedPipeListener, TransportError> 
         PIPE_BUFFER_BYTES,
         PIPE_BUFFER_BYTES,
         0, // default 50ms client timeout for WaitNamedPipe; unused here
-        &mut sa,
+        std::ptr::null_mut(),
     );
-
-    // SECURITY_DESCRIPTOR is owned by us via the conversion call;
-    // free now that CreateNamedPipeW has captured what it needed.
-    let _ = LocalFree(sd as *mut _);
 
     if handle == INVALID_HANDLE_VALUE {
         let err = GetLastError();
