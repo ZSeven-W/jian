@@ -316,7 +316,7 @@ against `main`'s most recent green baseline (15% regression threshold,
 
 **Up next (each warrants its own session):**
 
-- ⏳ Plan 19 follow-ups — `aot/expressions.bin` precompiled bytecode (blocked on `jian_core::expression::Chunk: Serialize` refactor); `.op.pack` archive reader in the player path so a published pack actually drives `install_data_path_with_aot` end-to-end (today the runtime hooks are wired and tested but the player still loads raw `.op` only)
+- ⏳ Plan 19 follow-ups — `aot/expressions.bin` precompiled bytecode (blocked on `jian_core::expression::Chunk: Serialize` refactor). The `.op.pack` archive reader landed: `jian player path/to/foo.op.pack` now opens the zip, validates the typed manifest, threads the initial-layout snapshot through `install_data_path_with_aot`, and overlays the default-state snapshot via `restore_default_state` (gated by recursive type-and-shape compatibility against a fresh schema seed).
 - ⏳ Plan 8 §T8 — Windows `WM_COPYDATA` hidden-window `WindowProc` + named-mutex single-instance forwarding so `jian://` URL-scheme registration can flip back on across all three platforms (macOS receiver shipped above)
 - ⏳ Plan 8 / 11 / 12 — GPU surface factories (Metal · D3D12 · OpenGL / WebGL · Vulkan); each backend warrants its own session against real hardware (CAMetalLayer drawable lifecycle, IDXGI swapchain present cadence, GL context current, Vulkan surface/swapchain). Existing `surface/{metal,d3d,gl}.rs` skeletons return `Err("…not yet implemented…")` with full implementation outlines.
 - ⏳ Plan 11 — OpenPencil canvas swap (replace `pen-renderer` via `napi-rs`)

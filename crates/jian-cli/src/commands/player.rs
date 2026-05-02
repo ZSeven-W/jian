@@ -6,6 +6,7 @@
 //! pulls in winit + softbuffer (CPU-side pixel present) under its own
 //! `run` feature — no per-platform GPU plumbing required.
 
+use crate::pack_reader::{looks_like_op_pack, read_op_pack, snapshot_extra_keys, PackContents};
 use crate::PlayerArgs;
 use anyhow::{anyhow, Context, Result};
 use jian_core::geometry::size;
@@ -16,10 +17,21 @@ use jian_core::startup::{
 use jian_core::Runtime;
 use jian_host_desktop::host::HostConfig;
 use jian_host_desktop::DesktopHost;
+use jian_ops_schema::document::PenDocument;
 use jian_ops_schema::load_str;
+use jian_ops_schema::pack::{DefaultStateSnapshot, InitialLayoutSnapshot};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+
+/// Output of the `.op.pack` vs raw-`.op` branch at the top of
+/// `player::run`. Kept private so callers don't accidentally build
+/// one without going through the load path.
+struct LoadedSource {
+    schema: PenDocument,
+    initial_layout: Option<InitialLayoutSnapshot>,
+    default_state: Option<DefaultStateSnapshot>,
+}
 
 pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // The Linux `.desktop` registers `Exec=jian player %U`, which
@@ -33,11 +45,41 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     //   need the running runtime's URL handler); error early.
     // - anything else → treat as a filesystem path verbatim.
     let resolved_path = resolve_path_arg(&args.path)?;
-    let src = fs::read_to_string(&resolved_path)
-        .with_context(|| format!("read {}", resolved_path.display()))?;
-    let schema = load_str(&src)
-        .with_context(|| format!("parse {}", resolved_path.display()))?
-        .value;
+    // Plan 19 D1 end-to-end: branch on `.op.pack` extension. A pack
+    // archive carries the parsed schema plus optional AOT entries
+    // (`aot/initial_layout.bin` + `aot/default_state.bin`); the
+    // bootstrap below threads them through `install_data_path_with_aot`
+    // so the runtime can skip `ComputeFirstLayout` and re-seed the
+    // StateGraph from the canonical snapshot. A raw `.op` falls
+    // through to the original load path with both AOT slots `None`.
+    let LoadedSource {
+        schema,
+        initial_layout,
+        default_state,
+    } = if looks_like_op_pack(&resolved_path) {
+        let PackContents {
+            schema,
+            initial_layout,
+            default_state,
+        } = read_op_pack(&resolved_path)
+            .with_context(|| format!("read pack {}", resolved_path.display()))?;
+        LoadedSource {
+            schema,
+            initial_layout,
+            default_state,
+        }
+    } else {
+        let src = fs::read_to_string(&resolved_path)
+            .with_context(|| format!("read {}", resolved_path.display()))?;
+        let schema = load_str(&src)
+            .with_context(|| format!("parse {}", resolved_path.display()))?
+            .value;
+        LoadedSource {
+            schema,
+            initial_layout: None,
+            default_state: None,
+        }
+    };
 
     // Title priority: --title > schema.app.name > file stem > "Jian".
     let title = args
@@ -105,11 +147,29 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // timeline is monotonic).
     let launch_epoch = std::time::Instant::now();
     let mut driver = StartupDriver::new();
-    let bootstrap = HostAgnosticBootstrap::install_data_path(
-        &mut driver,
-        BootstrapSource::Schema(Box::new(schema)),
-        (w, h),
-    );
+    // Plan 19 D1: when the source was a `.op.pack` carrying a
+    // pre-baked initial-layout snapshot, feed it through the AOT
+    // bootstrap variant so `SeedStateGraph` preloads it and
+    // `ComputeFirstLayout` can short-circuit (only when coverage is
+    // total + viewport bit-matches; partial / mismatched coverage
+    // falls through to a real compute, see jian-core's
+    // `install_data_path_with_aot` doc). A raw `.op` source has
+    // `initial_layout == None` and we use the regular
+    // `install_data_path` entry so the bootstrap's behaviour is
+    // unchanged.
+    let bootstrap = match initial_layout {
+        Some(snap) => HostAgnosticBootstrap::install_data_path_with_aot(
+            &mut driver,
+            BootstrapSource::Schema(Box::new(schema)),
+            (w, h),
+            Some(snap),
+        ),
+        None => HostAgnosticBootstrap::install_data_path(
+            &mut driver,
+            BootstrapSource::Schema(Box::new(schema)),
+            (w, h),
+        ),
+    };
     // Capture the offset between launch_epoch and the DataPath
     // stage's t0 (the moment block_on enters run_filtered) so the
     // recorded `started_at_ms` values can be rebased into the
@@ -132,6 +192,34 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     let rt = bootstrap
         .take_runtime()
         .ok_or_else(|| anyhow!("data-path bootstrap did not produce a runtime"))?;
+    // Plan 19 D1: pack-supplied AOT default-state overlays the
+    // schema-default seed (`SeedStateGraph` already ran by this
+    // point). Restore reuses Signal slot identity so binding
+    // subscribers wired during `SeedStateGraph` survive the AOT
+    // overlay — see `StateGraph::restore_default_state`.
+    //
+    // Codex round 1 MEDIUM #4: a stale snapshot (older `.op.pack`
+    // paired with a newer `.op` schema that dropped a key) would
+    // silently re-introduce ghost signals via the additive
+    // `*_set` setters. Gate the restore on "snapshot is a subset
+    // of what the schema just seeded"; on mismatch warn + skip
+    // the whole restore so the runtime keeps the schema-fresh
+    // seed.
+    if let Some(state_snap) = default_state.as_ref() {
+        let baseline = rt.state.dump_default_state();
+        let extras = snapshot_extra_keys(state_snap, &baseline);
+        if extras.is_empty() {
+            rt.state.restore_default_state(state_snap);
+        } else {
+            eprintln!(
+                "jian: warning — `aot/default_state.bin` carries {} key(s) the active \
+                 schema no longer seeds ({}); skipping AOT state restore, runtime keeps \
+                 schema-default seed",
+                extras.len(),
+                extras.join(", "),
+            );
+        }
+    }
     let hidden_bboxes = bootstrap.take_hidden_bboxes();
 
     // `--dpi`'s clap value_parser already filters out 0 / negative /

@@ -62,8 +62,41 @@ additions targeted at the workspace's `0.0.1` development release.
   unpack / new / player CLI surfaces. Pack-specific tests assert
   presence / absence of both AOT binaries and decode-round-trip
   the empty fixture's state snapshot.
-- `.op.pack` archive reader in the player path is **not yet**
-  shipped — runtime AOT preload hooks are wired and tested but
-  the player still loads raw `.op` only.
+- `pack_reader` module — opens a `.op.pack` zip, validates the
+  typed `AotManifest` (`format == "op.pack"` + version match +
+  `entries` includes `app.op`), parses `app.op` into `PenDocument`,
+  and decodes both AOT entries with their own `read_bytes` validators.
+  Garbled AOT entries warn to stderr and drop to `None` so the
+  runtime falls back to `ComputeFirstLayout` / `SeedStateGraph`
+  rather than misparse. Defensive guards: per-entry decompressed
+  byte ceilings (manifest 1 MiB, app.op 32 MiB, AOT entries 8 MiB)
+  via `entry.take(limit + 1)` to refuse decompression bombs;
+  `READER_EXPECTED_BACKEND = "estimate"` requires the manifest's
+  `aot.measurement_backend` to match before the layout snapshot
+  drives preload (mismatched-shaper rects would diverge from the
+  live render); orphan AOT entries inventoried only in the zip but
+  not in `manifest.entries` are silently ignored; duplicate
+  canonical names rejected. `looks_like_op_pack` extension hint
+  routes the `jian player` entry between raw-`.op` and pack-archive
+  load paths.
+- `jian player path/to/foo.op.pack` — pack archive load path. Reads
+  the schema + both AOT entries, threads the initial-layout snapshot
+  through `install_data_path_with_aot` (which gates the
+  `ComputeFirstLayout` short-circuit on viewport bit-match + total
+  coverage in the bootstrap layer), then overlays the default-state
+  snapshot via `restore_default_state`. The state overlay is gated
+  by `snapshot_extra_keys` against a fresh
+  `dump_default_state()` baseline — recursively type-compatible at
+  every leaf (Null/Bool/Number/String outer match; Array length +
+  element-wise; Object exact key parity + recursive value match) and
+  no extra keys vs the schema-fresh seed. Mismatch → warn + skip
+  the whole restore, keeping the schema-default seed intact.
+- 17 `pack_reader` unit tests covering: extension routing
+  (case-insensitive, rejects `.op.pack.bak`); zip-no-manifest
+  rejection; wrong-format / unsupported-version / missing-app-op
+  manifest rejection; AOT round-trip happy path; uninventoried-AOT
+  silent-drop; backend-mismatch layout drop; garbled-AOT-snapshot
+  fall-through; snapshot extras (basic + nested type drift + nested
+  baseline-extra-key + array length mismatch + subset).
 - `cargo dist`, Homebrew, winget distribution configs are **not
   yet** shipped.

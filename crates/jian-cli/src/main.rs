@@ -67,6 +67,8 @@ mod commands;
 mod diagnostic_render;
 #[cfg(feature = "player")]
 mod icon_loader;
+#[cfg(feature = "player")]
+mod pack_reader;
 
 #[derive(Parser, Debug)]
 #[command(
