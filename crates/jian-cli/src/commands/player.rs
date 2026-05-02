@@ -464,8 +464,8 @@ fn write_token_file(token_path: &std::path::Path) -> Result<String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
-    let token = read_random_token_hex(32)
-        .map_err(|e| anyhow!("--asp: could not generate token: {}", e))?;
+    let token =
+        read_random_token_hex(32).map_err(|e| anyhow!("--asp: could not generate token: {}", e))?;
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         // `create_new(true)` is `O_EXCL` on Unix — refuses if the
@@ -476,12 +476,14 @@ fn write_token_file(token_path: &std::path::Path) -> Result<String> {
         .create_new(true)
         .mode(0o600)
         .open(token_path)
-        .map_err(|e| anyhow!(
-            "--asp: write {}: {} \
+        .map_err(|e| {
+            anyhow!(
+                "--asp: write {}: {} \
              (if a previous run crashed, remove the stale token file and retry)",
-            token_path.display(),
-            e
-        ))?;
+                token_path.display(),
+                e
+            )
+        })?;
     let written = f
         .write_all(token.as_bytes())
         .and_then(|_| f.write_all(b"\n"));
@@ -546,7 +548,9 @@ fn start_asp_listener_session(
     let token_path = {
         let local = std::env::var_os("LOCALAPPDATA")
             .or_else(|| std::env::var_os("USERPROFILE"))
-            .ok_or_else(|| anyhow!("--asp: cannot resolve LOCALAPPDATA / USERPROFILE for token file"))?;
+            .ok_or_else(|| {
+                anyhow!("--asp: cannot resolve LOCALAPPDATA / USERPROFILE for token file")
+            })?;
         let mut p = std::path::PathBuf::from(local);
         p.push("jian");
         std::fs::create_dir_all(&p)
@@ -623,10 +627,7 @@ fn start_asp_listener_session(
                 }
                 // Re-arm for the next agent.
                 if let Err(e) = listener.disconnect_and_reuse() {
-                    eprintln!(
-                        "jian player: ASP disconnect failed; ending listener: {}",
-                        e
-                    );
+                    eprintln!("jian player: ASP disconnect failed; ending listener: {}", e);
                     return;
                 }
             }
@@ -661,13 +662,18 @@ fn write_token_file(token_path: &std::path::Path) -> Result<String> {
         .write(true)
         .create_new(true)
         .open(token_path)
-        .map_err(|e| anyhow!(
-            "--asp: write {}: {} \
+        .map_err(|e| {
+            anyhow!(
+                "--asp: write {}: {} \
              (if a previous run crashed, remove the stale token file and retry)",
-            token_path.display(),
-            e
-        ))?;
-    if let Err(e) = f.write_all(token.as_bytes()).and_then(|_| f.write_all(b"\n")) {
+                token_path.display(),
+                e
+            )
+        })?;
+    if let Err(e) = f
+        .write_all(token.as_bytes())
+        .and_then(|_| f.write_all(b"\n"))
+    {
         drop(f);
         let _ = std::fs::remove_file(token_path);
         return Err(anyhow!(
@@ -735,7 +741,6 @@ fn read_random_token_hex(n: usize) -> std::io::Result<String> {
     }
     Ok(hex)
 }
-
 
 /// Resolve a CLI argument that may be either a filesystem path or a
 /// `file://` / `jian://` URI (see `packaging/linux/jian.desktop`'s

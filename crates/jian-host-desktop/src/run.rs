@@ -964,12 +964,8 @@ impl RunApp {
         let mut state_changed = false;
         // `try_recv` is non-blocking; loop until empty.
         while let Some(req) = drain.try_recv() {
-            let (payload, control) = dispatch_with_mode(
-                &req.verb,
-                &mut self.host.runtime,
-                &mut session,
-                Mode::Prod,
-            );
+            let (payload, control) =
+                dispatch_with_mode(&req.verb, &mut self.host.runtime, &mut session, Mode::Prod);
             // op verbs (tap/type/scroll/swipe) and accepted state
             // mutations bump the dirty bit. Heuristic: any `ok`
             // response on a non-discovery verb is treated as

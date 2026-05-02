@@ -172,9 +172,7 @@ fn prod_asp_is_at_least_3x_smaller_than_mcp_on_50_action_screen() {
     println!("ASP prd list_actions response body                 : {asp_prod_bytes:>6} bytes");
     println!("ratio (mcp / asp prod)                             : {ratio:>6.2}×");
     if asp_dev_bytes == asp_prod_bytes {
-        println!(
-            "(dev == prod for list_actions: portable-client guarantee per spec §7)"
-        );
+        println!("(dev == prod for list_actions: portable-client guarantee per spec §7)");
     }
 
     // Spec §1 claims "~4-8×". Assert the looser 3× lower-bound so

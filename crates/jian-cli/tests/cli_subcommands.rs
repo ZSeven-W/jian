@@ -374,12 +374,7 @@ fn player_asp_rejects_host_port() {
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
     let out = Command::cargo_bin("jian")
         .unwrap()
-        .args([
-            "player",
-            "--asp",
-            "127.0.0.1:8080",
-            path.to_str().unwrap(),
-        ])
+        .args(["player", "--asp", "127.0.0.1:8080", path.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(!out.status.success());

@@ -188,10 +188,7 @@ fn resolve_auto(pid: u32, env: impl Fn(&str) -> Option<String>) -> Result<BindTa
         // emulated with a `\jian\<pid>\asp` suffix so two co-running
         // jian processes don't collide on a shared name.
         let _ = env; // not consulted on Windows
-        Ok(BindTarget::NamedPipe(format!(
-            r"\\.\pipe\jian\{}\asp",
-            pid
-        )))
+        Ok(BindTarget::NamedPipe(format!(r"\\.\pipe\jian\{}\asp", pid)))
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -329,10 +326,7 @@ mod tests {
     #[test]
     fn accepts_explicit_relative_path() {
         let target = resolve_bind_arg("./foo.sock", 1, empty_env).unwrap();
-        assert_eq!(
-            target,
-            BindTarget::UnixSocket(PathBuf::from("./foo.sock"))
-        );
+        assert_eq!(target, BindTarget::UnixSocket(PathBuf::from("./foo.sock")));
         let target = resolve_bind_arg("../up/foo.sock", 1, empty_env).unwrap();
         assert_eq!(
             target,
@@ -408,7 +402,10 @@ mod tests {
     #[test]
     fn explicit_unix_path_passes_through() {
         let target = resolve_bind_arg("/tmp/foo.sock", 1, empty_env).unwrap();
-        assert_eq!(target, BindTarget::UnixSocket(PathBuf::from("/tmp/foo.sock")));
+        assert_eq!(
+            target,
+            BindTarget::UnixSocket(PathBuf::from("/tmp/foo.sock"))
+        );
     }
 
     #[cfg(windows)]
@@ -437,5 +434,4 @@ mod tests {
             other => panic!("expected NamedPipe, got {:?}", other),
         }
     }
-
 }

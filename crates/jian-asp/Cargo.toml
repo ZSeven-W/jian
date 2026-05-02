@@ -5,7 +5,7 @@ edition      = { workspace = true }
 rust-version = { workspace = true }
 license      = { workspace = true }
 repository   = { workspace = true }
-description  = "Jian Agent Shell Protocol — dev-only debugging / automation channel"
+description  = "Jian Agent Shell Protocol — token-efficient AI driving channel for the Jian runtime (dev debug surface + lean prod surface)"
 readme       = "README.md"
 
 # Plan 18 Task 0 + Plan 18 ASP prod mode (C3) — feature-gating contract

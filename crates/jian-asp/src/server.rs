@@ -710,9 +710,7 @@ not-json
 
     impl Transport for ChannelTransport {
         fn read_line(&mut self) -> Result<String, TransportError> {
-            self.reader
-                .recv()
-                .map_err(|_| TransportError::Eof)
+            self.reader.recv().map_err(|_| TransportError::Eof)
         }
         fn write_line(&mut self, line: &str) -> Result<(), TransportError> {
             self.writer
@@ -725,7 +723,11 @@ not-json
     /// test feeds request lines through `request_tx` and receives
     /// the session's responses on `response_rx`. Closing
     /// `request_tx` (drop) signals EOF and ends the session loop.
-    fn channel_rig() -> (ChannelTransport, mpsc::Sender<String>, mpsc::Receiver<String>) {
+    fn channel_rig() -> (
+        ChannelTransport,
+        mpsc::Sender<String>,
+        mpsc::Receiver<String>,
+    ) {
         let (req_tx, req_rx) = mpsc::channel::<String>();
         let (resp_tx, resp_rx) = mpsc::channel::<String>();
         let transport = ChannelTransport {
@@ -747,11 +749,12 @@ not-json
 
         let (mut transport, req_tx, resp_rx) = channel_rig();
         req_tx
-            .send(r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}"#.into())
+            .send(
+                r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}"#
+                    .into(),
+            )
             .unwrap();
-        req_tx
-            .send(r#"{"id":2,"verb":"exit"}"#.into())
-            .unwrap();
+        req_tx.send(r#"{"id":2,"verb":"exit"}"#.into()).unwrap();
         let (bridge, drain) = channel();
         let validator = StaticTokenValidator::new("s", Permission::Act);
 
@@ -810,7 +813,10 @@ not-json
 
         let (mut transport, req_tx, resp_rx) = channel_rig();
         req_tx
-            .send(r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}"#.into())
+            .send(
+                r#"{"id":1,"verb":"handshake","token":"s","client":"agent","version":"0.1"}"#
+                    .into(),
+            )
             .unwrap();
         req_tx
             .send(r#"{"id":2,"verb":"list_actions"}"#.into())

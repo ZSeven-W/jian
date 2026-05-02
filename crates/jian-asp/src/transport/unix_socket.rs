@@ -97,8 +97,7 @@ impl UnixSocketListener {
                     Err(e)
                         if matches!(
                             e.kind(),
-                            std::io::ErrorKind::ConnectionRefused
-                                | std::io::ErrorKind::NotFound
+                            std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound
                         ) =>
                     {
                         // The two error kinds that unambiguously
@@ -136,18 +135,16 @@ impl UnixSocketListener {
             }
         }
 
-        let listener = UnixListener::bind(&path).map_err(|e| {
-            TransportError::Io(format!("bind {}: {}", path.display(), e))
-        })?;
+        let listener = UnixListener::bind(&path)
+            .map_err(|e| TransportError::Io(format!("bind {}: {}", path.display(), e)))?;
 
         // Tighten the socket file's mode to `0600`. The `0700`
         // parent already prevents non-owner traversal, so this is a
         // belt-and-braces hardening for the case where the path is
         // backed up / snapshotted.
         let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&path, perms).map_err(|e| {
-            TransportError::Io(format!("chmod 0600 {}: {}", path.display(), e))
-        })?;
+        std::fs::set_permissions(&path, perms)
+            .map_err(|e| TransportError::Io(format!("chmod 0600 {}: {}", path.display(), e)))?;
 
         Ok(Self {
             listener,
@@ -304,9 +301,8 @@ fn ensure_parent_dir(path: &Path) -> Result<bool, TransportError> {
     // re-stat to confirm `mode == 0o700` & `uid == owner_uid`. A
     // hardened-FS implementation might not honor `mkdir(0o700)`
     // (acl masks, etc.); this catches that and refuses cleanly.
-    let meta = std::fs::metadata(parent).map_err(|e| {
-        TransportError::Io(format!("stat {}: {}", parent.display(), e))
-    })?;
+    let meta = std::fs::metadata(parent)
+        .map_err(|e| TransportError::Io(format!("stat {}: {}", parent.display(), e)))?;
     if meta.uid() != owner_uid {
         return Err(TransportError::Io(format!(
             "refusing to bind: {} is owned by uid {} (current uid {})",
@@ -393,11 +389,8 @@ mod tests {
     use std::time::Duration;
 
     fn temp_socket_path(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "jian-asp-test-{}-{}",
-            std::process::id(),
-            name
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("jian-asp-test-{}-{}", std::process::id(), name));
         let _ = std::fs::remove_dir_all(&dir);
         dir.join("asp.sock")
     }
@@ -454,8 +447,7 @@ mod tests {
         // path itself* being a regular file.
         let parent = path.parent().unwrap();
         std::fs::create_dir_all(parent).unwrap();
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-            .unwrap();
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).unwrap();
         std::fs::write(&path, b"important user data").unwrap();
         let result = UnixSocketListener::bind(&path);
         let err = match result {
@@ -530,8 +522,7 @@ mod tests {
         let path = temp_socket_path("loose-parent");
         let parent = path.parent().unwrap();
         std::fs::create_dir_all(parent).unwrap();
-        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755))
-            .unwrap();
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755)).unwrap();
         let err = match UnixSocketListener::bind(&path) {
             Ok(_) => panic!("expected refusal"),
             Err(e) => e,
@@ -558,9 +549,7 @@ mod tests {
         // While `first` is live, attempt a second bind on the same
         // path.
         let err = match UnixSocketListener::bind(&path) {
-            Ok(_) => panic!(
-                "second bind must refuse — first listener is still live"
-            ),
+            Ok(_) => panic!("second bind must refuse — first listener is still live"),
             Err(e) => e,
         };
         match err {

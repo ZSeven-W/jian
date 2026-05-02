@@ -325,10 +325,8 @@ mod tests {
     /// on the next `validate` call. No caching.
     #[test]
     fn file_validator_re_reads_on_each_call() {
-        let dir = std::env::temp_dir().join(format!(
-            "jian-asp-file-validator-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("jian-asp-file-validator-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("token");
         std::fs::write(&path, "first").unwrap();

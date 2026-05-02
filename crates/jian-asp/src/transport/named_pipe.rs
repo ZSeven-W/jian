@@ -499,13 +499,7 @@ unsafe fn current_user_sid_string() -> Result<String, TransportError> {
 
     // Probe required size.
     let mut needed: u32 = 0;
-    let _ = GetTokenInformation(
-        token,
-        TokenUser,
-        std::ptr::null_mut(),
-        0,
-        &mut needed,
-    );
+    let _ = GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
     if needed == 0 {
         let err = GetLastError();
         let _ = CloseHandle(token);
@@ -605,8 +599,7 @@ mod tests {
             std::process::id(),
             // Per-test unique suffix using thread id as a cheap
             // monotonically-changing tag.
-            format!("{:?}", std::thread::current().id())
-                .replace(['(', ')', ' '], "_")
+            format!("{:?}", std::thread::current().id()).replace(['(', ')', ' '], "_")
         );
         let listener = NamedPipeListener::bind(&name).expect("bind");
         // `handle` must not be INVALID_HANDLE_VALUE.

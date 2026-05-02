@@ -198,10 +198,7 @@ pub fn validate_prod_op_target(
     let hits = rewritten.resolve(&doc.tree).map_err(|e| {
         OutcomePayload::error(
             verb,
-            &format!(
-                "internal: rewritten id selector failed to resolve: {}",
-                e
-            ),
+            &format!("internal: rewritten id selector failed to resolve: {}", e),
         )
     })?;
     if hits.is_empty() {
@@ -324,10 +321,7 @@ pub fn extract_action_id(verb: &Verb) -> Option<String> {
 ///   future structural hint would need a separate stripping
 ///   mechanism, tracked by codex C6 round 2).
 /// - Preserves `detail` and `error`.
-pub fn sanitize_prod_op_payload(
-    mut p: OutcomePayload,
-    action_id: &str,
-) -> OutcomePayload {
+pub fn sanitize_prod_op_payload(mut p: OutcomePayload, action_id: &str) -> OutcomePayload {
     // Always set `target` to the agent-visible id, even when the
     // dev handler returned `None` — the agent then has a stable
     // anchor for the response without us guessing whether to
