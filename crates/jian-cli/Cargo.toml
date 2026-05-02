@@ -25,7 +25,17 @@ mcp     = ["player", "jian-host-desktop/mcp", "dep:jian-action-surface"]
 # Named Pipe transports + run_prod_session entry point). Off by
 # default so the released CLI binary's wire surface stays small;
 # downstream packagers building an "AI-driving" channel turn this on.
-prod-asp = ["player", "dep:jian-asp", "jian-host-desktop/prod-asp"]
+prod-asp = [
+    "player",
+    "dep:jian-asp",
+    "jian-host-desktop/prod-asp",
+    # Pull windows-sys into jian-cli's own dep graph; the Windows
+    # accept-thread cancel path uses it directly. Re-using
+    # jian-asp's transitive copy is not enough — Rust deps are
+    # not transitive. The Windows-only target table below scopes
+    # the actual link.
+    "dep:windows-sys",
+]
 
 [dependencies]
 jian-core        = { path = "../jian-core" }
@@ -128,3 +138,17 @@ assets = [
     ["../../packaging/icon/AppIcon-source.png", "usr/share/icons/hicolor/512x512/apps/jian.png", "644"],
     ["../../packaging/README.md", "usr/share/doc/jian/", "644"],
 ]
+
+# Plan 18 ASP prod mode / Windows shutdown path. The CLI's
+# `AspSession::Drop` + the listener accept thread call
+# `OpenThread` / `CancelSynchronousIo` / `CloseHandle` directly
+# (Rust dep graphs are not transitive — using `windows_sys::...`
+# from jian-cli requires jian-cli's own dep declaration even
+# when jian-asp also pulls it in). Gated to the Windows target
+# so non-Windows builds skip the crate compile cost.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_IO",
+] }

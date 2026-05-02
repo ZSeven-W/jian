@@ -179,7 +179,7 @@ impl UnixSocketListener {
     /// Try to accept one connection without blocking. Returns
     /// `Ok(None)` when there's no pending connection (the listener
     /// must be in non-blocking mode for this to ever succeed —
-    /// callers pair this with [`set_nonblocking`]). `Ok(Some(_))`
+    /// callers pair this with [`Self::set_nonblocking`]). `Ok(Some(_))`
     /// for an accepted connection; `Err` for a real I/O failure.
     pub fn try_accept(&self) -> Result<Option<UnixSocketTransport>, TransportError> {
         match self.listener.accept() {

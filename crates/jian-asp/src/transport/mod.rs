@@ -9,14 +9,18 @@
 //! - [`Transport`] trait abstraction + [`TransportError`].
 //! - [`stdio::StdioTransport`] — reads from stdin, writes to stdout.
 //!   Used by the dev-tools agent CLI.
-//! - [`unix_socket::UnixSocketListener`] /
-//!   [`unix_socket::UnixSocketTransport`] — bound to a filesystem
+//! - `unix_socket::UnixSocketListener` /
+//!   `unix_socket::UnixSocketTransport` — bound to a filesystem
 //!   path with `0600` socket / `0700` parent-dir perms, used by
 //!   `jian player --asp <path>` on macOS / Linux. Spec §6.
-//! - [`named_pipe::NamedPipeListener`] / [`named_pipe::NamedPipeTransport`]
-//!   on Windows — `CreateNamedPipeW` + `ConnectNamedPipe` with a
-//!   protected DACL granting `GENERIC_ALL` only to the calling
-//!   user's resolved SID (no Everyone, no Anonymous). Bound on
+//!   (Items intentionally referenced by name rather than as
+//!   intra-doc links because the modules are `cfg(unix)`-gated and
+//!   would break rustdoc on Windows builds.)
+//! - `named_pipe::NamedPipeListener` /
+//!   `named_pipe::NamedPipeTransport` on Windows —
+//!   `CreateNamedPipeW` + `ConnectNamedPipe` with a protected DACL
+//!   granting `GENERIC_ALL` only to the calling user's resolved
+//!   SID (no Everyone, no Anonymous). Bound on
 //!   `\\.\pipe\jian\<pid>\asp` by `jian player --asp`.
 //! - [`socket_path::resolve_bind_arg`] — translates `--asp <arg>`
 //!   into a [`socket_path::BindTarget`] and refuses any value that

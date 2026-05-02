@@ -17,9 +17,9 @@
 //!   prod-op-guard selector rewrite ([`prod_op_guard`]).
 //! - Discovery:
 //!   - `list_actions` — flat `[{id, events}]` projection over
-//!     [`jian_action_surface`] (paginated; revision-tagged
-//!     opaque cursor; `aiHidden` subtree filter). Available in
-//!     dev AND prod.
+//!     `jian_action_surface` (paginated; revision-tagged opaque
+//!     cursor; `aiHidden` subtree filter). Available in dev AND
+//!     prod.
 //!   - `find` — resolver-driven; emits the matched ids
 //!     (`dev-asp` only).
 //!   - `inspect what=node_props | route` — compact node summary
