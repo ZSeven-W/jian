@@ -946,18 +946,20 @@ impl RunApp {
             Some(d) => d,
             None => return false,
         };
-        // Take ownership of the session-state borrow once; using
-        // `as_mut()` per iteration would re-borrow the host
-        // mutably and clash with `drain`'s shared borrow above.
-        // We `take` and reinstall to side-step the conflict.
+        // The session carries the permission tier `dispatch_with_mode`
+        // needs at gate time. We `take` and reinstall to release the
+        // host-mutable borrow `dispatch_with_mode` requires.
+        //
+        // Audit recording deliberately does NOT happen here: prod
+        // ASP refuses the `audit` verb (spec §3) and the host has
+        // no read path for the ring (no `--asp-audit-log` today),
+        // so any `record_outcome` call would be dead state. If a
+        // future revision adds an audit-log file or live readback,
+        // re-introduce the recording then.
         let mut session = match self.host.asp_session.take() {
             Some(s) => s,
             None => return false,
         };
-        let session_start = self
-            .host
-            .asp_session_start
-            .unwrap_or(self.host.launch_epoch);
 
         let mut state_changed = false;
         // `try_recv` is non-blocking; loop until empty.
@@ -980,11 +982,6 @@ impl RunApp {
             if writes_state {
                 state_changed = true;
             }
-            // Audit + reply.
-            session.record_outcome(
-                session_start.elapsed().as_millis() as u64,
-                &payload,
-            );
             let _ = req.reply.send(DispatchResponse { payload, control });
             // We deliberately don't act on `control == Exit` here:
             // the listener side is the one that tears the session
