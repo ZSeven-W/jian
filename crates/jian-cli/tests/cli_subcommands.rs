@@ -460,26 +460,13 @@ fn player_asp_refuses_when_capabilities_absent() {
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
 
     #[cfg(unix)]
-    let asp_arg: String = dir
-        .path()
-        .join("asp.sock")
-        .to_str()
-        .unwrap()
-        .to_owned();
+    let asp_arg: String = dir.path().join("asp.sock").to_str().unwrap().to_owned();
     #[cfg(windows)]
-    let asp_arg: String = format!(
-        r"\\.\pipe\jian-test\{}-cap-check",
-        std::process::id()
-    );
+    let asp_arg: String = format!(r"\\.\pipe\jian-test\{}-cap-check", std::process::id());
 
     let out = Command::cargo_bin("jian")
         .unwrap()
-        .args([
-            "player",
-            "--asp",
-            asp_arg.as_str(),
-            path.to_str().unwrap(),
-        ])
+        .args(["player", "--asp", asp_arg.as_str(), path.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(!out.status.success(), "expected non-zero exit");
