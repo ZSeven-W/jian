@@ -10,7 +10,7 @@ DOM, without an Electron tax.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Rust](https://img.shields.io/badge/rust-1.78%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1014%20passing-brightgreen.svg)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)
 ![Workspace](https://img.shields.io/badge/version-0.0.1-purple.svg)
 ![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-success)
 ![MCP](https://img.shields.io/badge/MCP-rmcp%20stdio-9cf)
@@ -38,8 +38,8 @@ DOM, without an Electron tax.
 - 🚀 **Typed cold-start pipeline** — three-stage `StartupDriver` (`DataPath` pre-window · `Visual` first-redraw · `Background` post-paint), per-platform budget tests, `jian perf startup` + `jian perf compare` regression gate, and AOT initial-layout pre-bake via `jian pack --aot`.
 - 🔁 **Hot reload that keeps state** — `jian dev app.op` reparses on save without losing your counter / form / scroll position.
 - 🛡️ **Capability-gated I/O** — declared up-front in `app.capabilities`; the gate refuses anything the document didn't ask for.
-- 🤝 **Agent Shell Protocol (dev-only)** — `jian-asp` ships verbs (Tap / Type / Scroll / Swipe / Snapshot / Inspect ax_tree) for AI-driven UI testing; physically isolated from release builds via the `dev-asp` cargo feature.
-- 🧪 **1014 tests, 0 failures** — `cargo test --workspace` is the source of truth; CI matrix covers macOS / Linux / Windows + the `textlayout` build path + a per-platform `startup-budget` regression gate (15% threshold, 1 ms noise floor).
+- 🤝 **Agent Shell Protocol — two surfaces** — `jian-asp` ships a wide **dev** surface (Tap / Type / Scroll / Swipe / Find / Inspect / Snapshot / Audit + state writes) for AI-driven UI testing AND a lean **prod** surface (Handshake / ListActions / Tap / Type / Scroll / Swipe / Exit) for token-efficient AI driving against shipping apps — `jian player --asp <path>` over a Unix socket / Windows Named Pipe with a real per-user DACL, file-based token revoke + rotate, `--asp-permission <observe|act|full>`, and a `~3.65×` smaller wire than MCP on a 50-action screen. Each surface is a separate cargo feature (`dev-asp` / `prod-asp`); CI asserts neither leaks into a release build that didn't ask for it.
+- 🧪 **`cargo test --workspace` is the source of truth** — full matrix covers macOS / Linux / Windows × {default, dev-asp, prod-asp, textlayout} + a per-platform `startup-budget` regression gate (15% threshold, 1 ms noise floor).
 
 ## 🎬 Hello, Counter
 
@@ -193,17 +193,24 @@ rt.build_layout_with(SkiaMeasure::new(), (800.0, 600.0))?;
 | **`jian-core`** | Runtime kernel. `Runtime` composition root, `Signal<T>` + `Effect`, `StateGraph` (`$app` / `$page` / `$self` / `$route` / `$storage` / `$vars`), Tier-1 expressions, Tier-2 Action DSL, capability gate, gesture arena, taffy flexbox, R-tree spatial index, `MeasureBackend` trait, **typed three-stage `StartupDriver`** + `HostAgnosticBootstrap` for the DataPath cold-start phases. |
 | **`jian-skia`** | `RenderBackend` over `skia-safe`. Raster + per-corner radii + linear gradients + shadows + image cache + Lucide icons. Optional `textlayout` feature wires real `Paragraph` shaping pinned by a 1 px drift gate. |
 | **`jian-host-desktop`** | `winit` 0.30 + `softbuffer` 0.4 host. Scale-factor-aware pointer / key translators, in-memory router + storage, `arboard` clipboard, `muda` native menus, binding-aware scene walker. **Visual-stage bootstrap** runs Splash / FirstFrame / Present / EventPumpReady inside the first `RedrawRequested` after `resumed()` (Plan 19 capstone B2.2 / B4). Per-platform deep-link trait-routing seams ship in `app_delegate` (macOS) / `win_deeplink` (Windows). |
-| **`jian-asp`** *(dev-only)* | Agent Shell Protocol verb registry: Tap / Type / Scroll / Swipe / Snapshot / Inspect `ax_tree`. Physically isolated from release builds via the `dev-asp` cargo feature (CI assertion enforces no `jian-asp` in release `cargo tree`). Plan 18 Phase 3. |
+| **`jian-asp`** | Agent Shell Protocol — NDJSON over an arbitrary byte stream. Two opt-in cargo features: `dev-asp` (full debug verb set, including `find` / `inspect` / `snapshot` / `audit` / state writes) and `prod-asp` (lean production surface — `handshake` / `list_actions` / `tap` / `type` / `scroll` / `swipe` / `exit`, with selectors restricted to `list_actions` ids and the `aiHidden` filter applied). Listener transports: stdio, Unix domain socket (`0700` parent / `0600` socket, refuses TCP / `host:port`), Windows Named Pipe (protected DACL, calling user's SID only). `jian player --asp <path>` wires the live runtime via an `AspBridge` (mpsc + sync-reply rendezvous; drained in `about_to_wait`). File-based token validator supports operator revoke (`rm <token>`) + rotate (`echo new > <token>`) without restarting the player. Plan 18 + post-audit hardening. |
 | **`jian-action-surface`** | AI Action Surface (spec §3–§10). Derives stable `<scope>.<verb>_<slug>` actions, evaluates `RuntimeStateGate` against live bindings, dispatches synthesised pointer events, and serves `list_available_actions` / `execute_action` over an `rmcp` stdio bridge. Audit + rate limit + concurrency caps + swipe throttle baked in. |
 | **`jian` (CLI)** | `check` · `pack [--aot] [--aot-viewport WxH]` · `unpack` · `new` · `player` · `dev` (+`--mcp`) · `perf startup [--runs N] [--format json]` · `perf compare BASELINE CURRENT [--threshold 0.15] [--noise-floor-ms 1.0] [--format markdown]`. |
 
 ## 🤖 AI Action Surface
 
-Jian advertises a **derived, gated, audited** action surface to any AI client
-that speaks MCP:
+Jian advertises a **derived, gated, audited** action surface to any AI client.
+Two delivery channels share the same `<scope>.<verb>_<slug>_<hash4>` action
+ids (so a client can swap channels without re-learning names):
 
 ```bash
+# MCP — wide schemas per tool, ~9.2 KiB per `tools/list` on a 50-action screen.
 cargo run -p jian --features mcp -- dev app.op --mcp
+
+# ASP prod — flat `[{id, events}]` rows, ~2.5 KiB per `list_actions` (3.65×
+# smaller); local-only Unix socket / Named Pipe; explicit revoke + rotate.
+cargo run -p jian --features prod-asp -- player app.op --asp auto
+# Then point your agent at the printed socket path + `<socket>.token`.
 ```
 
 Under the hood, every interactive node becomes a tool. Names follow
@@ -257,8 +264,12 @@ and [`openpencil-docs/superpowers/notes/2026-04-24-ai-action-surface-client-guid
 ## 🛠 Development
 
 ```bash
-cargo test --workspace                  # 1014 tests, 0 failures
-cargo test --workspace --all-features   # adds the mcp + textlayout + dev-asp paths
+cargo test --workspace                                # default features, 0 failures
+cargo test --workspace --all-features                 # adds mcp + textlayout
+cargo test -p jian-asp -p jian --features dev-asp     # full debug ASP surface
+cargo test -p jian-asp -p jian --features prod-asp    # lean prod ASP surface (incl.
+                                                       # the 50-action byte-budget bench
+                                                       # and prod-acceptance suite)
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
 cargo run -p jian-ops-schema --bin export_schema
@@ -291,7 +302,7 @@ against `main`'s most recent green baseline (15% regression threshold,
 - ✅ Plan 8 desktop host (winit / softbuffer / muda menu spec)
 - ✅ Plan 9 CLI (eight subcommands incl. `dev` hot-reload + `perf startup` / `perf compare`)
 - ✅ Plan 22 `jian-action-surface` Phase 1 + MCP stdio server (`rmcp`) + `jian dev --mcp`
-- ✅ Plan 18 Agent Shell Protocol Phase 3 verbs — Tap / Type / Scroll / Swipe / Snapshot / Inspect `ax_tree` (`jian-asp`, dev-only via the `dev-asp` cargo feature, CI-asserted off the release path)
+- ✅ Plan 18 Agent Shell Protocol — full dev verb set (Tap / Type / Scroll / Swipe / Find / Inspect / Snapshot / Audit + state writes via `dev-asp`) AND prod surface (`prod-asp`: handshake / list_actions / tap / type / scroll / swipe / exit) wired into `jian player --asp <path>` over a Unix socket / Windows Named Pipe with explicit user-SID DACL, file-based token revoke + rotate, `--asp-permission <observe|act|full>`, and a 3.65× smaller wire shape than MCP on a 50-action screen. Codex-reviewed across C0–C6 + post-audit fixes; `asp-features × {linux,macos,windows} × {dev-asp,prod-asp}` matrix runs on every push.
 - ✅ Plan 19 cold-start capstone — typed three-stage `StartupDriver` (`DataPath` / `Visual` / `Background`), `HostAgnosticBootstrap` for DataPath, visual-stage runner for the first `RedrawRequested` after `resumed()`, `jian player` two-stage launch with unified-launch-epoch report timeline
 - ✅ Plan 19 D1 `.op.pack` AOT initial-layout writer + reader (`OPL1` little-endian SoA format, `jian pack --aot`); D2 font subsetter wiring (`FontPlan::scan_subtrees` populates `BootstrapHandles::take_core_font_plan`); D3 per-platform startup budget tests; D4 `jian perf compare` CI diff bot + 15% threshold gate + single rolling PR comment
 - ✅ Plan 8 §T7 native menu bar · §T8 deep-link trait-routing seam (`app_delegate.rs` macOS / `win_deeplink.rs` Windows) · §T9 updater trait + `selfupdate` feature · §T10 packaging configs (`cargo bundle` macOS .app · `cargo wix` Windows MSI · `cargo deb` + AppImage Linux · `.icns` generator · Sparkle appcast template · AppImageUpdate metadata)
