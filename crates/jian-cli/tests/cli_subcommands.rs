@@ -35,12 +35,24 @@ fn write_tmp(dir: &TempDir, name: &str, body: &str) -> std::path::PathBuf {
     p
 }
 
+/// Construct a `jian` test invocation with the Windows singleton
+/// bypass env var pre-set. Cargo runs integration tests in parallel
+/// threads; without the bypass the second-running `jian.exe` lands
+/// in `Singleton::Secondary` and exits with our "another jian.exe is
+/// already running" refusal message before reaching the actual CLI
+/// path each test wants to exercise. The env var is a no-op on
+/// non-Windows targets.
+fn jian_cmd() -> Command {
+    let mut cmd = Command::cargo_bin("jian").unwrap();
+    cmd.env("JIAN_DISABLE_SINGLETON", "1");
+    cmd
+}
+
 #[test]
 fn check_clean_exits_zero() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "clean.op", CLEAN_OP);
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["check", path.to_str().unwrap()])
         .assert()
         .success()
@@ -51,8 +63,7 @@ fn check_clean_exits_zero() {
 fn check_warning_exits_one() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "warn.op", WARNING_OP);
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["check", path.to_str().unwrap()])
         .assert()
         .code(1)
@@ -68,8 +79,7 @@ fn check_warning_renders_rustc_style_caret_excerpt() {
     //   - a row of `^` characters underlining the field key
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "warn.op", WARNING_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args(["check", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -104,8 +114,7 @@ fn check_warning_renders_rustc_style_caret_excerpt() {
 fn check_malformed_exits_two() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "bad.op", MALFORMED_OP);
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["check", path.to_str().unwrap()])
         .assert()
         .code(2);
@@ -126,8 +135,7 @@ fn player_size_and_fullscreen_are_mutually_exclusive() {
     // refactor that drops it triggers here, not in a user's terminal.
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args([
             "player",
             "--size",
@@ -154,8 +162,7 @@ fn check_quiet_silences_success_line_only() {
     let clean = write_tmp(&dir, "clean.op", CLEAN_OP);
     // Clean run + --quiet: no stdout at all (success line suppressed),
     // exit code still 0.
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args(["check", "--quiet", clean.to_str().unwrap()])
         .output()
         .unwrap();
@@ -168,8 +175,7 @@ fn check_quiet_silences_success_line_only() {
 
     // Warning run + --quiet: warnings still printed, exit 1.
     let warn = write_tmp(&dir, "warn.op", WARNING_OP);
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["check", "--quiet", warn.to_str().unwrap()])
         .assert()
         .code(1)
@@ -180,8 +186,7 @@ fn check_quiet_silences_success_line_only() {
 fn check_json_emits_ndjson_per_warning() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "warn.op", WARNING_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args(["check", "--json", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -196,8 +201,7 @@ fn check_json_emits_ndjson_per_warning() {
 fn new_then_check_is_clean() {
     let dir = TempDir::new().unwrap();
     // Scaffold into the temp dir.
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .current_dir(dir.path())
         .args(["new", "hello"])
         .assert()
@@ -206,8 +210,7 @@ fn new_then_check_is_clean() {
     assert!(op_path.exists(), "template should create app.op");
 
     // The scaffolded document should parse cleanly.
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["check", op_path.to_str().unwrap()])
         .assert()
         .success();
@@ -217,8 +220,7 @@ fn new_then_check_is_clean() {
 fn new_rejects_path_traversal_in_name() {
     let dir = TempDir::new().unwrap();
     for bad in ["..", "../evil", "a/b", "a\\b", "."] {
-        Command::cargo_bin("jian")
-            .unwrap()
+        jian_cmd()
             .current_dir(dir.path())
             .args(["new", bad])
             .assert()
@@ -238,8 +240,7 @@ fn check_flags_missing_top_level_id_as_semantic_error() {
     }"##;
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "no_id.op", NO_ID);
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["check", path.to_str().unwrap()])
         .assert()
         .code(2)
@@ -249,15 +250,13 @@ fn check_flags_missing_top_level_id_as_semantic_error() {
 #[test]
 fn new_form_template_scaffolds_and_checks_clean() {
     let dir = TempDir::new().unwrap();
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .current_dir(dir.path())
         .args(["new", "contact", "--template", "form"])
         .assert()
         .success();
     let op_path = dir.path().join("contact/app.op");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["check", op_path.to_str().unwrap()])
         .assert()
         .success();
@@ -273,8 +272,7 @@ fn player_dpi_zero_is_rejected_by_clap() {
     // breaks here, not in a user terminal.
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args(["player", "--dpi", "0", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -296,8 +294,7 @@ fn player_dpi_zero_is_rejected_by_clap() {
 fn player_dpi_negative_is_rejected_by_clap() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args(["player", "--dpi", "-1.5", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -309,8 +306,7 @@ fn player_dpi_negative_is_rejected_by_clap() {
 fn player_dpi_non_numeric_is_rejected_by_clap() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args(["player", "--dpi", "abc", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -324,11 +320,7 @@ fn player_dpi_non_numeric_is_rejected_by_clap() {
 fn player_help_advertises_dpi_and_debug_overlay() {
     // `--help` exits before any window logic, so this works headless on
     // CI and proves the new flags are publicly visible.
-    let out = Command::cargo_bin("jian")
-        .unwrap()
-        .args(["player", "--help"])
-        .output()
-        .unwrap();
+    let out = jian_cmd().args(["player", "--help"]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--dpi"), "expected --dpi in help");
@@ -349,8 +341,7 @@ fn player_help_advertises_dpi_and_debug_overlay() {
 fn player_asp_rejects_tcp_url() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args([
             "player",
             "--asp",
@@ -372,8 +363,12 @@ fn player_asp_rejects_tcp_url() {
 fn player_asp_rejects_host_port() {
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    // Bypass the Windows singleton check so the parallel test
+    // harness doesn't randomly land us in the Secondary branch
+    // (whose refusal message would mask the `--asp` validation
+    // error this test is actually verifying).
+    let out = jian_cmd()
+        .env("JIAN_DISABLE_SINGLETON", "1")
         .args(["player", "--asp", "127.0.0.1:8080", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -388,11 +383,7 @@ fn player_asp_rejects_host_port() {
 #[cfg(all(feature = "player", feature = "prod-asp"))]
 #[test]
 fn player_help_advertises_asp_flag() {
-    let out = Command::cargo_bin("jian")
-        .unwrap()
-        .args(["player", "--help"])
-        .output()
-        .unwrap();
+    let out = jian_cmd().args(["player", "--help"]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("--asp"), "expected --asp in help");
@@ -406,11 +397,7 @@ fn player_help_advertises_asp_flag() {
 #[cfg(all(feature = "player", feature = "prod-asp"))]
 #[test]
 fn player_help_advertises_asp_permission_flag() {
-    let out = Command::cargo_bin("jian")
-        .unwrap()
-        .args(["player", "--help"])
-        .output()
-        .unwrap();
+    let out = jian_cmd().args(["player", "--help"]).output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -426,8 +413,7 @@ fn player_asp_permission_rejects_unknown_value() {
     // so this test is fast and headless.
     let dir = TempDir::new().unwrap();
     let path = write_tmp(&dir, "anything.op", CLEAN_OP);
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args([
             "player",
             "--asp",
@@ -464,8 +450,7 @@ fn player_asp_refuses_when_capabilities_absent() {
     #[cfg(windows)]
     let asp_arg: String = format!(r"\\.\pipe\jian-test\{}-cap-check", std::process::id());
 
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args(["player", "--asp", asp_arg.as_str(), path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -487,15 +472,13 @@ fn pack_then_unpack_roundtrips_app_op() {
     let src = write_tmp(&dir, "src.op", CLEAN_OP);
     let packed = dir.path().join("out.op.pack");
 
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
         .assert()
         .success();
 
     let extracted = dir.path().join("extracted");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "unpack",
             packed.to_str().unwrap(),
@@ -521,8 +504,7 @@ fn pack_include_fonts_bundles_assets_fonts_directory() {
     fs::write(fonts_dir.join("README.md"), b"not a font").unwrap();
     let packed = dir.path().join("out.op.pack");
 
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "pack",
             "--include-fonts",
@@ -533,8 +515,7 @@ fn pack_include_fonts_bundles_assets_fonts_directory() {
         .success();
 
     let extracted = dir.path().join("extracted");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "unpack",
             packed.to_str().unwrap(),
@@ -577,8 +558,7 @@ fn pack_include_images_content_addresses_and_dedupes() {
     fs::write(images_dir.join("notes.txt"), b"not an image").unwrap();
     let packed = dir.path().join("out.op.pack");
 
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "pack",
             "--include-images",
@@ -589,8 +569,7 @@ fn pack_include_images_content_addresses_and_dedupes() {
         .success();
 
     let extracted = dir.path().join("extracted");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "unpack",
             packed.to_str().unwrap(),
@@ -646,15 +625,13 @@ fn pack_without_include_flags_omits_assets_dir() {
     fs::write(fonts_dir.join("Inter.ttf"), b"FAKE-TTF").unwrap();
     let packed = dir.path().join("out.op.pack");
 
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
         .assert()
         .success();
 
     let extracted = dir.path().join("extracted");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "unpack",
             packed.to_str().unwrap(),
@@ -697,8 +674,7 @@ fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
     let src = write_tmp(&dir, "aot.op", AOT_OP_FIXTURE);
     let packed = dir.path().join("out.op.pack");
 
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "pack",
             "--aot",
@@ -712,8 +688,7 @@ fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
         .stdout(predicates::str::contains("AOT layout 800×600"));
 
     let extracted = dir.path().join("extracted");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "unpack",
             packed.to_str().unwrap(),
@@ -768,15 +743,13 @@ fn pack_without_aot_omits_initial_layout_bin() {
     let src = write_tmp(&dir, "aot.op", AOT_OP_FIXTURE);
     let packed = dir.path().join("out.op.pack");
 
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
         .assert()
         .success();
 
     let extracted = dir.path().join("extracted");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "unpack",
             packed.to_str().unwrap(),
@@ -804,8 +777,7 @@ fn pack_aot_rejects_invalid_viewport() {
     let src = write_tmp(&dir, "aot.op", AOT_OP_FIXTURE);
     let packed = dir.path().join("out.op.pack");
 
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "pack",
             "--aot",
@@ -842,8 +814,7 @@ fn pack_aot_rejects_documents_with_duplicate_node_ids() {
     let src = write_tmp(&dir, "dup.op", DUP);
     let packed = dir.path().join("out.op.pack");
 
-    let out = Command::cargo_bin("jian")
-        .unwrap()
+    let out = jian_cmd()
         .args([
             "pack",
             "--aot",
@@ -888,8 +859,7 @@ fn pack_aot_tolerates_duplicate_ids_in_inactive_pages() {
     let dir = TempDir::new().unwrap();
     let src = write_tmp(&dir, "two-pages.op", TWO_PAGES);
     let packed = dir.path().join("out.op.pack");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args([
             "pack",
             "--aot",
@@ -919,8 +889,7 @@ fn pack_without_aot_tolerates_duplicate_node_ids() {
     let dir = TempDir::new().unwrap();
     let src = write_tmp(&dir, "dup-no-aot.op", DUP);
     let packed = dir.path().join("out.op.pack");
-    Command::cargo_bin("jian")
-        .unwrap()
+    jian_cmd()
         .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
         .assert()
         .success();
