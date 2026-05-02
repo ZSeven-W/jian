@@ -64,7 +64,7 @@ implementations are planned; current state:
 |--------------------------|-----------------|---------------------------------------|
 | `StdioTransport`         | Shipped         | dev CLI agent driving                 |
 | `UnixSocketTransport`    | Shipped         | macOS / Linux prod ASP listener       |
-| `NamedPipeListener`      | Stub on Windows | landing in a follow-up commit         |
+| `NamedPipeTransport`     | Shipped (Windows CI pending) | Windows prod ASP listener — `\\.\pipe\jian\<pid>\asp` with current-user-only DACL via SDDL `D:(A;;GA;;;OW)` |
 | WebSocket                | Not implemented | future remote-control profile (separate threat model) |
 
 `socket_path::resolve_bind_arg` rejects TCP / `host:port` / URL

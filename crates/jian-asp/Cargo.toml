@@ -46,7 +46,17 @@ prod-asp = ["__asp-runtime"]
 # Internal helper feature: pulls in the shared runtime deps that
 # both `dev-asp` and `prod-asp` need. Hosts don't activate this
 # directly — they enable `dev-asp` or `prod-asp` (or neither).
-__asp-runtime = ["dep:serde", "dep:serde_json", "dep:jian-core", "dep:jian-ops-schema"]
+__asp-runtime = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:jian-core",
+    "dep:jian-ops-schema",
+    # Pull in `windows-sys` for the Named Pipe transport. The
+    # `target.'cfg(windows)'.dependencies` table gates the crate
+    # to the Windows target, so this `dep:` activator is a no-op
+    # on Unix builds.
+    "dep:windows-sys",
+]
 
 [dependencies]
 # Phase 1 of Plan 18: protocol + selector type definitions. Pure
@@ -63,3 +73,21 @@ serde_json = { workspace = true, optional = true }
 # the no-feature build stays empty.
 jian-core       = { path = "../jian-core", optional = true }
 jian-ops-schema = { path = "../jian-ops-schema", optional = true }
+
+# Plan 18 ASP prod mode (C4 follow-up B): Windows Named Pipe
+# transport. `windows-sys` is already in the workspace via winit /
+# tokio transitives — pulling it directly here lets us call
+# `CreateNamedPipeW` + `ConnectNamedPipe` and build the
+# current-user DACL for the prod ASP listener on Windows. Gated to
+# the windows target so non-Windows builds skip the crate
+# compile cost.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Pipes",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }

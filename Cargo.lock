@@ -2418,6 +2418,7 @@ dependencies = [
  "jian-ops-schema",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

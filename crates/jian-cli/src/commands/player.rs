@@ -252,7 +252,6 @@ fn start_asp_listener_session(
 ) -> Result<AspSession> {
     use jian_asp::session::{Permission, StaticTokenValidator};
     use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
-    use std::os::unix::fs::OpenOptionsExt;
     use std::time::Instant;
 
     // Path-shape validation runs first so a typo'd `--asp tcp://...`
@@ -446,13 +445,195 @@ fn write_token_file(token_path: &std::path::Path) -> Result<String> {
 
 #[cfg(all(windows, feature = "prod-asp"))]
 fn start_asp_listener_session(
-    _arg: &str,
-    _host: &jian_host_desktop::DesktopHost,
+    arg: &str,
+    host: &jian_host_desktop::DesktopHost,
 ) -> Result<AspSession> {
-    Err(anyhow!(
-        "--asp on Windows: not yet implemented — Named Pipe transport is a stub. \
-         Tracking issue: jian-asp/src/transport/named_pipe.rs"
-    ))
+    use jian_asp::session::{Permission, StaticTokenValidator};
+    use jian_asp::transport::socket_path::{resolve_bind_arg, BindTarget};
+    use std::time::Instant;
+
+    // Path-shape validation runs first.
+    let target = resolve_bind_arg(arg, std::process::id(), |k| std::env::var(k).ok())
+        .map_err(|e| anyhow!("--asp: {}", e))?;
+    let BindTarget::NamedPipe(pipe_name) = target else {
+        return Err(anyhow!(
+            "--asp: internal: unexpected bind target on windows"
+        ));
+    };
+
+    // Capability gate (mirror of Unix path).
+    let capabilities_opt_in = host
+        .runtime
+        .document
+        .as_ref()
+        .and_then(|d| d.schema.app.as_ref())
+        .and_then(|a| a.capabilities.as_ref())
+        .is_some_and(|caps| !caps.is_empty());
+    if !capabilities_opt_in {
+        return Err(anyhow!(
+            "--asp: refusing to start listener — `app.capabilities` is empty or absent. \
+             Prod ASP requires the .op author to declare at least one capability \
+             (Plan 18 spec §4)."
+        ));
+    }
+
+    let listener = jian_asp::transport::NamedPipeListener::bind(&pipe_name)
+        .map_err(|e| anyhow!("--asp: {}", e))?;
+
+    // Token file: written next to the pipe-namespace path doesn't
+    // make sense (Named Pipes aren't filesystem-rooted), so we put
+    // the token under `%LOCALAPPDATA%\jian\<pid>.asp.token` with
+    // no per-user ACL adjustments — the LocalAppData dir is
+    // user-private by default on Windows, and the token file
+    // inherits that.
+    let token_path = {
+        let local = std::env::var_os("LOCALAPPDATA")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .ok_or_else(|| anyhow!("--asp: cannot resolve LOCALAPPDATA / USERPROFILE for token file"))?;
+        let mut p = std::path::PathBuf::from(local);
+        p.push("jian");
+        std::fs::create_dir_all(&p)
+            .map_err(|e| anyhow!("--asp: create_dir_all {}: {}", p.display(), e))?;
+        p.push(format!("{}.asp.token", std::process::id()));
+        p
+    };
+    let token = match write_token_file(&token_path) {
+        Ok(t) => t,
+        Err(e) => {
+            drop(listener);
+            return Err(e);
+        }
+    };
+    eprintln!(
+        "jian player: ASP listening on {} (token file: {})",
+        pipe_name,
+        token_path.display()
+    );
+
+    let (bridge, drain) = jian_asp::bridge::channel();
+    let validator = StaticTokenValidator::new(token, Permission::Act);
+    let quit_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let quit_flag_thread = quit_flag.clone();
+
+    let accept_thread = std::thread::Builder::new()
+        .name("jian-asp-listener".into())
+        .spawn(move || loop {
+            if quit_flag_thread.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            // Named Pipe `accept()` is blocking; the quit-flag
+            // pattern can't interrupt it the way `try_accept` does
+            // on Unix. Drop relies on the parent process exiting
+            // for now — same pragmatic compromise the rest of the
+            // Win32 ecosystem uses for blocking-accept servers.
+            // A future revision can switch to overlapped I/O with
+            // `CancelIoEx` for cleaner shutdown.
+            let mut transport = match listener.accept() {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("jian player: ASP accept ended: {}", e);
+                    return;
+                }
+            };
+            let session_result = jian_asp::server::run_prod_session_via_bridge(
+                &mut transport,
+                &validator,
+                &bridge,
+                Instant::now(),
+            );
+            if let Err(e) = session_result {
+                eprintln!("jian player: ASP session ended: {}", e);
+            }
+            // Re-arm for the next agent.
+            if let Err(e) = listener.disconnect_and_reuse() {
+                eprintln!(
+                    "jian player: ASP disconnect failed; ending listener: {}",
+                    e
+                );
+                return;
+            }
+        })
+        .map_err(|e| anyhow!("--asp: spawn listener thread: {}", e))?;
+
+    Ok(AspSession {
+        drain: std::sync::Mutex::new(Some(drain)),
+        quit_flag,
+        accept_thread: Some(accept_thread),
+        token_path,
+    })
+}
+
+/// Windows token file writer. `%LOCALAPPDATA%\jian\<pid>.asp.token`
+/// inherits the user-private LocalAppData ACL; we still use
+/// `create_new(true)` to refuse a stale token from a crashed prior
+/// run.
+#[cfg(all(windows, feature = "prod-asp"))]
+fn write_token_file(token_path: &std::path::Path) -> Result<String> {
+    use std::io::Write;
+    let token = read_random_token_hex_windows(32)
+        .map_err(|e| anyhow!("--asp: could not generate token: {}", e))?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(token_path)
+        .map_err(|e| anyhow!(
+            "--asp: write {}: {} \
+             (if a previous run crashed, remove the stale token file and retry)",
+            token_path.display(),
+            e
+        ))?;
+    if let Err(e) = f.write_all(token.as_bytes()).and_then(|_| f.write_all(b"\n")) {
+        drop(f);
+        let _ = std::fs::remove_file(token_path);
+        return Err(anyhow!(
+            "--asp: write {}: {} (partial write removed)",
+            token_path.display(),
+            e
+        ));
+    }
+    Ok(token)
+}
+
+/// Windows random token: read via `BCryptGenRandom`. We avoid
+/// pulling in the `rand` crate; `BCryptGenRandom` is stable, in
+/// CryptoAPI Next Gen, and produces cryptographic-quality output.
+#[cfg(all(windows, feature = "prod-asp"))]
+fn read_random_token_hex_windows(n: usize) -> std::io::Result<String> {
+    // Open a system-default RNG provider. Algorithm
+    // `BCRYPT_RNG_ALGORITHM` = "RNG"; `flags = 0` for default.
+    // Output: `n` random bytes.
+    extern "system" {
+        fn BCryptGenRandom(
+            hAlgorithm: *mut std::ffi::c_void,
+            pbBuffer: *mut u8,
+            cbBuffer: u32,
+            dwFlags: u32,
+        ) -> i32;
+    }
+    const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
+    let mut buf = vec![0u8; n];
+    // SAFETY: `buf` is a valid n-byte buffer; the
+    // `BCRYPT_USE_SYSTEM_PREFERRED_RNG` flag means we don't have
+    // to open / close an algorithm provider handle.
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            buf.as_mut_ptr(),
+            n as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status < 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("BCryptGenRandom failed: 0x{:x}", status),
+        ));
+    }
+    let mut hex = String::with_capacity(n * 2);
+    for b in buf {
+        hex.push_str(&format!("{:02x}", b));
+    }
+    Ok(hex)
 }
 
 /// Read `n` cryptographic-random bytes from `/dev/urandom` and
