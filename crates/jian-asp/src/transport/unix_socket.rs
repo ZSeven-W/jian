@@ -15,8 +15,9 @@
 //! noticing.
 
 use super::{Transport, TransportError};
+use std::fs::DirBuilder;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -35,42 +36,74 @@ pub struct UnixSocketListener {
 
 impl UnixSocketListener {
     /// Bind a Unix listener at `path`, creating the parent directory
-    /// (mode `0700`) if needed. Removes any stale socket file at
-    /// `path` first — that's safe because the only legitimate owner
-    /// of the path is a previous, now-dead run of this same
-    /// process; a hostile peer who can write to a `0700` parent
-    /// already has the same uid, in which case race-protection is
-    /// moot.
+    /// (mode `0700`) if needed.
     ///
-    /// Returns `TransportError::Io` for any of: parent-dir create
-    /// failure, stale-socket-remove failure, bind failure, or perm
-    /// chmod failure. The CLI surfaces those verbatim.
+    /// Security:
+    /// - Parent directory is created with `mkdir(parent, 0o700)` —
+    ///   one syscall, atomic, no chmod-after race.
+    /// - A pre-existing parent must be owned by the current uid AND
+    ///   have mode bits `& 0o077 == 0` (no group/other access). If
+    ///   either check fails the bind is refused — the spec says the
+    ///   transport is local-only-and-confidential, so binding inside
+    ///   a world-readable parent would silently weaken that.
+    /// - A stale socket at `path` is unlinked **only after** probing
+    ///   that no one is listening on it (`UnixStream::connect`
+    ///   returns `ECONNREFUSED` for a listener-less socket file). A
+    ///   live listener belonging to a co-running peer is left
+    ///   untouched and the bind fails — that's safer than silently
+    ///   stealing the path.
+    /// - Socket file is chmodded to `0600` after bind. The chmod
+    ///   window is harmless because the parent is `0700` (only the
+    ///   owner can traverse to the socket file in the first place),
+    ///   but we tighten the file perms regardless so the path is
+    ///   inert if it ever gets snapshotted by a backup tool.
     pub fn bind(path: impl AsRef<Path>) -> Result<Self, TransportError> {
         let path = path.as_ref().to_path_buf();
         let cleanup_parent = ensure_parent_dir(&path)?;
 
-        // Remove a stale socket at the same path. `UnixListener::bind`
-        // refuses with `EADDRINUSE` if the file already exists, even
-        // when no peer is listening — Unix sockets don't auto-clean
-        // on process exit. We narrow the cleanup to the exact path
-        // and only proceed if the file is a socket.
+        // Stale-socket handling. `UnixListener::bind` refuses with
+        // `EADDRINUSE` when the file already exists, even when no
+        // peer is listening — Unix sockets don't auto-clean on
+        // process exit. We probe before unlinking so a still-live
+        // co-running listener isn't silently displaced.
         match std::fs::symlink_metadata(&path) {
             Ok(meta) => {
-                if meta.file_type().is_socket() {
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        return Err(TransportError::Io(format!(
-                            "stale socket at {} could not be removed: {}",
-                            path.display(),
-                            e
-                        )));
-                    }
-                } else {
+                if !meta.file_type().is_socket() {
                     // Don't clobber regular files / dirs / symlinks at
                     // the requested path — that's the user's data.
                     return Err(TransportError::Io(format!(
                         "refusing to bind: {} exists and is not a Unix socket",
                         path.display()
                     )));
+                }
+                // Probe: a live listener accepts our connect (we
+                // immediately drop), a dead one returns
+                // `ECONNREFUSED` / `ENOENT` / `ENOTSOCK`. We treat
+                // *any* successful connect as "in use", which is
+                // strictly safer than the previous behavior of
+                // unconditional unlink. The probe is non-blocking
+                // because Unix domain sockets don't do a TCP-style
+                // 3-way handshake — connect either succeeds or
+                // fails immediately.
+                match UnixStream::connect(&path) {
+                    Ok(s) => {
+                        drop(s);
+                        return Err(TransportError::Io(format!(
+                            "refusing to bind: a peer is already listening at {} \
+                             (probed via connect)",
+                            path.display()
+                        )));
+                    }
+                    Err(_) => {
+                        // Stale — unlink and continue.
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            return Err(TransportError::Io(format!(
+                                "stale socket at {} could not be removed: {}",
+                                path.display(),
+                                e
+                            )));
+                        }
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -87,12 +120,10 @@ impl UnixSocketListener {
             TransportError::Io(format!("bind {}: {}", path.display(), e))
         })?;
 
-        // Pin the socket file to mode `0600`. On most kernels a
-        // newly-bound socket inherits the process umask; an
-        // 0022-umask process would expose `world-readable` here.
-        // `world-read` on a Unix socket doesn't grant connect, but
-        // the spec calls out restrictive perms explicitly so we
-        // belt-and-braces it.
+        // Tighten the socket file's mode to `0600`. The `0700`
+        // parent already prevents non-owner traversal, so this is a
+        // belt-and-braces hardening for the case where the path is
+        // backed up / snapshotted.
         let perms = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(&path, perms).map_err(|e| {
             TransportError::Io(format!("chmod 0600 {}: {}", path.display(), e))
@@ -189,44 +220,127 @@ impl Transport for UnixSocketTransport {
 }
 
 /// Ensure the listener path's parent directory exists with `0700`
-/// perms. Returns whether *this call* created the directory; the
-/// `Drop` impl uses that flag to decide whether the parent is ours
-/// to clean up.
+/// perms AND is owned by the current uid.
+///
+/// Returns `true` when *this call* created the parent directory;
+/// the `Drop` impl uses that flag to decide whether the parent is
+/// ours to remove. Created via `DirBuilder::mode(0o700)` so the
+/// 0700 perms are in place atomically — there is no chmod-after
+/// window during which a peer could observe looser perms.
+///
+/// A pre-existing parent is **validated**, not trusted: the
+/// directory's owner uid must match the current process's euid AND
+/// the mode must be `& 0o077 == 0` (no group/other bits). This
+/// catches the case where a malicious local user planted
+/// `/tmp/jian-1000` ahead of time — the mode/uid check refuses to
+/// bind inside it. `XDG_RUNTIME_DIR` itself (mode 0700, owner uid)
+/// passes naturally.
 fn ensure_parent_dir(path: &Path) -> Result<bool, TransportError> {
     let Some(parent) = path.parent() else {
         return Ok(false);
     };
     if parent.as_os_str().is_empty() {
         // Path was a bare filename in the CWD — no parent to make.
+        // (The `socket_path::is_legit_unix_path` whitelist refuses
+        // bare filenames at the CLI layer, but this branch keeps
+        // the function a safe building block for direct callers.)
         return Ok(false);
     }
-    match std::fs::metadata(parent) {
-        Ok(meta) if meta.is_dir() => {
-            // Pre-existing dir — leave perms alone (it might be
-            // `XDG_RUNTIME_DIR` itself, owned by systemd at 0700).
-            // Caller does not own this path; do not clean up.
-            Ok(false)
-        }
-        Ok(_) => Err(TransportError::Io(format!(
-            "{} exists and is not a directory",
-            parent.display()
-        ))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                TransportError::Io(format!("create_dir_all {}: {}", parent.display(), e))
-            })?;
-            let perms = std::fs::Permissions::from_mode(0o700);
-            std::fs::set_permissions(parent, perms).map_err(|e| {
-                TransportError::Io(format!("chmod 0700 {}: {}", parent.display(), e))
-            })?;
-            Ok(true)
-        }
-        Err(e) => Err(TransportError::Io(format!(
-            "stat {}: {}",
+
+    // Walk parents bottom-up, materializing each missing component
+    // with `mkdir(2)` + mode `0o700` atomically. We do this rather
+    // than `create_dir_all` because the latter delegates the chmod
+    // to a post-create step, leaving a window where mode is
+    // umask-derived. `DirBuilder::mode(0o700).create(p)` is one
+    // syscall on Linux/macOS.
+    let owner_uid = unix_uid();
+    let cleanup_parent = mkdir_chain(parent)?;
+
+    // Final validation — even if we created the parent ourselves,
+    // re-stat to confirm `mode == 0o700` & `uid == owner_uid`. A
+    // hardened-FS implementation might not honor `mkdir(0o700)`
+    // (acl masks, etc.); this catches that and refuses cleanly.
+    let meta = std::fs::metadata(parent).map_err(|e| {
+        TransportError::Io(format!("stat {}: {}", parent.display(), e))
+    })?;
+    if meta.uid() != owner_uid {
+        return Err(TransportError::Io(format!(
+            "refusing to bind: {} is owned by uid {} (current uid {})",
             parent.display(),
-            e
-        ))),
+            meta.uid(),
+            owner_uid
+        )));
     }
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(TransportError::Io(format!(
+            "refusing to bind: {} mode 0o{:o} grants group/other access",
+            parent.display(),
+            mode
+        )));
+    }
+
+    Ok(cleanup_parent)
+}
+
+/// Walk `target`'s ancestors top-down, creating each missing component
+/// with `mkdir(p, 0o700)`. Returns whether *this call* created the
+/// final (deepest) component — that's the only one we'd ever clean
+/// up, because the leaf is the per-product `jian/` subdir; ancestors
+/// like `/run/user/1000` are system-managed.
+///
+/// Implementation detail: we deliberately don't use `create_dir_all`
+/// because it doesn't take a mode argument and chmods after creation,
+/// leaving a perms-race window. Each `DirBuilder::create` is
+/// atomic-via-`mkdir(2)`; an `EEXIST` is benign and means the
+/// component already existed.
+fn mkdir_chain(target: &Path) -> Result<bool, TransportError> {
+    // Collect ancestors top-down (root first → target last).
+    let mut chain: Vec<&Path> = target.ancestors().collect();
+    chain.reverse();
+    let mut created_leaf = false;
+    let last = chain.len();
+    for (i, dir) in chain.iter().enumerate() {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        // Skip the filesystem root — `mkdir("/")` always EEXISTs
+        // but the syscall is wasted.
+        if dir.parent().is_none() {
+            continue;
+        }
+        match DirBuilder::new().mode(0o700).create(dir) {
+            Ok(()) => {
+                if i + 1 == last {
+                    created_leaf = true;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // Pre-existing; validation happens after the chain
+                // walk (we only validate the *target*, not every
+                // ancestor — a system-managed ancestor like
+                // `/run/user/1000` may legitimately have looser
+                // mode bits than 0700, e.g. some BSDs).
+            }
+            Err(e) => {
+                return Err(TransportError::Io(format!(
+                    "mkdir {}: {}",
+                    dir.display(),
+                    e
+                )));
+            }
+        }
+    }
+    Ok(created_leaf)
+}
+
+#[cfg(unix)]
+fn unix_uid() -> u32 {
+    extern "C" {
+        fn geteuid() -> u32;
+    }
+    // SAFETY: `geteuid` is an always-succeeding POSIX call.
+    unsafe { geteuid() }
 }
 
 #[cfg(test)]
@@ -291,7 +405,13 @@ mod tests {
     #[test]
     fn bind_refuses_to_clobber_a_regular_file() {
         let path = temp_socket_path("regfile");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Create parent with `0700` so the listener's parent
+        // perm-check passes; the case under test is the *socket
+        // path itself* being a regular file.
+        let parent = path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            .unwrap();
         std::fs::write(&path, b"important user data").unwrap();
         let result = UnixSocketListener::bind(&path);
         let err = match result {
@@ -354,5 +474,94 @@ mod tests {
         assert_eq!(resp, r#"{"id":1,"ok":true,"body":"bye"}"#);
 
         server.join().unwrap();
+    }
+
+    // Codex C4 review fix-ups:
+
+    #[test]
+    fn bind_refuses_world_readable_parent() {
+        // Pre-existing parent dir with mode 0o755 must be refused —
+        // a malicious local user could plant such a parent and read
+        // anything the listener creates inside.
+        let path = temp_socket_path("loose-parent");
+        let parent = path.parent().unwrap();
+        std::fs::create_dir_all(parent).unwrap();
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        let err = match UnixSocketListener::bind(&path) {
+            Ok(_) => panic!("expected refusal"),
+            Err(e) => e,
+        };
+        match err {
+            TransportError::Io(msg) => assert!(
+                msg.contains("group/other access"),
+                "expected mode-bits refusal, got {}",
+                msg
+            ),
+            other => panic!("expected Io, got {:?}", other),
+        }
+        let _ = std::fs::remove_dir_all(parent);
+    }
+
+    #[test]
+    fn bind_refuses_when_live_listener_holds_path() {
+        // A still-live UnixListener at the same path should NOT be
+        // displaced by a second bind call; the probe must detect it
+        // and refuse cleanly. This is the codex HIGH "active
+        // listener unlinked as stale" finding.
+        let path = temp_socket_path("live-listener");
+        let first = UnixSocketListener::bind(&path).expect("first bind");
+        // While `first` is live, attempt a second bind on the same
+        // path.
+        let err = match UnixSocketListener::bind(&path) {
+            Ok(_) => panic!(
+                "second bind must refuse — first listener is still live"
+            ),
+            Err(e) => e,
+        };
+        match err {
+            TransportError::Io(msg) => assert!(
+                msg.contains("peer is already listening"),
+                "expected live-peer refusal, got {}",
+                msg
+            ),
+            other => panic!("expected Io, got {:?}", other),
+        }
+        // First listener still healthy.
+        assert!(path.exists());
+        drop(first);
+    }
+
+    #[test]
+    fn parent_dir_is_atomically_0700_no_chmod_window() {
+        // Verifies the fix for the "chmod-after race" finding: when
+        // we create the parent fresh, it must be `0o700` from the
+        // moment it appears on disk. We can't *prove* atomicity in
+        // a unit test, but we can confirm post-bind the dir is
+        // exactly 0700 with the *current* umask set to 0o000 (i.e.
+        // no implicit tightening) — if the impl relied on
+        // umask-aware mkdir, that would surface here.
+        let path = temp_socket_path("atomic-perms");
+        // SAFETY: `umask(2)` is a thread-unsafe global; this test
+        // is single-threaded for the duration so the mutation is
+        // contained.
+        extern "C" {
+            fn umask(mask: u32) -> u32;
+        }
+        let prev = unsafe { umask(0o000) };
+        let listener = UnixSocketListener::bind(&path).expect("bind");
+        // Restore umask before any assertion.
+        let _ = unsafe { umask(prev) };
+
+        let mode = std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "parent dir must be exactly 0700 even with permissive umask"
+        );
+        drop(listener);
     }
 }

@@ -196,7 +196,12 @@ fn bind_asp_listener(arg: &str) -> Result<jian_asp::transport::UnixSocketListene
     };
     let listener = jian_asp::transport::UnixSocketListener::bind(&path)
         .map_err(|e| anyhow!("--asp: {}", e))?;
-    eprintln!("jian player: ASP listening on {}", listener.path().display());
+    eprintln!(
+        "jian player: ASP socket bound at {} \
+         (NOTE: accept loop not yet wired into the event loop — \
+         clients that connect will block until follow-up commit)",
+        listener.path().display()
+    );
     Ok(listener)
 }
 
@@ -213,7 +218,12 @@ fn bind_asp_listener(arg: &str) -> Result<jian_asp::transport::NamedPipeListener
     };
     let listener = jian_asp::transport::NamedPipeListener::bind(&name)
         .map_err(|e| anyhow!("--asp: {}", e))?;
-    eprintln!("jian player: ASP listening on {}", listener.name());
+    eprintln!(
+        "jian player: ASP pipe bound at {} \
+         (NOTE: accept loop not yet wired into the event loop — \
+         clients that connect will block until follow-up commit)",
+        listener.name()
+    );
     Ok(listener)
 }
 

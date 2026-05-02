@@ -89,45 +89,35 @@ pub fn resolve_bind_arg(
     pid: u32,
     env: impl Fn(&str) -> Option<String>,
 ) -> Result<BindTarget, BindError> {
-    // Reject anything that *looks* like a URL with a scheme. The
-    // `://` substring is the simplest, broadest rejection that
-    // catches `tcp://`, `http://`, `ws://`, `unix://localhost/...`
-    // (some HTTP-bridge libraries use that), and any future scheme
-    // a misconfigured deployment might try to thread through. A
-    // legitimate filesystem path on every supported platform has no
-    // `://` in it.
-    if arg.contains("://") {
-        return Err(BindError::NetworkBindRefused(arg.to_owned()));
-    }
-
-    // Same intent for bare `host:port` strings — `127.0.0.1:9000` /
-    // `0.0.0.0:9000`. A real path may contain a `:` (Windows drive
-    // letters; macOS HFS legacy `:` separator), but the *combo* of
-    // a digit-only segment after the first `:` is a strong network
-    // signal and not something a user types by accident.
-    if looks_like_host_port(arg) {
-        return Err(BindError::NetworkBindRefused(arg.to_owned()));
-    }
-
     if arg == "auto" {
         return resolve_auto(pid, env);
     }
 
-    // Explicit path — defer to platform-specific bind decision.
+    // Whitelist the shape of a legitimate explicit path. Anything
+    // that *isn't* an absolute / relative-from-CWD filesystem path
+    // (Unix) or a `\\.\pipe\` name (Windows) is refused as a
+    // possible network bind target — `0.0.0.0`, `localhost`, `999`,
+    // `tcp:9000`, `[::1]:80`, `127.0.0.1` (no port), and any future
+    // scheme a misconfigured deployment might thread through.
+    //
+    // The whitelist is broader than the previous heuristic blacklist
+    // because the threat-model wants any *uncertain* shape closed by
+    // default; a user who legitimately wants to bind a relative
+    // socket path can write `./my.sock` or `../shared/my.sock`.
     #[cfg(unix)]
     {
+        if !is_legit_unix_path(arg) {
+            return Err(BindError::NetworkBindRefused(arg.to_owned()));
+        }
         Ok(BindTarget::UnixSocket(PathBuf::from(arg)))
     }
     #[cfg(windows)]
     {
-        // On Windows an explicit `--asp` argument that starts with
-        // `\\.\pipe\` is a Named Pipe; anything else we accept as a
-        // pipe name only if it begins with `\\.\pipe\` (the
-        // canonical local-pipe namespace). A raw path like
-        // `C:\foo.sock` is rejected because Windows pipes don't
-        // live on the filesystem; using such a path silently would
-        // be the kind of "configured but doesn't bind" footgun the
-        // spec calls out.
+        // Windows pipes don't live on the filesystem; the canonical
+        // local-pipe namespace starts with `\\.\pipe\`. A raw path
+        // like `C:\foo.sock` is rejected because using it would be
+        // the kind of "configured but doesn't bind" footgun the spec
+        // calls out.
         if arg.starts_with(r"\\.\pipe\") {
             Ok(BindTarget::NamedPipe(arg.to_owned()))
         } else {
@@ -139,11 +129,32 @@ pub fn resolve_bind_arg(
     }
     #[cfg(not(any(unix, windows)))]
     {
+        let _ = (pid, env);
         Err(BindError::AutoUnsupportedOnPlatform(format!(
             "no transport for target {}",
             std::env::consts::OS
         )))
     }
+}
+
+/// Whitelist for explicit Unix `--asp <arg>` values.
+///
+/// Accept exactly two shapes:
+/// - **Absolute path**: starts with `/`. `/tmp/foo.sock`, `/run/...`.
+/// - **Relative-from-CWD path**: starts with `./` or `../`.
+///   The leading `./` is mandatory so a bare `foo` (which could be
+///   a hostname) is refused; a user who really wants the CWD writes
+///   `./foo.sock`.
+///
+/// Both shapes additionally cannot contain `://` (catches
+/// `unix:///tmp/x` and other URI variants — strip the scheme
+/// yourself if you want a plain path).
+#[cfg(unix)]
+fn is_legit_unix_path(arg: &str) -> bool {
+    if arg.contains("://") {
+        return false;
+    }
+    arg.starts_with('/') || arg.starts_with("./") || arg.starts_with("../")
 }
 
 /// Per-platform `auto` defaults.
@@ -190,18 +201,6 @@ fn resolve_auto(pid: u32, env: impl Fn(&str) -> Option<String>) -> Result<BindTa
             std::env::consts::OS
         )))
     }
-}
-
-/// `host:port` heuristic: at least one `:`, and the segment AFTER
-/// the *last* `:` parses as a non-empty all-digit port. This rejects
-/// `127.0.0.1:9000` and `[::1]:9000` while letting `C:\path.sock`
-/// through (the post-`:` segment isn't all-digits).
-fn looks_like_host_port(arg: &str) -> bool {
-    let Some(idx) = arg.rfind(':') else {
-        return false;
-    };
-    let port = &arg[idx + 1..];
-    !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// On Unix we need the calling process's UID to assemble the `/tmp`
@@ -252,6 +251,93 @@ mod tests {
         assert!(matches!(err, BindError::NetworkBindRefused(_)));
         let err = resolve_bind_arg("localhost:8080", 1234, empty_env).unwrap_err();
         assert!(matches!(err, BindError::NetworkBindRefused(_)));
+    }
+
+    // Codex review found that the previous heuristic let through
+    // bare-host / port-only / `tcp:` strings. The new whitelist
+    // requires a path-shape prefix; pin every false-negative case
+    // explicitly so a future blacklist refactor would trip here.
+    #[cfg(unix)]
+    #[test]
+    fn rejects_bare_ip_no_port() {
+        for s in ["0.0.0.0", "127.0.0.1", "::1", "[::]"] {
+            let err = resolve_bind_arg(s, 1234, empty_env).unwrap_err();
+            assert!(
+                matches!(err, BindError::NetworkBindRefused(_)),
+                "expected refusal for {}, got {:?}",
+                s,
+                err
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_hostname_only() {
+        for s in ["localhost", "example.com", "my-server"] {
+            let err = resolve_bind_arg(s, 1234, empty_env).unwrap_err();
+            assert!(
+                matches!(err, BindError::NetworkBindRefused(_)),
+                "expected refusal for {}",
+                s
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_port_only() {
+        for s in ["999", "9000", "0"] {
+            let err = resolve_bind_arg(s, 1234, empty_env).unwrap_err();
+            assert!(
+                matches!(err, BindError::NetworkBindRefused(_)),
+                "expected refusal for {}",
+                s
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_tcp_scheme_alias() {
+        // `tcp:9000`, `unix:foo`, `udp:9000` — `:` without `//`.
+        for s in ["tcp:9000", "unix:foo", "udp:9000", "ipc:my.sock"] {
+            let err = resolve_bind_arg(s, 1234, empty_env).unwrap_err();
+            assert!(
+                matches!(err, BindError::NetworkBindRefused(_)),
+                "expected refusal for {}",
+                s
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_bare_relative_filename() {
+        // `foo` could be a hostname; require `./foo` to disambiguate.
+        for s in ["foo", "foo.sock", "my.sock"] {
+            let err = resolve_bind_arg(s, 1234, empty_env).unwrap_err();
+            assert!(
+                matches!(err, BindError::NetworkBindRefused(_)),
+                "expected refusal for {}",
+                s
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn accepts_explicit_relative_path() {
+        let target = resolve_bind_arg("./foo.sock", 1, empty_env).unwrap();
+        assert_eq!(
+            target,
+            BindTarget::UnixSocket(PathBuf::from("./foo.sock"))
+        );
+        let target = resolve_bind_arg("../up/foo.sock", 1, empty_env).unwrap();
+        assert_eq!(
+            target,
+            BindTarget::UnixSocket(PathBuf::from("../up/foo.sock"))
+        );
     }
 
     #[cfg(unix)]
@@ -352,21 +438,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn host_port_heuristic_lets_through_drive_letters() {
-        // `C:\foo` is a legit Windows path — no all-digit segment
-        // after the trailing `:`. The host:port heuristic must
-        // leave it alone (the explicit-path branch then accepts
-        // or rejects per platform).
-        assert!(!looks_like_host_port(r"C:\foo"));
-        assert!(!looks_like_host_port("/tmp/foo.sock"));
-        assert!(!looks_like_host_port("auto"));
-    }
-
-    #[test]
-    fn host_port_heuristic_catches_ipv6_brackets() {
-        // `[::1]:9000` ends with an all-digit segment after the
-        // last `:`, so the heuristic rejects it as a network bind.
-        assert!(looks_like_host_port("[::1]:9000"));
-    }
 }
