@@ -95,11 +95,10 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         Vec<u8>,
     )> = if args.aot {
         let viewport = parse_viewport(&args.aot_viewport)?;
-        let (layout_snap, state_snap) =
-            compute_aot_payload(&loaded.value, viewport).context(
-                "computing AOT initial layout / default state (jian pack --aot). \
+        let (layout_snap, state_snap) = compute_aot_payload(&loaded.value, viewport).context(
+            "computing AOT initial layout / default state (jian pack --aot). \
                  Falls back when ComputeFirstLayout fails",
-            )?;
+        )?;
         let layout_bytes = layout_snap
             .write_bytes()
             .map_err(|e| anyhow!("encode AOT initial layout: {e}"))?;

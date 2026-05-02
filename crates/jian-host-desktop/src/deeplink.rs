@@ -230,13 +230,14 @@ impl DeepLinkHandler for NullDeepLinkHandler {
 /// platform-specific receiver registry so OS-delivered URLs route
 /// through it:
 ///
-/// - **macOS**: stores the handler in
-///   [`crate::app_delegate`]'s thread-local registry AND registers
-///   the `kAEGetURL` Apple-Event handler via
-///   [`crate::apple_event_receiver`].
-/// - **Windows**: stores the handler in [`crate::win_deeplink`]'s
-///   thread-local registry. The `WM_COPYDATA` message-only-window
-///   listener is a separate follow-up (Plan 8 §T8 / Windows leg).
+/// - **macOS**: stores the handler in `crate::app_delegate`'s
+///   thread-local registry AND registers the `kAEGetURL` Apple-
+///   Event handler via `crate::apple_event_receiver`.
+/// - **Windows**: stores the handler in `crate::win_deeplink`'s
+///   thread-local registry. (Both modules are `cfg`-gated to their
+///   target_os and unreachable from a Linux rustdoc build, so the
+///   intra-doc links above are inlined as code spans rather than
+///   `[`...`]` pairs that would error under `RUSTDOCFLAGS=-D warnings`.)
 /// - **Linux / other**: stores the handler in a no-op registry —
 ///   the `.desktop` MIME entry can dispatch via the player's
 ///   command-line argv path, which is host-driven.

@@ -533,7 +533,10 @@ mod preload_tests {
             frame_node("root", vec![rect_node("a"), rect_node("b")]),
             None,
         );
-        let snap = snapshot(&[("a", [10.0, 20.0, 100.0, 50.0]), ("b", [10.0, 80.0, 100.0, 50.0])]);
+        let snap = snapshot(&[
+            ("a", [10.0, 20.0, 100.0, 50.0]),
+            ("b", [10.0, 80.0, 100.0, 50.0]),
+        ]);
         let mut engine = LayoutEngine::new();
         let n = engine.preload_initial(&snap, &tree);
         assert_eq!(n, 2);
@@ -579,9 +582,6 @@ mod preload_tests {
         engine.preload_initial(&snapshot(&[("a", [1.0, 2.0, 3.0, 4.0])]), &tree);
         engine.preload_initial(&snapshot(&[("a", [50.0, 60.0, 70.0, 80.0])]), &tree);
         let key_a = tree.get("a").unwrap();
-        assert_eq!(
-            engine.node_rect(key_a),
-            Some(rect(50.0, 60.0, 70.0, 80.0))
-        );
+        assert_eq!(engine.node_rect(key_a), Some(rect(50.0, 60.0, 70.0, 80.0)));
     }
 }

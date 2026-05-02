@@ -101,7 +101,7 @@ thread_local! {
         const { RefCell::new(None) };
 }
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_CLASS_ALREADY_EXISTS, ERROR_TIMEOUT, GetLastError,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_CLASS_ALREADY_EXISTS, ERROR_TIMEOUT,
     HANDLE, HMODULE, HWND, LPARAM, LRESULT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
@@ -261,7 +261,12 @@ pub fn try_acquire_singleton() -> Singleton {
     // signals it after the HWND is up.
     let event_name = utf16_with_nul(READY_EVENT_NAME);
     let ready_event = unsafe {
-        CreateEventW(std::ptr::null(), 1 /* manual reset */, 0, event_name.as_ptr())
+        CreateEventW(
+            std::ptr::null(),
+            1, /* manual reset */
+            0,
+            event_name.as_ptr(),
+        )
     };
     if ready_event.is_null() {
         // Event creation failed — log + continue with mutex only.
@@ -275,10 +280,7 @@ pub fn try_acquire_singleton() -> Singleton {
              secondary instances may experience a brief startup-window forwarding gap"
         );
     }
-    Singleton::Primary(SingletonGuard {
-        mutex,
-        ready_event,
-    })
+    Singleton::Primary(SingletonGuard { mutex, ready_event })
 }
 
 /// Hidden-window guard. Owned by the primary instance for the
@@ -360,9 +362,7 @@ const READY_EVENT_NAME: &str = r"Local\JianHostDesktop-ReceiverReady";
 /// runs on the message-pump thread (winit pumps on main), so
 /// receiver-window messages process alongside regular
 /// WM_PAINT / WM_INPUT traffic.
-pub fn install_receiver_window(
-    singleton: &SingletonGuard,
-) -> Result<ReceiverWindow, &'static str> {
+pub fn install_receiver_window(singleton: &SingletonGuard) -> Result<ReceiverWindow, &'static str> {
     let class_name = utf16_with_nul(crate::win_deeplink::RECEIVER_CLASS_NAME);
     // Compute the module handle ONCE and use it for both
     // class registration and `CreateWindowExW`. Codex round 1
@@ -398,10 +398,8 @@ pub fn install_receiver_window(
             if last == ERROR_CLASS_ALREADY_EXISTS {
                 Ok(()) // duplicate-name → fine, reuse existing atom
             } else {
-                Err(
-                    "RegisterClassExW failed with non-duplicate error \
-                     (resource exhaustion?)",
-                )
+                Err("RegisterClassExW failed with non-duplicate error \
+                     (resource exhaustion?)")
             }
         } else {
             Ok(())
@@ -535,8 +533,7 @@ pub fn forward_url_to_primary(url: &str) -> Result<ForwardOutcome, &'static str>
     // under stricter DACL / mandatory-integrity-level setups where
     // the secondary's token doesn't grant write to a primary-
     // created event.
-    let event_handle =
-        unsafe { OpenEventW(SYNCHRONIZE, 0, event_name.as_ptr()) };
+    let event_handle = unsafe { OpenEventW(SYNCHRONIZE, 0, event_name.as_ptr()) };
     if !event_handle.is_null() {
         let wait = unsafe { WaitForSingleObject(event_handle, READY_WAIT_MS) };
         unsafe {
@@ -605,7 +602,7 @@ pub fn forward_url_to_primary(url: &str) -> Result<ForwardOutcome, &'static str>
         SendMessageTimeoutW(
             peer,
             WM_COPYDATA,
-            0 as WPARAM,
+            0_usize,
             &cds as *const _ as LPARAM,
             SMTO_BLOCK,
             SEND_TIMEOUT_MS,
@@ -687,8 +684,7 @@ extern "system" fn window_proc_imp(
         // SAFETY: bounds + alignment validated above; the kernel-
         // side cross-process copy guarantees the buffer is live for
         // the duration of the SendMessageW call.
-        let slice =
-            unsafe { std::slice::from_raw_parts(cds.lpData as *const u16, units) };
+        let slice = unsafe { std::slice::from_raw_parts(cds.lpData as *const u16, units) };
         let url = match String::from_utf16(slice) {
             Ok(s) => s,
             Err(_) => return 0,
@@ -757,10 +753,14 @@ mod tests {
         // deliberate (defense-in-depth against cross-app spoof)
         // but benign — the test catches an accidental change.
         assert_eq!(COPYDATA_TAG, 0x4A_44_4C_31);
-        // ASCII bytes: 'J' 'D' 'L' '1'
-        assert_eq!(COPYDATA_TAG.to_be_bytes()[..4.min(std::mem::size_of::<usize>())]
-            .iter().rev().take(4).copied().collect::<Vec<_>>(),
-            vec![0x31, 0x4C, 0x44, 0x4A]);
+        // The four bytes spell 'JDL1' in ASCII. Use FourCC math
+        // (not byte-slice tricks — `usize` width varies across
+        // 32-bit / 64-bit targets, codex round 2 missed this).
+        let four_cc = ((b'J' as usize) << 24)
+            | ((b'D' as usize) << 16)
+            | ((b'L' as usize) << 8)
+            | (b'1' as usize);
+        assert_eq!(COPYDATA_TAG, four_cc);
     }
 
     #[test]

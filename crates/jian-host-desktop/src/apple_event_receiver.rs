@@ -191,8 +191,7 @@ extern "C" fn handle_url_event_imp(
         // SAFETY: the AppleEvent runtime guarantees `event` is an
         // NSAppleEventDescriptor live for the duration of the
         // callback.
-        let event: &NSAppleEventDescriptor =
-            unsafe { &*(event as *const NSAppleEventDescriptor) };
+        let event: &NSAppleEventDescriptor = unsafe { &*(event as *const NSAppleEventDescriptor) };
         let url_str = match extract_url_string(event) {
             Some(s) => s,
             None => return,
@@ -266,14 +265,12 @@ fn extract_url_string(event: &NSAppleEventDescriptor) -> Option<String> {
     // raw msg_send!. The returned object is an autoreleased
     // descriptor; we wrap it in a `Retained` to keep the borrow
     // checker happy until we extract the string.
-    let param: *mut AnyObject = unsafe {
-        msg_send![event, paramDescriptorForKeyword: KEY_DIRECT_OBJECT]
-    };
+    let param: *mut AnyObject =
+        unsafe { msg_send![event, paramDescriptorForKeyword: KEY_DIRECT_OBJECT] };
     if param.is_null() {
         return None;
     }
-    let descriptor: &NSAppleEventDescriptor =
-        unsafe { &*(param as *const NSAppleEventDescriptor) };
+    let descriptor: &NSAppleEventDescriptor = unsafe { &*(param as *const NSAppleEventDescriptor) };
     let ns_str: Option<Retained<NSString>> = unsafe { descriptor.stringValue() };
     ns_str.map(|s| s.to_string())
 }

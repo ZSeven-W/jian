@@ -938,7 +938,10 @@ mod tests {
             .expect("mismatch falls through to compute");
         let rt = handles.take_runtime().expect("runtime present");
         // Preload was never installed — ComputeFirstLayout ran.
-        assert!(!rt.layout.has_preload(), "viewport mismatch must skip preload");
+        assert!(
+            !rt.layout.has_preload(),
+            "viewport mismatch must skip preload"
+        );
         let btn_key = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
         let r = rt.layout.node_rect(btn_key).expect("compute rect");
         // The (999, 999) sentinel from the rejected snapshot is gone.
@@ -991,7 +994,10 @@ mod tests {
         let root_key = rt.document.as_ref().unwrap().tree.get("root").unwrap();
         let btn_key = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
         // Both nodes have rects (real compute populated taffy).
-        assert!(rt.layout.node_rect(root_key).is_some(), "root has compute rect");
+        assert!(
+            rt.layout.node_rect(root_key).is_some(),
+            "root has compute rect"
+        );
         let r = rt.layout.node_rect(btn_key).expect("btn has compute rect");
         // The (7, 8, 9, 10) sentinel from the partial preload is
         // gone; taffy's real rect dominates.

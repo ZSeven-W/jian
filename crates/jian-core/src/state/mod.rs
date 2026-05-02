@@ -348,8 +348,8 @@ mod tests {
         g.page_set("home", "scrollTop", json!(120));
 
         let bytes = g.dump_default_state().write_bytes().expect("encode");
-        let restored = jian_ops_schema::pack::DefaultStateSnapshot::read_bytes(&bytes)
-            .expect("decode");
+        let restored =
+            jian_ops_schema::pack::DefaultStateSnapshot::read_bytes(&bytes).expect("decode");
 
         let s2 = Rc::new(Scheduler::new());
         let g2 = StateGraph::new(s2);

@@ -91,8 +91,7 @@ pub fn read_op_pack(path: &Path) -> Result<PackContents> {
     // `BTreeMap::insert` would silently keep the LATER index,
     // making `app.op` interpretation ambiguous. Reject duplicates
     // explicitly so the load fails loudly rather than picking one.
-    let mut by_name: std::collections::BTreeMap<String, usize> =
-        std::collections::BTreeMap::new();
+    let mut by_name: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for i in 0..zr.len() {
         let entry = zr.by_index(i)?;
         let name = entry.name().to_owned();
@@ -138,11 +137,7 @@ pub fn read_op_pack(path: &Path) -> Result<PackContents> {
             manifest.version
         ));
     }
-    if !manifest
-        .entries
-        .iter()
-        .any(|e| e == ENTRY_APP_OP)
-    {
+    if !manifest.entries.iter().any(|e| e == ENTRY_APP_OP) {
         return Err(anyhow!(
             "manifest `entries` does not include `{ENTRY_APP_OP}` — malformed pack"
         ));
@@ -154,8 +149,7 @@ pub fn read_op_pack(path: &Path) -> Result<PackContents> {
         .get(ENTRY_APP_OP)
         .copied()
         .ok_or_else(|| anyhow!("`{ENTRY_APP_OP}` missing from archive"))?;
-    let app_op_bytes =
-        read_entry_bytes(&mut zr, app_op_idx, ENTRY_APP_OP, APP_OP_MAX_BYTES)?;
+    let app_op_bytes = read_entry_bytes(&mut zr, app_op_idx, ENTRY_APP_OP, APP_OP_MAX_BYTES)?;
     let app_op_text = std::str::from_utf8(&app_op_bytes)
         .with_context(|| format!("`{ENTRY_APP_OP}` is not UTF-8"))?;
     let schema = jian_ops_schema::load_str(app_op_text)
@@ -176,7 +170,11 @@ pub fn read_op_pack(path: &Path) -> Result<PackContents> {
     // under a different shaper would disagree with the live render
     // — better to fall back to a fresh ComputeFirstLayout than to
     // serve mis-shaped geometry from a stale pack.
-    let backend_ok = match manifest.aot.as_ref().and_then(|a| a.measurement_backend.as_ref()) {
+    let backend_ok = match manifest
+        .aot
+        .as_ref()
+        .and_then(|a| a.measurement_backend.as_ref())
+    {
         Some(tag) if tag == READER_EXPECTED_BACKEND => true,
         Some(other) => {
             eprintln!(
@@ -203,12 +201,8 @@ pub fn read_op_pack(path: &Path) -> Result<PackContents> {
     let initial_layout = if layout_inventoried {
         match by_name.get(ENTRY_AOT_INITIAL_LAYOUT) {
             Some(&idx) => {
-                let bytes = read_entry_bytes(
-                    &mut zr,
-                    idx,
-                    ENTRY_AOT_INITIAL_LAYOUT,
-                    AOT_LAYOUT_MAX_BYTES,
-                )?;
+                let bytes =
+                    read_entry_bytes(&mut zr, idx, ENTRY_AOT_INITIAL_LAYOUT, AOT_LAYOUT_MAX_BYTES)?;
                 match InitialLayoutSnapshot::read_bytes(&bytes) {
                     Ok(snap) => Some(snap),
                     Err(e) => {
@@ -238,12 +232,8 @@ pub fn read_op_pack(path: &Path) -> Result<PackContents> {
     let default_state = if state_inventoried {
         match by_name.get(ENTRY_AOT_DEFAULT_STATE) {
             Some(&idx) => {
-                let bytes = read_entry_bytes(
-                    &mut zr,
-                    idx,
-                    ENTRY_AOT_DEFAULT_STATE,
-                    AOT_STATE_MAX_BYTES,
-                )?;
+                let bytes =
+                    read_entry_bytes(&mut zr, idx, ENTRY_AOT_DEFAULT_STATE, AOT_STATE_MAX_BYTES)?;
                 match DefaultStateSnapshot::read_bytes(&bytes) {
                     Ok(snap) => Some(snap),
                     Err(e) => {
@@ -418,7 +408,7 @@ fn same_json_kind_at(a: &serde_json::Value, b: &serde_json::Value, depth: usize)
 /// fills the +1 slot. Limits picked to fit the largest realistic
 /// document each entry needs to carry — single-digit MiB for AOT
 /// payloads, double-digit for the canonical JSON document.
-const MANIFEST_MAX_BYTES: u64 = 1 * 1024 * 1024; //   1 MiB — manifest.json
+const MANIFEST_MAX_BYTES: u64 = 1024 * 1024; //       1 MiB — manifest.json
 const APP_OP_MAX_BYTES: u64 = 32 * 1024 * 1024; //   32 MiB — schema document
 const AOT_LAYOUT_MAX_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB — initial_layout.bin
 const AOT_STATE_MAX_BYTES: u64 = 8 * 1024 * 1024; //  8 MiB — default_state.bin
@@ -427,7 +417,7 @@ const AOT_STATE_MAX_BYTES: u64 = 8 * 1024 * 1024; //  8 MiB — default_state.bi
 /// allocate up front against an attacker-declared size in the zip
 /// header. The actual buffer grows via `read_to_end` up to the
 /// per-entry limit, then refuses to grow further.
-const PREALLOC_CAP: u64 = 1 * 1024 * 1024;
+const PREALLOC_CAP: u64 = 1024 * 1024;
 
 /// Read a single zip entry's bytes by index, bounded at
 /// `max_bytes`. Wrapped so caller sites don't repeat the
@@ -477,9 +467,7 @@ fn safe_entry_path(name: &str) -> Result<PathBuf> {
         match comp {
             Component::Normal(seg) => out.push(seg),
             Component::CurDir => {}
-            Component::ParentDir => {
-                return Err(anyhow!("parent-directory component in `{name}`"))
-            }
+            Component::ParentDir => return Err(anyhow!("parent-directory component in `{name}`")),
             Component::RootDir => return Err(anyhow!("absolute path in `{name}`")),
             Component::Prefix(_) => return Err(anyhow!("drive / UNC prefix in `{name}`")),
         }
@@ -641,9 +629,7 @@ mod tests {
             rects,
         };
         let mut state_snap = DefaultStateSnapshot::default();
-        state_snap
-            .app
-            .insert("count".into(), serde_json::json!(7));
+        state_snap.app.insert("count".into(), serde_json::json!(7));
 
         let dir = tempfile::TempDir::new().unwrap();
         let pack_path = dir.path().join("withaot.op.pack");
@@ -665,9 +651,8 @@ mod tests {
         let pack_path = dir.path().join("nomanifest.zip");
         let file = std::fs::File::create(&pack_path).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file(ENTRY_APP_OP, opts).unwrap();
         zw.write_all(FIXTURE_OP.as_bytes()).unwrap();
         zw.finish().unwrap();
@@ -685,9 +670,8 @@ mod tests {
         let pack_path = dir.path().join("wrongformat.op.pack");
         let file = std::fs::File::create(&pack_path).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file(ENTRY_MANIFEST, opts).unwrap();
         let bad = serde_json::json!({
             "format": "some-other-zip",
@@ -715,9 +699,8 @@ mod tests {
         let pack_path = dir.path().join("future.op.pack");
         let file = std::fs::File::create(&pack_path).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file(ENTRY_MANIFEST, opts).unwrap();
         let manifest = serde_json::json!({
             "format": PACK_FORMAT,
@@ -746,9 +729,8 @@ mod tests {
         let pack_path = dir.path().join("badentries.op.pack");
         let file = std::fs::File::create(&pack_path).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file(ENTRY_MANIFEST, opts).unwrap();
         let manifest = serde_json::json!({
             "format": PACK_FORMAT,
@@ -795,9 +777,8 @@ mod tests {
         let pack_path = dir.path().join("orphan.op.pack");
         let file = std::fs::File::create(&pack_path).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file(ENTRY_MANIFEST, opts).unwrap();
         // Manifest deliberately omits the AOT entry from `entries`.
         let manifest = serde_json::json!({
@@ -832,8 +813,7 @@ mod tests {
         baseline.app.insert("count".into(), serde_json::json!(0));
         let mut snap = DefaultStateSnapshot::default();
         snap.app.insert("count".into(), serde_json::json!(7));
-        snap.app
-            .insert("legacy".into(), serde_json::json!("ghost"));
+        snap.app.insert("legacy".into(), serde_json::json!("ghost"));
 
         let extras = snapshot_extra_keys(&snap, &baseline);
         assert_eq!(extras, vec!["$app.legacy"]);
@@ -884,9 +864,8 @@ mod tests {
         let pack_path = dir.path().join("wrong_backend.op.pack");
         let file = std::fs::File::create(&pack_path).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file(ENTRY_MANIFEST, opts).unwrap();
         let manifest = serde_json::json!({
             "format": PACK_FORMAT,
@@ -968,9 +947,10 @@ mod tests {
         // and lose `role`. With exact-match nested-Object kind
         // checks, this case is now flagged.
         let mut baseline = DefaultStateSnapshot::default();
-        baseline
-            .app
-            .insert("user".into(), serde_json::json!({"name":"x","role":"guest"}));
+        baseline.app.insert(
+            "user".into(),
+            serde_json::json!({"name":"x","role":"guest"}),
+        );
         let mut snap = DefaultStateSnapshot::default();
         snap.app
             .insert("user".into(), serde_json::json!({"name":"old"}));
@@ -1016,9 +996,8 @@ mod tests {
         let pack_path = dir.path().join("garbledaot.op.pack");
         let file = std::fs::File::create(&pack_path).unwrap();
         let mut zw = zip::ZipWriter::new(file);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
         zw.start_file(ENTRY_MANIFEST, opts).unwrap();
         let manifest = serde_json::json!({
             "format": PACK_FORMAT,

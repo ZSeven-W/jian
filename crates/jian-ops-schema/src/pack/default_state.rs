@@ -220,17 +220,20 @@ impl DefaultStateSnapshot {
     /// pack-hash invariant.
     pub fn write_bytes(&self) -> Result<Vec<u8>, DefaultStateError> {
         let canonical = self.canonicalize()?;
-        let payload = serde_json::to_vec(&canonical).map_err(|e| DefaultStateError::InvalidJson {
-            cause: e.to_string(),
-        })?;
+        let payload =
+            serde_json::to_vec(&canonical).map_err(|e| DefaultStateError::InvalidJson {
+                cause: e.to_string(),
+            })?;
         // Length must fit in u32 — saturating cast would silently
         // truncate, so explicitly reject. 4 GiB of state is far
         // beyond anything the runtime expects.
-        let payload_len: u32 = payload.len().try_into().map_err(|_| {
-            DefaultStateError::InvalidJson {
-                cause: format!("payload {} bytes exceeds u32::MAX", payload.len()),
-            }
-        })?;
+        let payload_len: u32 =
+            payload
+                .len()
+                .try_into()
+                .map_err(|_| DefaultStateError::InvalidJson {
+                    cause: format!("payload {} bytes exceeds u32::MAX", payload.len()),
+                })?;
         let mut out = Vec::with_capacity(10 + payload.len());
         out.extend_from_slice(&DEFAULT_STATE_MAGIC);
         out.extend_from_slice(&DEFAULT_STATE_VERSION.to_le_bytes());
@@ -260,8 +263,7 @@ impl DefaultStateSnapshot {
         if version != DEFAULT_STATE_VERSION {
             return Err(DefaultStateError::UnsupportedVersion { got: version });
         }
-        let payload_len =
-            u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]) as usize;
+        let payload_len = u32::from_le_bytes([buf[6], buf[7], buf[8], buf[9]]) as usize;
         let body = &buf[HEADER..];
         if body.len() < payload_len {
             return Err(DefaultStateError::PayloadTruncated {
@@ -412,8 +414,7 @@ mod tests {
         snap.self_node.insert("btn".into(), self_btn);
         snap.route.insert("path".into(), json!("/"));
         snap.storage.insert("theme".into(), json!("dark"));
-        snap.vars
-            .insert("primary".into(), json!("#3b82f6"));
+        snap.vars.insert("primary".into(), json!("#3b82f6"));
         snap
     }
 
@@ -655,7 +656,8 @@ mod tests {
         p_ok.write_bytes().expect("page at limit ok");
 
         let mut p_bad = DefaultStateSnapshot::default();
-        p_bad.page
+        p_bad
+            .page
             .entry("home".into())
             .or_default()
             .insert("k".into(), over_limit);

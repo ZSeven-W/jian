@@ -104,8 +104,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
                 ));
             }
             use jian_host_desktop::win_deeplink_receiver::ForwardOutcome;
-            match jian_host_desktop::win_deeplink_receiver::forward_url_to_primary(&raw)
-            {
+            match jian_host_desktop::win_deeplink_receiver::forward_url_to_primary(&raw) {
                 Ok(ForwardOutcome::Delivered) => return Ok(ExitCode::SUCCESS),
                 Ok(ForwardOutcome::PrimaryRejected) => {
                     // The primary is alive and saw the URL but
