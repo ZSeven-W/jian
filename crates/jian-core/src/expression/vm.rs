@@ -146,9 +146,9 @@ pub fn run(chunk: &Chunk, ctx: &dyn EvalContext) -> Result<RuntimeValue, Diagnos
             }
             OpCode::MakeObject(n) => {
                 let n = *n as usize;
-                let take = n.checked_mul(2).ok_or_else(|| {
-                    vm_bug("MakeObject element count overflows usize", ip)
-                })?;
+                let take = n
+                    .checked_mul(2)
+                    .ok_or_else(|| vm_bug("MakeObject element count overflows usize", ip))?;
                 let at = stack
                     .len()
                     .checked_sub(take)

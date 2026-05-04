@@ -221,7 +221,7 @@ impl HostAgnosticBootstrap {
     /// Hosts that don't ship a `.op.pack` (or whose pack omits the
     /// AOT entry) call `install_data_path` and pay the regular
     /// `ComputeFirstLayout` cost. For the Plan 19 D2 expressions
-    /// preload as well, use [`install_data_path_with_aot_full`].
+    /// preload as well, use [`Self::install_data_path_with_aot_full`].
     pub fn install_data_path_with_aot(
         driver: &mut StartupDriver,
         source: BootstrapSource,

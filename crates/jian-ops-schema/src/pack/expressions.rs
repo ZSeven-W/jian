@@ -645,9 +645,7 @@ impl ExpressionsSnapshot {
     /// entry failed before falling back to JIT.
     pub fn verify_all(&self) -> Result<(), (String, ChunkVerifyError)> {
         for (source, chunk) in &self.entries {
-            chunk
-                .verify()
-                .map_err(|e| (source.clone(), e))?;
+            chunk.verify().map_err(|e| (source.clone(), e))?;
         }
         Ok(())
     }
@@ -689,9 +687,7 @@ fn read_string_field(
     field: &'static str,
 ) -> Result<String, ExpressionsError> {
     if *cursor + 4 > bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let len = u32::from_le_bytes([
         bytes[*cursor],
@@ -710,9 +706,7 @@ fn read_string_field(
     }
     let len = len as usize;
     if *cursor + len > bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let s = std::str::from_utf8(&bytes[*cursor..*cursor + len])
         .map_err(|_| ExpressionsError::InvalidUtf8 { entry_index, field })?
@@ -728,9 +722,7 @@ fn read_vec_len(
     field: &'static str,
 ) -> Result<usize, ExpressionsError> {
     if *cursor + 4 > bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let n = u32::from_le_bytes([
         bytes[*cursor],
@@ -897,9 +889,7 @@ fn read_op(
     op_index: usize,
 ) -> Result<PackedOpCode, ExpressionsError> {
     if *cursor >= bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let tag = bytes[*cursor];
     *cursor += 1;
@@ -957,9 +947,7 @@ fn read_op(
 
 fn read_u8(bytes: &[u8], cursor: &mut usize, entry_index: usize) -> Result<u8, ExpressionsError> {
     if *cursor >= bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let v = bytes[*cursor];
     *cursor += 1;
@@ -968,9 +956,7 @@ fn read_u8(bytes: &[u8], cursor: &mut usize, entry_index: usize) -> Result<u8, E
 
 fn read_u32(bytes: &[u8], cursor: &mut usize, entry_index: usize) -> Result<u32, ExpressionsError> {
     if *cursor + 4 > bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let v = u32::from_le_bytes([
         bytes[*cursor],
@@ -984,9 +970,7 @@ fn read_u32(bytes: &[u8], cursor: &mut usize, entry_index: usize) -> Result<u32,
 
 fn read_i32(bytes: &[u8], cursor: &mut usize, entry_index: usize) -> Result<i32, ExpressionsError> {
     if *cursor + 4 > bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let v = i32::from_le_bytes([
         bytes[*cursor],
@@ -1000,9 +984,7 @@ fn read_i32(bytes: &[u8], cursor: &mut usize, entry_index: usize) -> Result<i32,
 
 fn read_f64(bytes: &[u8], cursor: &mut usize, entry_index: usize) -> Result<f64, ExpressionsError> {
     if *cursor + 8 > bytes.len() {
-        return Err(ExpressionsError::Truncated {
-            entry_index,
-        });
+        return Err(ExpressionsError::Truncated { entry_index });
     }
     let mut buf = [0u8; 8];
     buf.copy_from_slice(&bytes[*cursor..*cursor + 8]);
@@ -1302,12 +1284,7 @@ mod tests {
         bytes.extend_from_slice(&EXPRESSIONS_VERSION.to_le_bytes());
         bytes.extend_from_slice(&1u32.to_le_bytes());
         let err = ExpressionsSnapshot::read_bytes(&bytes).unwrap_err();
-        assert_eq!(
-            err,
-            ExpressionsError::Truncated {
-                entry_index: 0
-            }
-        );
+        assert_eq!(err, ExpressionsError::Truncated { entry_index: 0 });
     }
 
     #[test]
@@ -1550,16 +1527,18 @@ mod tests {
     #[test]
     fn verify_rejects_jump_past_ops_end() {
         let chunk = PackedChunk {
-            ops: vec![
-                PackedOpCode::Jump(1000),
-                PackedOpCode::Return,
-            ],
+            ops: vec![PackedOpCode::Jump(1000), PackedOpCode::Return],
             strings: vec![],
             scope_paths: vec![],
         };
         let err = chunk.verify().unwrap_err();
         match err {
-            ChunkVerifyError::JumpOutOfRange { op_index, target, ops_len, .. } => {
+            ChunkVerifyError::JumpOutOfRange {
+                op_index,
+                target,
+                ops_len,
+                ..
+            } => {
                 assert_eq!(op_index, 0);
                 assert_eq!(target, 1001);
                 assert_eq!(ops_len, 2);
