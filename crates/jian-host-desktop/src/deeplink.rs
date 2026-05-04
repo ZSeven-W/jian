@@ -2,7 +2,9 @@
 //!
 //! The concrete platform backends — macOS `CFBundleURLTypes` +
 //! `application_open_urls`, Windows registry + per-user named-pipe
-//! relay (Plan 8 §T8 follow-up B; see [`crate::win_deeplink_pipe`]),
+//! relay (Plan 8 §T8 follow-up B; see `crate::win_deeplink_pipe`,
+//! cfg-gated to `target_os = "windows"` so the intra-doc link is a
+//! code span rather than `[`...`]` that fails under Linux rustdoc),
 //! Linux `.desktop` `MimeType=` + `x-scheme-handler/jian` — each touch
 //! installer / OS-bundle infrastructure that doesn't yet exist in this
 //! workspace (Plan 8 Task 10 packaging is a separate follow-up). What
