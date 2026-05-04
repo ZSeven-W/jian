@@ -169,6 +169,21 @@ pub struct DesktopHost {
     /// want finer control can rebuild the host with a specific
     /// epoch via `with_launch_epoch`.
     pub launch_epoch: Instant,
+    /// Plan 8 §T8 host-level DeepLinkHandler. When `Some`, the run
+    /// loop drains this queue once per `about_to_wait` and dispatches
+    /// each [`crate::deeplink::JianUrl`] into the live runtime via
+    /// [`crate::deeplink::dispatch_url_into_runtime`] (`nav.push` +
+    /// per-query-key `state.route_set`). Populated by the
+    /// platform-specific receivers (macOS Apple-Event handler;
+    /// Windows receiver-window WindowProc) through the
+    /// [`crate::deeplink::RuntimeDeepLinkHandler`] queue.
+    ///
+    /// `Rc<RefCell<…>>` matches the receivers' main-thread
+    /// invariant — both the Apple-Event handler and the receiver
+    /// `WindowProc` run on the thread that owns the runtime.
+    pub pending_deeplinks: Option<
+        std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<crate::deeplink::JianUrl>>>,
+    >,
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +273,7 @@ impl DesktopHost {
             startup_report: StartupReport::default(),
             pending_hidden_bboxes: None,
             launch_epoch: Instant::now(),
+            pending_deeplinks: None,
         }
     }
 
@@ -287,6 +303,7 @@ impl DesktopHost {
             startup_report: StartupReport::default(),
             pending_hidden_bboxes: None,
             launch_epoch: Instant::now(),
+            pending_deeplinks: None,
         }
     }
 
@@ -346,6 +363,27 @@ impl DesktopHost {
     /// `FnOnce` — the run loop only exits once per invocation.
     pub fn with_shutdown_hook(mut self, hook: ShutdownHook) -> Self {
         self.shutdown_hook = Some(hook);
+        self
+    }
+
+    /// Plan 8 §T8: install the queue end of a
+    /// [`crate::deeplink::RuntimeDeepLinkHandler`]. The CLI builds
+    /// the handler before the runtime exists (so the OS-side
+    /// `kAEGetURL` / `WM_COPYDATA` receivers find a live target on
+    /// process launch), and threads the queue through here. The
+    /// run loop then drains the queue once per `about_to_wait`,
+    /// dispatching every parsed URL into the live runtime via
+    /// `nav.push` + per-query-key `state.route_set`.
+    ///
+    /// Idempotent. A subsequent call replaces the queue (rare —
+    /// the typical pattern is one queue per host lifetime).
+    pub fn with_deeplink_queue(
+        mut self,
+        queue: std::rc::Rc<
+            std::cell::RefCell<std::collections::VecDeque<crate::deeplink::JianUrl>>,
+        >,
+    ) -> Self {
+        self.pending_deeplinks = Some(queue);
         self
     }
 

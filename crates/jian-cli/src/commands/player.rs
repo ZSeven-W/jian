@@ -41,7 +41,9 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // default — no Launch-Services-style routing the way macOS
     // gives us for free. We acquire a named-mutex singleton at
     // entry; if a primary is already running, we forward our
-    // argv via WM_COPYDATA and exit cleanly. Only the primary
+    // argv via the per-user named-pipe transport (Plan 8 §T8
+    // follow-up B — `\\.\pipe\jian-deeplink-<sid>` with an
+    // explicit user-SID DACL) and exit cleanly. Only the primary
     // path falls through to the regular `jian player` startup
     // (window creation + event loop).
     //
@@ -62,27 +64,41 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     #[cfg(target_os = "windows")]
     let mut _receiver_window: Option<jian_host_desktop::win_deeplink_receiver::ReceiverWindow> =
         None;
+    // Plan 8 §T8 host-level DeepLinkHandler: build a buffering
+    // RuntimeDeepLinkHandler so the platform receivers (Apple-Event
+    // handler / Windows receiver-window WindowProc / Linux argv
+    // dispatch) push parsed URLs onto a shared queue. The host's
+    // run loop drains the queue once per `about_to_wait` and
+    // dispatches each URL into the live runtime via
+    // `nav.push` + `state.route_set`. Build the queue handle ahead
+    // of any platform-specific install so the same `Rc` flows into
+    // both the receiver-side handler AND the host's
+    // `with_deeplink_queue`.
+    let runtime_deeplink_handler = jian_host_desktop::deeplink::RuntimeDeepLinkHandler::new();
+    let deeplink_queue = runtime_deeplink_handler.queue();
     #[cfg(target_os = "windows")]
     if std::env::var_os("JIAN_DISABLE_SINGLETON").is_some() {
         _singleton = None;
     } else {
         match jian_host_desktop::win_deeplink_receiver::try_acquire_singleton() {
             jian_host_desktop::win_deeplink_receiver::Singleton::Primary(guard) => {
-                // Codex round 5 HIGH: install a NullDeepLinkHandler in
-                // the registry BEFORE the receiver window goes up so a
-                // forwarded URL arriving during cold-start dispatches
-                // cleanly (returning `false` = declined-but-protocol-
-                // handled) instead of `NoHandlerRegistered`. Once the
-                // host wires a real `DeepLinkHandler` (e.g. a router
-                // that opens `jian://app/page` paths), this gets
-                // replaced via `install_deeplink_handler`.
+                // Plan 8 §T8 host-level: install the buffering
+                // RuntimeDeepLinkHandler in the registry BEFORE the
+                // receiver window goes up so a forwarded URL
+                // arriving during cold-start lands in the queue
+                // (returns `true` = accepted-and-buffered) instead
+                // of `NoHandlerRegistered`. The host's
+                // `about_to_wait` drains the queue once the runtime
+                // is live.
                 let _prev = jian_host_desktop::win_deeplink::install_handler(Box::new(
-                    jian_host_desktop::deeplink::NullDeepLinkHandler::default(),
+                    runtime_deeplink_handler,
                 ));
-                // Install the receiver window NOW (before any startup
-                // work) so secondaries arriving during our cold-start
-                // can FindWindowExW + SendMessageTimeoutW. The
-                // `SingletonGuard` carries the ready event the receiver
+                // Install the receiver window + spawn the named-
+                // pipe listener NOW (before any startup work) so
+                // secondaries arriving during our cold-start can
+                // resolve the per-user pipe and forward via
+                // `WriteFile`. The `SingletonGuard` carries the
+                // ready event the receiver
                 // signals; secondaries `WaitForSingleObject` on it for
                 // a bounded interval before probing.
                 match jian_host_desktop::win_deeplink_receiver::install_receiver_window(&guard) {
@@ -90,12 +106,20 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
                         _receiver_window = Some(window);
                     }
                     Err(e) => {
-                        use std::io::Write;
-                        let _ = writeln!(
-                            std::io::stderr(),
-                            "jian: warning — receiver window install failed ({e}); \
-                         deep links will not route into this instance"
-                        );
+                        // Codex round 2 CONCERN Q3+Q6: warning-and-
+                        // continue would leave the primary holding
+                        // the singleton mutex with no deep-link
+                        // intake — secondaries would hit `NoPeer`
+                        // and refuse to start a second window, so
+                        // the user has no path to open URLs at all.
+                        // Hard exit instead so the next launch can
+                        // start fresh (mutex auto-released via
+                        // `SingletonGuard::drop` on this return).
+                        return Err(anyhow!(
+                            "jian: receiver window install failed ({e}); refusing to \
+                             hold the singleton with broken deep-link intake. \
+                             Restart `jian player` to retry."
+                        ));
                     }
                 }
                 _singleton = Some(guard);
@@ -155,6 +179,21 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
                 }
             }
         }
+    }
+
+    // macOS / Linux deep-link install. Windows is handled inside
+    // the singleton block above (the receiver-window install
+    // requires the SingletonGuard so the cross-platform shim is
+    // bypassed there). On macOS, this hooks the Apple-Event
+    // registry so `kAEGetURL` events route to our buffering
+    // handler. On Linux, this is a no-op — the .desktop entry's
+    // `%U` argv path delivers URLs directly to the player CLI,
+    // which dispatches via the queue's `borrow_mut().push_back`.
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _prev = jian_host_desktop::deeplink::install_deeplink_handler(Box::new(
+            runtime_deeplink_handler.clone(),
+        ));
     }
 
     // The Linux `.desktop` registers `Exec=jian player %U`, which
@@ -371,7 +410,8 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     let mut host = DesktopHost::with_config(rt, cfg)
         .with_default_menu()
         .with_startup_report(startup_report)
-        .with_launch_epoch(launch_epoch);
+        .with_launch_epoch(launch_epoch)
+        .with_deeplink_queue(deeplink_queue);
     if let Some(bboxes) = hidden_bboxes {
         host = host.with_pending_hidden_bboxes(bboxes);
     }

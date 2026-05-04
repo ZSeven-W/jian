@@ -101,8 +101,10 @@ impl DesktopHost {
         // Dev / MCP modes poll ~5×/sec so the run loop stays warm for
         // file events + bridge drains; default keeps the original
         // `Wait` so idle CPU is zero.
-        let needs_polling =
-            self.reload_rx.is_some() || self.has_mcp_drain() || self.has_asp_drain();
+        let needs_polling = self.reload_rx.is_some()
+            || self.has_mcp_drain()
+            || self.has_asp_drain()
+            || self.pending_deeplinks.is_some();
         let initial_flow = if needs_polling {
             ControlFlow::WaitUntil(Instant::now() + RELOAD_POLL_INTERVAL)
         } else {
@@ -765,6 +767,54 @@ impl ApplicationHandler for RunApp {
         let emitted = self.host.runtime.tick(Instant::now());
         let mut needs_redraw = !emitted.is_empty();
 
+        // Plan 8 §T8 deep-link drain. The platform receivers
+        // (Apple-Event handler / Windows receiver-window
+        // WindowProc) push parsed `JianUrl`s onto this queue
+        // from the same main thread that owns the runtime. We
+        // dispatch each synchronously through
+        // `dispatch_url_into_runtime` with the runtime's
+        // `schema.app.id` as the expected app filter — codex
+        // round 1 CONCERN: a cross-app misroute (OS-level
+        // launcher hands us a `jian://otherapp/x` URL because
+        // multiple apps register the same scheme) must NOT
+        // silently mutate our route stack. The drain-time check
+        // is the right home: receiver-side filters can't run
+        // because the schema isn't loaded when the receiver
+        // installs (cold-start ordering). Each dispatched URL
+        // warrants a redraw so the binding re-eval reaches the
+        // screen on the same frame.
+        if let Some(queue) = self.host.pending_deeplinks.clone() {
+            let drained: Vec<crate::deeplink::JianUrl> = queue.borrow_mut().drain(..).collect();
+            let expected_app_id =
+                crate::deeplink::drain_expected_app_id(self.host.runtime.document.as_ref());
+            for url in drained {
+                // `DispatchOutcome` is `#[non_exhaustive]` for
+                // future variants but the in-crate match here
+                // sees the closed enum at compile time, so a
+                // `_ => {}` arm would be unreachable. New
+                // variants land here in the same diff that adds
+                // them upstream.
+                match crate::deeplink::dispatch_url_into_runtime(
+                    &url,
+                    &mut self.host.runtime,
+                    expected_app_id.as_deref(),
+                ) {
+                    crate::deeplink::DispatchOutcome::Applied { .. } => {
+                        needs_redraw = true;
+                    }
+                    crate::deeplink::DispatchOutcome::AppIdMismatch {
+                        url_app_id,
+                        expected,
+                    } => {
+                        eprintln!(
+                            "jian-host-desktop: deep-link app_id `{url_app_id}` doesn't \
+                             match runtime app `{expected}` — URL dropped"
+                        );
+                    }
+                }
+            }
+        }
+
         // Dev-mode reload: drain the channel; the latest pending doc
         // wins. Re-build layout + spatial against the current logical
         // size so the canvas reflects the new schema immediately.
@@ -816,10 +866,13 @@ impl ApplicationHandler for RunApp {
             needs_redraw = true;
         }
 
-        // Re-arm the polling timer when reload, mcp, or asp wired
-        // the host into poll-mode; default Wait stays untouched.
-        let needs_polling =
-            self.host.reload_rx.is_some() || self.has_mcp_drain() || self.has_asp_drain();
+        // Re-arm the polling timer when reload, mcp, asp, or
+        // deep-link drain wired the host into poll-mode; default
+        // Wait stays untouched.
+        let needs_polling = self.host.reload_rx.is_some()
+            || self.has_mcp_drain()
+            || self.has_asp_drain()
+            || self.host.pending_deeplinks.is_some();
         if needs_polling {
             event_loop.set_control_flow(ControlFlow::WaitUntil(
                 Instant::now() + RELOAD_POLL_INTERVAL,

@@ -2,30 +2,34 @@
 //! plumbing (Plan 8 §T8). Pairs with macOS's
 //! [`crate::apple_event_receiver`].
 //!
-//! ## Flow
+//! ## Flow (Plan 8 §T8 follow-up B — pipe transport)
 //!
 //! 1. **Primary instance**: at startup, calls
 //!    [`try_acquire_singleton`]. The named `CreateMutexW` succeeds
 //!    with no `ERROR_ALREADY_EXISTS`, so we own the mutex for the
-//!    process lifetime. Then [`install_receiver_window`] registers a
-//!    `WNDCLASSEXW` named [`crate::win_deeplink::RECEIVER_CLASS_NAME`],
-//!    creates a `HWND_MESSAGE` window, and installs a custom
-//!    `WindowProc` that decodes incoming `WM_COPYDATA` messages and
-//!    forwards them into [`crate::win_deeplink::dispatch_url`].
+//!    process lifetime. Then [`install_receiver_window`] registers
+//!    a `WNDCLASSEXW` named
+//!    [`crate::win_deeplink::RECEIVER_CLASS_NAME`], creates a
+//!    `HWND_MESSAGE` window, and spawns the per-user named-pipe
+//!    listener thread via
+//!    [`crate::win_deeplink_pipe::install_pipe_listener`]. The
+//!    listener owns the pipe handle for its lifetime and feeds
+//!    incoming URLs to the receiver HWND through
+//!    `WM_USER_DEEPLINK_FORWARD` `PostMessageW`s.
 //! 2. **Secondary instance** (same `jian.exe`, second click on a
-//!    `jian://...` URL or `.op` file): [`try_acquire_singleton`]
-//!    returns [`Singleton::Secondary`]. The CLI then calls
-//!    [`forward_url_to_primary`], which `FindWindowExW(HWND_MESSAGE,
-//!    NULL, JianDeepLinkReceiver, NULL)` to locate the primary's
-//!    receiver window, packs the URL string into a `COPYDATASTRUCT`,
-//!    and `SendMessageW(peer, WM_COPYDATA, 0, &cds)`. The CLI then
-//!    exits with success — the URL was delivered to the running app.
-//! 3. The primary's `WindowProc` validates the `COPYDATASTRUCT`'s
-//!    `dwData` tag, copies the bytes (the secondary's address space
-//!    is gone the moment `SendMessageW` returns and the kernel-side
-//!    cross-process copy buffer is read-only inside the receiver),
-//!    decodes UTF-16 LE → `String`, and calls
-//!    `win_deeplink::dispatch_url`.
+//!    `jian://...` URL): [`try_acquire_singleton`] returns
+//!    [`Singleton::Secondary`]. The CLI then calls
+//!    [`forward_url_to_primary`], which (a) waits on the
+//!    [`READY_EVENT_NAME`] event so a startup-gap forward isn't
+//!    spuriously rejected, then (b) opens the per-user pipe via
+//!    `CreateFileW(\\.\pipe\jian-deeplink-<sid>, GENERIC_WRITE)`
+//!    and writes `url + '\n'`. The DACL on the pipe authenticates
+//!    the secondary by user SID — a different-user secondary
+//!    sees `ERROR_ACCESS_DENIED`. The CLI then exits success.
+//! 3. The primary's listener thread reads the URL line, packages
+//!    it in a heap-leaked `Box<String>`, and `PostMessageW`s the
+//!    receiver HWND. The receiver `WindowProc` recovers the Box
+//!    and feeds the URL into [`crate::win_deeplink::dispatch_url`].
 //!
 //! ## Why named mutex (not `FindWindowW`-only)
 //!
@@ -45,12 +49,12 @@
 //! ## Validation
 //!
 //! Runtime validation needs a real Windows host: `cargo test
-//! --target x86_64-pc-windows-msvc` will compile-check the FFI
-//! surface, but `WM_COPYDATA` cross-process delivery only exercises
-//! against a live message pump. Unit tests below pin the wire-shape
-//! constants (the `dwData` tag, the singleton-name shape) so a
-//! drift across primary/secondary versions surfaces as a test
-//! failure rather than a silent message drop.
+//! --target x86_64-pc-windows-msvc` compile-checks the FFI
+//! surface, but cross-process delivery only exercises against a
+//! live process pair. Unit tests below pin the singleton + ready-
+//! event names; the pipe-transport tests in
+//! [`crate::win_deeplink_pipe`] pin the pipe-name shape and the
+//! `WM_USER_DEEPLINK_FORWARD` constant.
 //!
 //! ## Known gap: cold-start message-pump latency (codex round 4 MEDIUM)
 //!
@@ -67,22 +71,33 @@
 //! (independent of winit's main thread); that lands in a follow-up
 //! since it touches `DesktopHost` plumbing.
 //!
-//! ## Threat-model gap (codex round 1 MEDIUM Q4)
+//! ## Cross-process delivery: named-pipe transport (Plan 8 §T8 follow-up B)
 //!
-//! `FindWindowExW` authenticates the peer only by class-name
-//! string. A same-session, same-or-lower-integrity attacker can
-//! register a `JianDeepLinkReceiver` window before our primary
-//! and intercept inbound URLs. The `dwData == COPYDATA_TAG` check
-//! defends the inbound side (the real receiver ignores spoof
-//! traffic) but doesn't help the secondary — its `FindWindowExW`
-//! result IS the attacker. Mitigations belong in a follow-up
-//! that switches to a named pipe with an explicit user-SID DACL
-//! (mirror of the `jian-asp` Windows transport's pattern),
-//! authenticating the peer by SID rather than window-class
-//! string. Same-user attackers already have broad write access
-//! to user-owned resources, so this gap is defense-in-depth, not
-//! load-bearing — but the named-pipe migration is on the
-//! Plan 8 §T8 follow-up list.
+//! Round-1 used `FindWindowExW` + `SendMessageTimeoutW` +
+//! `WM_COPYDATA`, which authenticated the peer only by window-
+//! class string — a same-session attacker registering the same
+//! class could intercept. **The current implementation uses a
+//! named-pipe transport** ([`crate::win_deeplink_pipe`]) whose
+//! DACL is restricted to the calling user's SID:
+//!
+//! - Pipe name: `\\.\pipe\jian-deeplink-<user_sid>` — per-user so
+//!   two users on the same Windows host don't collide on the
+//!   machine-global pipe namespace.
+//! - DACL: `D:P(A;;GA;;;<user_sid>)` — `D:P` blocks inherited
+//!   ACEs, the single Allow ACE grants `GENERIC_ALL` to exactly
+//!   the creator's SID.
+//! - `PIPE_REJECT_REMOTE_CLIENTS` declines off-box connections.
+//! - `FILE_FLAG_FIRST_PIPE_INSTANCE` + `nMaxInstances = 1` keeps
+//!   a duplicate `CreateNamedPipeW` from stealing the name.
+//!
+//! The receiver `WindowProc` no longer handles `WM_COPYDATA`.
+//! Instead the pipe-listener thread (spawned at
+//! `install_receiver_window` time) reads URL lines from the pipe
+//! and `PostMessageW`s them to the receiver HWND with
+//! [`crate::win_deeplink_pipe::WM_USER_DEEPLINK_FORWARD`]
+//! carrying a heap-leaked `Box<String>` pointer in `lParam`.
+//! WindowProc recovers the Box and feeds the URL into
+//! [`crate::win_deeplink::dispatch_url`].
 
 #![cfg(target_os = "windows")]
 
@@ -101,10 +116,9 @@ thread_local! {
         const { RefCell::new(None) };
 }
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_CLASS_ALREADY_EXISTS, ERROR_TIMEOUT,
-    HANDLE, HMODULE, HWND, LPARAM, LRESULT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_CLASS_ALREADY_EXISTS, HANDLE, HMODULE,
+    HWND, LPARAM, LRESULT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT, WPARAM,
 };
-use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{
     CreateEventW, CreateMutexW, OpenEventW, SetEvent, WaitForSingleObject,
@@ -115,31 +129,9 @@ use windows_sys::Win32::System::Threading::{
 // access-mask parameter resolves cleanly.
 use windows_sys::Win32::Storage::FileSystem::SYNCHRONIZE;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, FindWindowExW, RegisterClassExW,
-    SendMessageTimeoutW, CW_USEDEFAULT, HMENU, HWND_MESSAGE, SMTO_BLOCK, WM_COPYDATA, WNDCLASSEXW,
-    WS_OVERLAPPED,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassExW, CW_USEDEFAULT, HMENU,
+    HWND_MESSAGE, WNDCLASSEXW, WS_OVERLAPPED,
 };
-
-/// Tag carried by every `WM_COPYDATA` message we send between
-/// primary / secondary instances. A receiver that sees a different
-/// tag (some other app spamming WM_COPYDATA) silently ignores the
-/// payload — Windows's `FindWindowExW` filter on class name should
-/// already keep cross-app traffic out, but tag-checking is the
-/// defense-in-depth that a class-name spoofer can't bypass.
-///
-/// Pinned by a unit test below; bumping the value requires
-/// coordinated primary+secondary updates in the same release.
-pub const COPYDATA_TAG: usize = 0x4A_44_4C_31; // 'JDL1'
-
-/// Maximum `cbData` we'll deserialise. Codex round 2 MEDIUM: a
-/// same-session sender knowing the public tag could otherwise
-/// force an arbitrarily large allocation in `from_raw_parts` /
-/// `String::from_utf16`. URLs in the wild top out at ~2 KiB
-/// (RFC 7230 §3.1.1 leaves it implementation-defined; browsers
-/// cap around 2-32 KiB). 4 KiB is a generous ceiling that still
-/// fits two pages of memory, well below anything that could
-/// pressure the runtime.
-pub const COPYDATA_MAX_BYTES: usize = 4 * 1024;
 
 /// Named mutex used to detect "another `jian.exe` is already
 /// running" within the current Windows session. Codex round 2
@@ -270,8 +262,8 @@ pub fn try_acquire_singleton() -> Singleton {
     };
     if ready_event.is_null() {
         // Event creation failed — log + continue with mutex only.
-        // Secondaries will fall through to FindWindowExW directly,
-        // which works once our window is up but loses the
+        // Secondaries will fall through to the pipe-probe directly,
+        // which works once the listener is bound but loses the
         // bounded-wait guarantee for a brief window during startup.
         use std::io::Write;
         let _ = writeln!(
@@ -337,7 +329,7 @@ static CLASS_REGISTRATION: OnceLock<Result<(), &'static str>> = OnceLock::new();
 
 /// Named event the primary `SetEvent`s once its receiver window
 /// is created and ready. Secondaries `WaitForSingleObject` on it
-/// before calling `FindWindowExW` so a brief startup window doesn't
+/// before opening the pipe so a brief startup window doesn't
 /// drop their forward. Same `Local\` namespace as the singleton
 /// mutex (see `SINGLETON_MUTEX_NAME`).
 const READY_EVENT_NAME: &str = r"Local\JianHostDesktop-ReceiverReady";
@@ -433,12 +425,45 @@ pub fn install_receiver_window(singleton: &SingletonGuard) -> Result<ReceiverWin
         return Err("CreateWindowExW returned NULL — receiver window not created");
     }
 
+    // Plan 8 §T8 follow-up B: spawn the named-pipe listener
+    // BEFORE signaling the ready event. If the pipe install
+    // fails, surface as Err and DESTROY the receiver window so
+    // we don't leave a half-installed primary that secondaries
+    // mistake for live (HWND found by class name, but no pipe
+    // accepting writes — secondaries would hit `NoPeer` and
+    // refuse to start a second window, leaving the user with
+    // no way to open the URL).
+    //
+    // Codex round 1 CONCERN: the in-process restart path
+    // (host-tear-down without process exit) needs the listener
+    // thread to observe shutdown and release the pipe before a
+    // second `install_receiver_window` call; today the daemon
+    // thread holds the pipe for the process lifetime, so a
+    // re-install hits `FILE_FLAG_FIRST_PIPE_INSTANCE`'s
+    // `ERROR_ACCESS_DENIED`. Surfacing the error means the host
+    // sees a clean failure rather than a silent half-install.
+    // True in-process restart support requires an overlapped-I/O
+    // shutdown event on the listener thread, deferred to a
+    // follow-up that touches the host's teardown sequence.
+    if let Err(e) = crate::win_deeplink_pipe::install_pipe_listener(hwnd) {
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "jian-host-desktop: pipe listener install failed ({e}); receiver window \
+             destroyed — deep-link forwarding refused for this primary"
+        );
+        return Err("pipe listener install failed");
+    }
+
     // Signal the singleton's pre-created ready event so any
     // secondary already waiting on it wakes up. Manual-reset
     // semantics mean later-arriving secondaries also see it
     // signaled. NULL ready_event indicates `try_acquire_singleton`
     // hit a `CreateEventW` failure earlier; in that case
-    // secondaries will fall through to FindWindowExW directly.
+    // secondaries will fall through to the pipe probe directly.
     let ready_event = singleton.ready_event();
     if !ready_event.is_null() {
         unsafe {
@@ -449,189 +474,129 @@ pub fn install_receiver_window(singleton: &SingletonGuard) -> Result<ReceiverWin
 }
 
 /// Maximum time the secondary will wait on the named ready event
-/// before giving up and either calling `FindWindowExW` directly
-/// (in case the primary's CreateEventW failed but the window
-/// exists anyway) or returning `Ok(false)` so the caller's fallback
-/// runs. 5 s is generous for a normal Windows startup; primary's
-/// path from `try_acquire_singleton` to `install_receiver_window`
-/// is bounded by argument parsing + a single window create.
+/// before giving up and probing the pipe directly (in case the
+/// primary's `CreateEventW` failed but the listener exists
+/// anyway). 5 s is generous for a normal Windows startup;
+/// primary's path from `try_acquire_singleton` to
+/// `install_receiver_window` (which spawns the listener) is
+/// bounded by argument parsing + a single window create + a
+/// single pipe-bind.
 const READY_WAIT_MS: u32 = 5_000;
 
-/// Maximum time `SendMessageTimeoutW` blocks waiting for the
-/// primary's `WindowProc` to ack the `WM_COPYDATA`. Plain
-/// `SendMessageW` would block indefinitely if the receiver thread
-/// is hung or a spoofed peer never pumps; the timeout bounds it.
+/// Outcome of [`forward_url_to_primary`].
 ///
-/// We pass `SMTO_BLOCK` only (not `SMTO_ABORTIFHUNG`). Codex round
-/// 4 MEDIUM: ABORTIFHUNG can fire when the OS' "thread looks hung"
-/// heuristic decides a primary doing legitimate cold-start work
-/// (file read, schema parse, runtime build — typically 30-100 ms)
-/// hasn't pumped its message loop "fast enough", which would cut
-/// off a secondary's forward unnecessarily. SMTO_BLOCK still
-/// prevents the secondary from processing other messages while
-/// it waits (we're about to exit anyway).
-const SEND_TIMEOUT_MS: u32 = 5_000;
-
-/// Outcome of [`forward_url_to_primary`]. Codex round 2 MEDIUM:
-/// previously the function collapsed "no peer", "send timed out",
-/// and "receiver returned 0" into a single `Ok(false)`, which the
-/// CLI then misinterpreted as "no peer found" — a hung primary or
-/// a payload-rejection looked indistinguishable from a missing
-/// peer. The typed variants let the caller branch correctly.
+/// Plan 8 §T8 follow-up B note: with the named-pipe transport
+/// the variant set is narrower than the round-1
+/// `WM_COPYDATA`-over-`SendMessageTimeoutW` shape. A pipe write
+/// that succeeds but the listener can't dispatch (handler
+/// returns false / parse error / etc.) is effectively
+/// `Delivered` from the secondary's POV — the listener thread
+/// queued the URL and logged any failure to the primary's
+/// stderr. Variants `SendTimedOut` and `PrimaryRejected` are
+/// retained for source-compat with the CLI's existing branch
+/// arms (mapped from `SendFailed` with specific error codes if
+/// needed) but the pipe transport doesn't actually emit them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardOutcome {
-    /// Primary's `WindowProc` ack'd the WM_COPYDATA with a
-    /// non-zero return — URL was accepted.
+    /// `WriteFile` + `FlushFileBuffers` succeeded on the
+    /// per-user pipe. Caller exits success.
     Delivered,
-    /// `FindWindowExW` returned NULL after waiting on the ready
-    /// event, even though the singleton mutex was held. Most
-    /// likely the primary's window install failed; the caller
-    /// should refuse to start a second window (calling fallback
-    /// would break the singleton invariant).
+    /// `CreateFileW` returned `ERROR_FILE_NOT_FOUND` /
+    /// `ERROR_PIPE_BUSY` / `ERROR_PIPE_NOT_CONNECTED` — the
+    /// per-user pipe doesn't exist or isn't listening. Combined
+    /// with a held singleton mutex this means the primary is
+    /// running but its pipe listener thread isn't bound; the
+    /// CLI should refuse to start a second window.
     NoPeer,
-    /// `SendMessageTimeoutW` returned 0 with a timeout-style
-    /// `GetLastError` (`ERROR_TIMEOUT` / 0). Primary's window
-    /// exists but its message pump isn't dispatching within the
-    /// budget. Caller semantic: refuse to start a second window.
+    /// **Deprecated — pipe transport never emits this.** Kept
+    /// for source-compat with existing CLI branch arms; future
+    /// refactor can remove it once the CLI uses an exhaustive
+    /// `_ =>` on the `Result<ForwardOutcome>` instead.
     SendTimedOut,
-    /// `SendMessageTimeoutW` returned 0 with a non-timeout error
-    /// (access-denied / UIPI block / invalid-window / etc.).
-    /// The secondary couldn't deliver the URL even though the
-    /// HWND looked live; surfaces the underlying Win32 error
-    /// code for diagnostic logging. Codex round 4 MEDIUM: a
-    /// previous variant collapsed this with `SendTimedOut` so
-    /// elevation / DACL mismatches were undiagnosable.
+    /// `CreateFileW` succeeded but `WriteFile` /
+    /// `FlushFileBuffers` failed — surfaces the Win32 error code
+    /// (access-denied on a cross-user secondary, broken pipe on
+    /// a primary mid-shutdown, etc.).
     SendFailed { last_error: u32 },
-    /// Primary's `WindowProc` returned 0 — typically because
-    /// `dispatch_url` rejected the URL (parse error, no handler).
-    /// The URL was delivered in protocol terms but not "actioned";
-    /// from the secondary's POV, this is "primary rejected" —
-    /// NOT a fallback case. Logging up to the caller.
+    /// **Deprecated — pipe transport never emits this.** The
+    /// listener-side dispatch failure is logged on the primary's
+    /// stderr (the secondary doesn't see it). Same source-compat
+    /// note as `SendTimedOut`.
     PrimaryRejected,
 }
 
-/// Find the running primary's receiver window and forward `url`
-/// via `WM_COPYDATA`. The returned [`ForwardOutcome`] tells the
-/// caller whether to exit success, exit error, or escalate.
+/// Forward `url` to the running primary via the named-pipe
+/// transport (Plan 8 §T8 follow-up B). The returned
+/// [`ForwardOutcome`] tells the caller whether to exit success,
+/// exit error, or escalate.
+///
+/// Pre-pipe round-1 used `FindWindowExW` + `SendMessageTimeoutW`
+/// + `WM_COPYDATA`, which authenticated the peer only by window-
+/// class string — a same-session attacker registering the same
+/// class could intercept. The pipe transport's user-SID DACL
+/// closes that gap (only the calling user's processes can write
+/// to the pipe), and `PIPE_REJECT_REMOTE_CLIENTS` blocks remote
+/// pipe access on top.
+///
+/// We still wait on the [`READY_EVENT_NAME`] event so a forward
+/// arriving during the primary's startup gap (mutex held but
+/// pipe listener not yet bound) doesn't false-fail. If the wait
+/// times out we fall through to the pipe probe; the pipe's own
+/// `ERROR_FILE_NOT_FOUND` then resolves "no peer" cleanly.
 ///
 /// # Safety
 ///
-/// Calls `OpenEventW` + `WaitForSingleObject` + `FindWindowExW` +
-/// `SendMessageTimeoutW`. All operate on well-defined Win32
-/// inputs; no shared state from outside this module is involved.
+/// Internally calls `OpenEventW` + `WaitForSingleObject` + the
+/// pipe-side `CreateFileW` / `WriteFile` / `FlushFileBuffers` /
+/// `CloseHandle` chain. All operate on well-defined Win32 inputs.
 pub fn forward_url_to_primary(url: &str) -> Result<ForwardOutcome, &'static str> {
     // Codex round 1 MEDIUM Q1: wait on the named ready event so a
     // tiny startup gap between "primary acquired mutex" and
-    // "primary's window listening" doesn't surface as a forward
-    // failure. If the event doesn't exist (older primary that
-    // didn't create it, or CreateEventW failed) we fall through
-    // to the FindWindowExW probe directly.
+    // "primary's listener bound" doesn't surface as a forward
+    // failure. The event is signaled by `install_receiver_window`
+    // AFTER the receiver HWND is up — and the pipe listener is
+    // installed alongside the receiver, so the same signal
+    // covers both paths.
     let event_name = utf16_with_nul(READY_EVENT_NAME);
-    // Codex round 4 MEDIUM: secondary only needs `SYNCHRONIZE`
-    // (it reads the signaled state via `WaitForSingleObject`, never
-    // sets the state). Asking for `EVENT_MODIFY_STATE` could fail
-    // under stricter DACL / mandatory-integrity-level setups where
-    // the secondary's token doesn't grant write to a primary-
-    // created event.
     let event_handle = unsafe { OpenEventW(SYNCHRONIZE, 0, event_name.as_ptr()) };
     if !event_handle.is_null() {
         let wait = unsafe { WaitForSingleObject(event_handle, READY_WAIT_MS) };
         unsafe {
             let _ = CloseHandle(event_handle);
         }
-        // Codex round 2 MEDIUM Q3: explicit match on the three
-        // documented `WaitForSingleObject` return codes. Plain
-        // timeout falls through to FindWindowExW; an OS-level
-        // failure propagates as Err.
         if wait == WAIT_FAILED {
             return Err("WaitForSingleObject(receiver-ready) failed");
         }
         // WAIT_OBJECT_0 → ready, proceed.
-        // WAIT_TIMEOUT → primary still coming up; FindWindowExW
-        //   below resolves "no peer" vs "raced past timeout".
+        // WAIT_TIMEOUT → primary still coming up; the pipe probe
+        //   below resolves "no peer" cleanly.
         let _ = (wait == WAIT_OBJECT_0, wait == WAIT_TIMEOUT);
     }
 
-    let class_name = utf16_with_nul(crate::win_deeplink::RECEIVER_CLASS_NAME);
-    // SAFETY: HWND_MESSAGE filter restricts the search to
-    // message-only windows; class name pinning keeps us from
-    // matching arbitrary other apps' windows.
-    let peer = unsafe {
-        FindWindowExW(
-            HWND_MESSAGE,
-            std::ptr::null_mut(),
-            class_name.as_ptr(),
-            std::ptr::null(),
-        )
-    };
-    if peer.is_null() {
-        return Ok(ForwardOutcome::NoPeer);
+    // Plan 8 §T8 follow-up B: forward via named pipe. The pipe's
+    // user-SID DACL is the security boundary; a cross-user
+    // sender hits access-denied here.
+    use crate::win_deeplink_pipe::{forward_url_via_pipe, PipeForwardOutcome};
+    match forward_url_via_pipe(url)? {
+        PipeForwardOutcome::Delivered => Ok(ForwardOutcome::Delivered),
+        PipeForwardOutcome::NoPeer => Ok(ForwardOutcome::NoPeer),
+        PipeForwardOutcome::SendFailed { last_error } => {
+            Ok(ForwardOutcome::SendFailed { last_error })
+        }
     }
-
-    // Encode URL as UTF-16 LE bytes (no NUL terminator — cbData
-    // carries the byte count). Reject early if the URL exceeds
-    // the receiver's `COPYDATA_MAX_BYTES` cap.
-    let utf16: Vec<u16> = url.encode_utf16().collect();
-    let cb_data: u32 = utf16
-        .len()
-        .checked_mul(std::mem::size_of::<u16>())
-        .and_then(|n| u32::try_from(n).ok())
-        .ok_or("URL too long for COPYDATASTRUCT.cbData (u32)")?;
-    if cb_data as usize > COPYDATA_MAX_BYTES {
-        return Err("URL exceeds receiver's COPYDATA_MAX_BYTES cap");
-    }
-    let cds = COPYDATASTRUCT {
-        dwData: COPYDATA_TAG,
-        cbData: cb_data,
-        lpData: utf16.as_ptr() as *mut _,
-    };
-    // SAFETY: peer is a valid HWND from FindWindowExW; cds points
-    // to a stack value live for the duration of the call;
-    // `SendMessageTimeoutW` is synchronous-blocking so utf16's
-    // backing buffer survives the kernel-side copy. Codex round 1
-    // MEDIUM Q2 liveness: bounded timeout (5 s) so a hung / spoofed
-    // peer can't deadlock the secondary. See `SEND_TIMEOUT_MS` doc
-    // for why we don't combine `SMTO_ABORTIFHUNG`.
-    let mut result: usize = 0;
-    // Codex round 4 MEDIUM: drop `SMTO_ABORTIFHUNG` so a primary
-    // doing legitimate cold-start work (file read, schema parse,
-    // runtime build) — which can take 30-100ms before the message
-    // pump dispatches — isn't pre-empted by the OS' "thread looks
-    // hung" heuristic. Plain timeout still fires at SEND_TIMEOUT_MS.
-    let send_status = unsafe {
-        SendMessageTimeoutW(
-            peer,
-            WM_COPYDATA,
-            0_usize,
-            &cds as *const _ as LPARAM,
-            SMTO_BLOCK,
-            SEND_TIMEOUT_MS,
-            &mut result as *mut _,
-        )
-    };
-    if send_status == 0 {
-        // Codex round 4 MEDIUM: distinguish timeout vs send
-        // failure (access-denied, UIPI, invalid-window) so the
-        // caller can log a useful diagnostic.
-        let last = unsafe { GetLastError() };
-        return Ok(if last == 0 || last == ERROR_TIMEOUT {
-            ForwardOutcome::SendTimedOut
-        } else {
-            ForwardOutcome::SendFailed { last_error: last }
-        });
-    }
-    // Codex round 2 MEDIUM Q4#1: the receiver's WindowProc
-    // returns 0 when `dispatch_url` failed (bad URL, no handler,
-    // handler declined). Pre-fix, we returned Ok(true) regardless
-    // — silently dropping rejected URLs.
-    if result == 0 {
-        return Ok(ForwardOutcome::PrimaryRejected);
-    }
-    Ok(ForwardOutcome::Delivered)
 }
 
-/// `WindowProc` for the receiver window. Handles `WM_COPYDATA`,
-/// passes everything else to `DefWindowProcW`.
+/// `WindowProc` for the receiver window. Handles
+/// `WM_USER_DEEPLINK_FORWARD` (Plan 8 §T8 follow-up B — the
+/// listener thread on the pipe transport posts here when a URL
+/// arrives), passes everything else to `DefWindowProcW`.
+///
+/// Round-1 `WM_COPYDATA` is no longer received from
+/// out-of-process secondaries — the named-pipe transport's DACL
+/// gates cross-process delivery to the calling user only, and
+/// the listener thread is the only inbound channel. A stray
+/// `WM_COPYDATA` from a same-session attacker still falls through
+/// to `DefWindowProcW`, which is a benign no-op.
 extern "system" fn window_proc_imp(
     hwnd: HWND,
     msg: u32,
@@ -642,61 +607,32 @@ extern "system" fn window_proc_imp(
     // "system"` boundary is undefined behaviour, and dropping a
     // panic payload can re-panic. Wrap + mem::forget identically.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if msg != WM_COPYDATA {
+        if msg != crate::win_deeplink_pipe::WM_USER_DEEPLINK_FORWARD {
             return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
         }
-        // SAFETY: WM_COPYDATA carries `*const COPYDATASTRUCT` in
-        // lParam (Windows API contract).
-        let cds = lparam as *const COPYDATASTRUCT;
-        if cds.is_null() {
+        // The listener thread leaked a `Box<String>` into lParam;
+        // recover it here. Box::from_raw → owned String → drop
+        // frees the heap allocation. NULL lParam shouldn't happen
+        // (the listener never posts NULL) but defend against it.
+        if lparam == 0 {
             return 0;
         }
-        let cds = unsafe { &*cds };
-        if cds.dwData != COPYDATA_TAG {
-            // Some other app spoofing WM_COPYDATA on our class —
-            // drop silently. Class-name filter on FindWindowExW
-            // should prevent this in practice; tag-check is
-            // defense in depth.
-            return 0;
-        }
-        // Validate payload alignment + size + non-null pointer +
-        // upper-bound size before reinterpreting.
-        // Codex round 1 HIGH: `COPYDATASTRUCT.lpData` is documented
-        // nullable; spoofed `cbData > 0, lpData = NULL` would
-        // drive `from_raw_parts(NULL, cbData/2)` — immediate UB.
-        if cds.lpData.is_null() {
-            return 0;
-        }
-        let expected_align = std::mem::align_of::<u16>();
-        let bytes_per_unit = std::mem::size_of::<u16>();
-        let cb = cds.cbData as usize;
-        // Codex round 2 MEDIUM: cap cbData to defend against a
-        // same-session attacker pushing huge allocations through
-        // the public tag.
-        if cb == 0 || cb % bytes_per_unit != 0 || cb > COPYDATA_MAX_BYTES {
-            return 0;
-        }
-        if (cds.lpData as usize) % expected_align != 0 {
-            // Misaligned payload — refuse to read u16s through it.
-            return 0;
-        }
-        let units = cb / bytes_per_unit;
-        // SAFETY: bounds + alignment validated above; the kernel-
-        // side cross-process copy guarantees the buffer is live for
-        // the duration of the SendMessageW call.
-        let slice = unsafe { std::slice::from_raw_parts(cds.lpData as *const u16, units) };
-        let url = match String::from_utf16(slice) {
-            Ok(s) => s,
-            Err(_) => return 0,
-        };
+        // SAFETY: lParam is a `*mut String` we leaked via
+        // `Box::into_raw` in the listener thread (single producer
+        // per HWND; PostMessage moves ownership to us). Recover
+        // exactly once — the receiving WindowProc is the only
+        // consumer of this lParam contract.
+        let url_box: Box<String> = unsafe { Box::from_raw(lparam as *mut String) };
+        let url: String = *url_box;
         // Forward into the cross-platform deeplink dispatcher.
         match crate::win_deeplink::dispatch_url(&url) {
-            Ok(_handled) => 1, // 1 = "I handled WM_COPYDATA"
+            Ok(_handled) => 1, // 1 = "I handled the message"
             Err(e) => {
                 use std::io::Write;
                 let _ = writeln!(
                     std::io::stderr(),
-                    "jian-host-desktop: dispatch_url failed at WM_COPYDATA boundary: {e}"
+                    "jian-host-desktop: dispatch_url failed at \
+                     WM_USER_DEEPLINK_FORWARD boundary: {e}"
                 );
                 0
             }
@@ -708,8 +644,8 @@ extern "system" fn window_proc_imp(
             use std::io::Write;
             let _ = writeln!(
                 std::io::stderr(),
-                "jian-host-desktop: panic in DeepLinkHandler caught at WM_COPYDATA boundary; \
-                 event dropped"
+                "jian-host-desktop: panic in DeepLinkHandler caught at \
+                 WM_USER_DEEPLINK_FORWARD boundary; event dropped"
             );
             std::mem::forget(payload);
             0
@@ -746,24 +682,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn copydata_tag_pinned() {
-        // Wire-format pin: bumping the tag requires a coordinated
-        // primary+secondary update in the same release. Same-tag
-        // mismatch on the wire produces a silent drop, which is
-        // deliberate (defense-in-depth against cross-app spoof)
-        // but benign — the test catches an accidental change.
-        assert_eq!(COPYDATA_TAG, 0x4A_44_4C_31);
-        // The four bytes spell 'JDL1' in ASCII. Use FourCC math
-        // (not byte-slice tricks — `usize` width varies across
-        // 32-bit / 64-bit targets, codex round 2 missed this).
-        let four_cc = ((b'J' as usize) << 24)
-            | ((b'D' as usize) << 16)
-            | ((b'L' as usize) << 8)
-            | (b'1' as usize);
-        assert_eq!(COPYDATA_TAG, four_cc);
-    }
-
-    #[test]
     fn singleton_mutex_name_is_pinned() {
         // Bumping the mutex name breaks the singleton contract
         // mid-rollout — primary on old name + secondary on new
@@ -780,13 +698,6 @@ mod tests {
         // HWND_MESSAGE forwarder.
         assert!(SINGLETON_MUTEX_NAME.starts_with(r"Local\"));
         assert!(READY_EVENT_NAME.starts_with(r"Local\"));
-    }
-
-    #[test]
-    fn copydata_max_bytes_fits_realistic_urls() {
-        // RFC URLs realistically top at ~2 KiB; 4 KiB cap leaves
-        // headroom but rejects pathological allocations.
-        assert_eq!(COPYDATA_MAX_BYTES, 4 * 1024);
     }
 
     #[test]

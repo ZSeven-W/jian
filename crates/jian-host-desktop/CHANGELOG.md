@@ -133,21 +133,97 @@ additions targeted at the workspace's `0.0.1` development release.
   `OpenEventW`/`SetEvent`/`WaitForSingleObject`),
   `Win32_UI_WindowsAndMessaging`, `Win32_Graphics_Gdi`
   (`WNDCLASSEXW.hbrBackground`).
-- `cross-app spoofing via FindWindowExW` is a documented threat-
-  model gap (defense-in-depth follow-up: switch to a named pipe
-  with explicit user-SID DACL, mirror of `jian-asp`'s pattern).
-- `cold-start message-pump latency` is a documented limitation:
-  the ready event signals when the HWND exists, not when the
-  main thread enters winit's message pump, so a 30-100 ms gap
-  exists between primary acquiring the singleton and the message
-  loop dispatching. Bounded by the 5 s `SendMessageTimeoutW`
-  budget. Clean fix is a dedicated message-pump thread for the
-  receiver window, deferred.
+- `cross-app spoofing via FindWindowExW` was a round-1 threat-
+  model gap; **resolved in Plan 8 §T8 follow-up B** by switching
+  the cross-process channel from `WM_COPYDATA` over
+  `FindWindowExW` to a per-user named pipe (mirror of
+  `jian-asp::transport::named_pipe`'s pattern). See
+  `win_deeplink_pipe` module entry below.
+- `cold-start message-pump latency`: pipe transport's listener
+  thread eliminates this. The listener runs independently of the
+  main thread's cold-start work; a secondary's `WriteFile`
+  succeeds as soon as the listener `ConnectNamedPipe`-loops once
+  (which happens immediately after `install_receiver_window`).
 - Windows-only `Cargo.toml` target table for `windows-sys` 0.61
   (separate from macOS's `objc2*` deps).
 - Six codex review rounds; final pass clean. cargo check on
   `x86_64-pc-windows-msvc` clean. End-to-end runtime validation
   needs a real Windows GUI session.
+- Plan 8 §T8 follow-up A — `deeplink::RuntimeDeepLinkHandler`
+  (Clone): buffering DeepLinkHandler that hands URLs off to the
+  host's main-loop tick for runtime dispatch. `Rc<RefCell<
+  VecDeque<JianUrl>>>` queue; `queue()` accessor lets the CLI
+  thread the same Rc into both the platform receiver-side
+  install AND the host's `with_deeplink_queue`.
+  `for_app(expected)` constructor adds an OS-launcher misroute
+  filter (rejects URLs whose `app_id` doesn't match); `new()`
+  accepts any. Plus `dispatch_url_into_runtime(url, runtime,
+  expected_app_id) -> DispatchOutcome` (`#[non_exhaustive]`
+  enum: `Applied { query_writes }` / `AppIdMismatch { url_app_id,
+  expected }`) that `nav.push(url.path)` + per-query-key
+  `state.route_set(k, Value::String(v))`. Free fn
+  `drain_expected_app_id(document)` resolves the filter from
+  `document.schema.app.id` with empty-string-collapses-to-None
+  semantics so an unset id doesn't silently drop every URL.
+  `DesktopHost.pending_deeplinks: Option<Rc<RefCell<...>>>`
+  field + `with_deeplink_queue` builder; `about_to_wait` drain
+  dispatches each URL with `expected_app_id` resolved per tick.
+  Mismatched URLs log to stderr without mutating the runtime.
+- Plan 8 §T8 follow-up B — `win_deeplink_pipe` module
+  (Windows-only, ~510 LOC): per-user named-pipe transport for
+  deep-link forwarding, mirror of `jian-asp::transport::
+  named_pipe`'s security model. Pipe name
+  `\\.\pipe\jian-deeplink-<user_sid>` (resolved via
+  `OpenProcessToken` + `GetTokenInformation(TokenUser)` +
+  `ConvertSidToStringSidW`). User-SID DACL `D:P(A;;GA;;;<sid>)`
+  built via `ConvertStringSecurityDescriptorToSecurityDescriptorW`
+  (`D:P` blocks inherited ACEs; single Allow ACE grants
+  GENERIC_ALL to the SID only — no Everyone, no Anonymous, no
+  Admins). `PIPE_ACCESS_INBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE`,
+  `PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT |
+  PIPE_REJECT_REMOTE_CLIENTS`, `nMaxInstances = 1`. Daemon
+  listener thread loops `ConnectNamedPipe` → `ReadFile` (until
+  `\n` or `PIPE_URL_MAX_BYTES = 4 KiB`) → `Box::into_raw(Box::
+  new(url))` → `PostMessageW(hwnd, WM_USER_DEEPLINK_FORWARD =
+  WM_USER + 1, 0, leaked_ptr)` → `DisconnectNamedPipe` →
+  re-loop. `forward_url_via_pipe(url) -> PipeForwardOutcome`
+  (`Delivered` / `NoPeer` / `SendFailed { last_error }`):
+  `CreateFileW(GENERIC_WRITE, ...)`, `WriteFile(url + '\n')`,
+  `FlushFileBuffers`, `CloseHandle`. `SendableHwnd(usize)` /
+  `SendableHandle(usize)` wrappers — store handle as `usize`
+  rather than raw `*mut c_void` so the listener-thread closure
+  passes Rust's auto-`Send` check (raw-pointer fields make a
+  wrapper `!Send` even with explicit `unsafe impl Send`).
+- `win_deeplink_receiver` migrated to the pipe transport.
+  WindowProc now handles `WM_USER_DEEPLINK_FORWARD` (recovers
+  `Box<String>` from lParam, calls `dispatch_url`); `WM_COPYDATA`
+  is no longer received from out-of-process secondaries (the
+  pipe DACL gates cross-process delivery). `install_receiver_
+  window` spawns the pipe listener immediately after
+  `CreateWindowExW` and BEFORE signaling the ready event;
+  listener-install failure causes `DestroyWindow` + `Err` so
+  the CLI hard-exits rather than holding the singleton mutex
+  with broken intake (codex round 2 CONCERN). `forward_url_to_
+  primary` rewritten to delegate to `forward_url_via_pipe`;
+  removed `FindWindowExW` + `SendMessageTimeoutW` +
+  `COPYDATASTRUCT` packing + `COPYDATA_TAG` /
+  `COPYDATA_MAX_BYTES` / `SEND_TIMEOUT_MS` constants.
+  `ForwardOutcome::SendTimedOut` / `PrimaryRejected` variants
+  retained for source-compat with the CLI's existing branch arms
+  but documented as deprecated under the pipe transport.
+- Cargo-feature additions for the pipe transport:
+  `Win32_Security_Authorization` (DACL builders),
+  `Win32_System_IO` (OVERLAPPED type for `ReadFile`/
+  `WriteFile`/`ConnectNamedPipe` signatures),
+  `Win32_System_Pipes` (`CreateNamedPipeW` /
+  `ConnectNamedPipe` / pipe-mode flags).
+- 26 deeplink unit tests pass (was 13 in round 1) covering URL
+  parse round-trip, `RuntimeDeepLinkHandler` buffer/drain,
+  cross-app filter accept+reject, `dispatch_url_into_runtime`
+  navigates + seeds query, app-id mismatch refused, drain helper
+  empty/none/declared/no-document permutations. Four codex
+  review rounds for follow-ups A+B; final pass CLEAN with no
+  BLOCK and all CONCERNs/NITs addressed or deferred per codex.
 - Per-platform Skia surface factories for Metal / D3D12 / OpenGL /
   Vulkan / WebGL are **not yet** shipped — each warrants its own
   session against real hardware. The `jian-skia` skeleton stubs

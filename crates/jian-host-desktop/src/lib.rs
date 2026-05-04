@@ -47,6 +47,8 @@ pub mod updater;
 #[cfg(target_os = "windows")]
 pub mod win_deeplink;
 #[cfg(target_os = "windows")]
+pub mod win_deeplink_pipe;
+#[cfg(target_os = "windows")]
 pub mod win_deeplink_receiver;
 
 #[cfg(feature = "run")]
