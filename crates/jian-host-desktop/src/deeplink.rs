@@ -255,7 +255,7 @@ pub fn install_deeplink_handler(
         // holds the handler, so a URL arriving immediately on launch
         // (process started by `open jian://...`) finds a live target.
         crate::apple_event_receiver::install_apple_event_handler();
-        return prev;
+        prev
     }
     #[cfg(target_os = "windows")]
     {
@@ -287,7 +287,7 @@ pub fn take_deeplink_handler() -> Option<Box<dyn DeepLinkHandler>> {
     #[cfg(target_os = "macos")]
     {
         crate::apple_event_receiver::uninstall_apple_event_handler();
-        return crate::app_delegate::take_handler();
+        crate::app_delegate::take_handler()
     }
     #[cfg(target_os = "windows")]
     {

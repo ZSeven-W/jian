@@ -290,7 +290,10 @@ fn extract_url_string(event: &NSAppleEventDescriptor) -> Option<String> {
 /// program-startup invariant — failing it loudly is more useful
 /// than threading a `Result` through a never-recoverable error.
 fn receiver_class() -> &'static AnyClass {
-    *RECEIVER_CLASS.get_or_init(|| {
+    // `OnceLock::<&'static AnyClass>::get_or_init` returns
+    // `&&'static AnyClass`; the function's return type forces the
+    // auto-deref to `&'static AnyClass`.
+    RECEIVER_CLASS.get_or_init(|| {
         let superclass = class!(NSObject);
         let mut builder = ClassBuilder::new("JianAppleEventReceiver", superclass)
             .expect("JianAppleEventReceiver class already registered by another component");
