@@ -130,7 +130,10 @@ pub fn run(chunk: &Chunk, ctx: &dyn EvalContext) -> Result<RuntimeValue, Diagnos
             }
             OpCode::MakeArray(n) => {
                 let n = *n as usize;
-                let at = stack.len() - n;
+                let at = stack
+                    .len()
+                    .checked_sub(n)
+                    .ok_or_else(|| vm_bug("MakeArray stack underflow", ip))?;
                 let items: Vec<Value> = stack.drain(at..).map(|v| v.0).collect();
                 stack.push(RuntimeValue(Value::Array(items)));
             }
@@ -143,8 +146,13 @@ pub fn run(chunk: &Chunk, ctx: &dyn EvalContext) -> Result<RuntimeValue, Diagnos
             }
             OpCode::MakeObject(n) => {
                 let n = *n as usize;
-                let take = n * 2;
-                let at = stack.len() - take;
+                let take = n.checked_mul(2).ok_or_else(|| {
+                    vm_bug("MakeObject element count overflows usize", ip)
+                })?;
+                let at = stack
+                    .len()
+                    .checked_sub(take)
+                    .ok_or_else(|| vm_bug("MakeObject stack underflow", ip))?;
                 let drained: Vec<RuntimeValue> = stack.drain(at..).collect();
                 let mut map = serde_json::Map::new();
                 let mut i = 0;
@@ -174,7 +182,10 @@ pub fn run(chunk: &Chunk, ctx: &dyn EvalContext) -> Result<RuntimeValue, Diagnos
                     .get(*name_i as usize)
                     .ok_or_else(|| vm_bug("string pool oob", ip))?;
                 let argc = *argc as usize;
-                let at = stack.len() - argc;
+                let at = stack
+                    .len()
+                    .checked_sub(argc)
+                    .ok_or_else(|| vm_bug("CallBuiltin stack underflow", ip))?;
                 let args: Vec<RuntimeValue> = stack.drain(at..).collect();
                 match ctx.call_builtin(name, &args) {
                     Some(Ok(v)) => stack.push(v),

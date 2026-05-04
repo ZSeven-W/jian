@@ -30,8 +30,9 @@
 use anyhow::{anyhow, Context, Result};
 use jian_ops_schema::document::PenDocument;
 use jian_ops_schema::pack::{
-    AotManifest, DefaultStateSnapshot, InitialLayoutSnapshot, ENTRY_AOT_DEFAULT_STATE,
-    ENTRY_AOT_INITIAL_LAYOUT, ENTRY_APP_OP, ENTRY_MANIFEST, PACK_FORMAT, PACK_FORMAT_VERSION,
+    AotManifest, DefaultStateSnapshot, ExpressionsSnapshot, InitialLayoutSnapshot,
+    ENTRY_AOT_DEFAULT_STATE, ENTRY_AOT_EXPRESSIONS, ENTRY_AOT_INITIAL_LAYOUT, ENTRY_APP_OP,
+    ENTRY_MANIFEST, PACK_FORMAT, PACK_FORMAT_VERSION,
 };
 use std::fs::File;
 use std::io::Read;
@@ -48,8 +49,9 @@ use std::path::{Component, Path, PathBuf};
 pub const READER_EXPECTED_BACKEND: &str = "estimate";
 
 /// Everything `jian player` needs to drive cold-start from a
-/// `.op.pack`. Snapshots are `Option` because both AOT entries are
-/// optional in the format (a JSON-only pack carries `app.op` alone).
+/// `.op.pack`. Snapshots are `Option` because every AOT entry is
+/// independently optional in the format (a JSON-only pack carries
+/// `app.op` alone).
 #[derive(Debug)]
 pub struct PackContents {
     /// Parsed `app.op` document.
@@ -58,6 +60,12 @@ pub struct PackContents {
     pub initial_layout: Option<InitialLayoutSnapshot>,
     /// Decoded `aot/default_state.bin`, if present and valid.
     pub default_state: Option<DefaultStateSnapshot>,
+    /// Decoded `aot/expressions.bin`, if present and valid (Plan 19
+    /// D2). The bootstrap installs these into the runtime's
+    /// `ExpressionCache` ahead of `SeedStateGraph` so binding
+    /// evaluation hits pre-compiled bytecode without paying parse +
+    /// compile.
+    pub expressions: Option<ExpressionsSnapshot>,
 }
 
 /// Read a `.op.pack` archive and return its parsed contents. Errors
@@ -257,10 +265,40 @@ pub fn read_op_pack(path: &Path) -> Result<PackContents> {
         None
     };
 
+    let expressions_inventoried = manifest.entries.iter().any(|e| e == ENTRY_AOT_EXPRESSIONS);
+    let expressions = if expressions_inventoried {
+        match by_name.get(ENTRY_AOT_EXPRESSIONS) {
+            Some(&idx) => {
+                let bytes =
+                    read_entry_bytes(&mut zr, idx, ENTRY_AOT_EXPRESSIONS, AOT_EXPRS_MAX_BYTES)?;
+                match ExpressionsSnapshot::read_bytes(&bytes) {
+                    Ok(snap) => Some(snap),
+                    Err(e) => {
+                        eprintln!(
+                            "jian: warning — `{ENTRY_AOT_EXPRESSIONS}` decode failed ({e}); \
+                             falling back to JIT compile"
+                        );
+                        None
+                    }
+                }
+            }
+            None => {
+                eprintln!(
+                    "jian: warning — manifest lists `{ENTRY_AOT_EXPRESSIONS}` but the \
+                     entry is absent from the zip; falling back to JIT compile"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     Ok(PackContents {
         schema,
         initial_layout,
         default_state,
+        expressions,
     })
 }
 
@@ -412,6 +450,10 @@ const MANIFEST_MAX_BYTES: u64 = 1024 * 1024; //       1 MiB — manifest.json
 const APP_OP_MAX_BYTES: u64 = 32 * 1024 * 1024; //   32 MiB — schema document
 const AOT_LAYOUT_MAX_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB — initial_layout.bin
 const AOT_STATE_MAX_BYTES: u64 = 8 * 1024 * 1024; //  8 MiB — default_state.bin
+const AOT_EXPRS_MAX_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB — expressions.bin
+                                                   //         (compiled bytecode + intern pools per source can
+                                                   //         dominate a large doc; a tighter cap would push real
+                                                   //         packs over the limit before format expansion lands)
 
 /// Smaller prealloc cap than the per-entry limit so we don't
 /// allocate up front against an attacker-declared size in the zip
@@ -506,6 +548,15 @@ mod tests {
         with_layout: Option<&InitialLayoutSnapshot>,
         with_state: Option<&DefaultStateSnapshot>,
     ) {
+        write_pack_full(path, with_layout, with_state, None);
+    }
+
+    fn write_pack_full(
+        path: &Path,
+        with_layout: Option<&InitialLayoutSnapshot>,
+        with_state: Option<&DefaultStateSnapshot>,
+        with_exprs: Option<&ExpressionsSnapshot>,
+    ) {
         let file = std::fs::File::create(path).expect("create pack file");
         let mut zw = zip::ZipWriter::new(file);
         let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
@@ -517,6 +568,9 @@ mod tests {
         }
         if with_state.is_some() {
             entries.push(ENTRY_AOT_DEFAULT_STATE);
+        }
+        if with_exprs.is_some() {
+            entries.push(ENTRY_AOT_EXPRESSIONS);
         }
         let mut manifest = serde_json::json!({
             "format": PACK_FORMAT,
@@ -552,6 +606,12 @@ mod tests {
                     serde_json::Value::String(ENTRY_AOT_DEFAULT_STATE.into()),
                 );
             }
+            if with_exprs.is_some() {
+                aot.insert(
+                    "expressions".into(),
+                    serde_json::Value::String(ENTRY_AOT_EXPRESSIONS.into()),
+                );
+            }
             manifest
                 .as_object_mut()
                 .unwrap()
@@ -571,6 +631,10 @@ mod tests {
         }
         if let Some(snap) = with_state {
             zw.start_file(ENTRY_AOT_DEFAULT_STATE, opts).unwrap();
+            zw.write_all(&snap.write_bytes().unwrap()).unwrap();
+        }
+        if let Some(snap) = with_exprs {
+            zw.start_file(ENTRY_AOT_EXPRESSIONS, opts).unwrap();
             zw.write_all(&snap.write_bytes().unwrap()).unwrap();
         }
         zw.finish().unwrap();
@@ -641,6 +705,125 @@ mod tests {
         assert_eq!(layout.rects.get("btn").unwrap().w, 100.0);
         let state = contents.default_state.expect("state present");
         assert_eq!(state.app.get("count").unwrap(), &serde_json::json!(7));
+        // Without an `expressions` entry in the manifest the reader
+        // returns `None` for that slot — gating exactly mirrors the
+        // existing layout / state slot.
+        assert!(contents.expressions.is_none());
+    }
+
+    fn nonempty_exprs_snap() -> ExpressionsSnapshot {
+        use jian_ops_schema::pack::{PackedChunk, PackedOpCode};
+        let mut entries = BTreeMap::new();
+        entries.insert(
+            "$app.count + 1".to_owned(),
+            PackedChunk {
+                ops: vec![
+                    PackedOpCode::PushScopeRef(0),
+                    PackedOpCode::PushNum(1.0),
+                    PackedOpCode::Add,
+                    PackedOpCode::Return,
+                ],
+                strings: vec![],
+                scope_paths: vec!["$app.count".into()],
+            },
+        );
+        ExpressionsSnapshot { entries }
+    }
+
+    #[test]
+    fn read_pack_with_expressions_round_trips_snapshot() {
+        // End-to-end: writer-shape pack with `aot/expressions.bin`
+        // round-trips back through the reader and the
+        // PackContents::expressions slot carries the same chunk we
+        // wrote.
+        let exprs = nonempty_exprs_snap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let pack_path = dir.path().join("withexprs.op.pack");
+        write_pack_full(&pack_path, None, None, Some(&exprs));
+
+        let contents = read_op_pack(&pack_path).expect("read");
+        let snap = contents.expressions.expect("exprs present");
+        assert_eq!(snap.len(), 1);
+        let chunk = snap.entries.get("$app.count + 1").expect("source key");
+        assert_eq!(chunk.scope_paths, vec!["$app.count".to_owned()]);
+        assert_eq!(chunk.ops.len(), 4);
+    }
+
+    #[test]
+    fn read_pack_with_garbled_expressions_drops_to_none() {
+        // A reader that hits a corrupt `aot/expressions.bin` must
+        // warn + drop the snapshot, matching the layout/state
+        // "fall back rather than misparse" contract. The runtime
+        // then JIT-compiles every binding source on first
+        // evaluation.
+        let dir = tempfile::TempDir::new().unwrap();
+        let pack_path = dir.path().join("garbled.op.pack");
+        let file = std::fs::File::create(&pack_path).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        zw.start_file(ENTRY_MANIFEST, opts).unwrap();
+        let manifest = serde_json::json!({
+            "format": PACK_FORMAT,
+            "version": "0.1",
+            "app": {"id":"pkr.fix","name":"PkrFix","version":"1"},
+            "capabilities": [],
+            "entries": [ENTRY_APP_OP, ENTRY_AOT_EXPRESSIONS],
+            "aot": { "expressions": ENTRY_AOT_EXPRESSIONS },
+        });
+        zw.write_all(serde_json::to_vec(&manifest).unwrap().as_slice())
+            .unwrap();
+        zw.start_file(ENTRY_APP_OP, opts).unwrap();
+        zw.write_all(FIXTURE_OP.as_bytes()).unwrap();
+        zw.start_file(ENTRY_AOT_EXPRESSIONS, opts).unwrap();
+        zw.write_all(b"NOPE-not-an-OPE1-frame").unwrap();
+        zw.finish().unwrap();
+
+        let contents = read_op_pack(&pack_path).expect("read still succeeds");
+        assert!(
+            contents.expressions.is_none(),
+            "garbled expressions.bin must drop to None"
+        );
+    }
+
+    #[test]
+    fn read_pack_skips_uninventoried_expressions_entry() {
+        // An orphan `aot/expressions.bin` file in the zip but NOT
+        // listed in `manifest.entries` MUST NOT drive the runtime
+        // preload — that's the same gate every other AOT entry
+        // honours. Mirrors the codex round 1 MEDIUM #5 fix on the
+        // layout slot.
+        let exprs = nonempty_exprs_snap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let pack_path = dir.path().join("orphan.op.pack");
+        let file = std::fs::File::create(&pack_path).unwrap();
+        let mut zw = zip::ZipWriter::new(file);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zw.start_file(ENTRY_MANIFEST, opts).unwrap();
+        // Manifest deliberately omits ENTRY_AOT_EXPRESSIONS from
+        // `entries` even though we'll write the file below.
+        let manifest = serde_json::json!({
+            "format": PACK_FORMAT,
+            "version": "0.1",
+            "app": {"id":"pkr.fix","name":"PkrFix","version":"1"},
+            "capabilities": [],
+            "entries": [ENTRY_APP_OP],
+        });
+        zw.write_all(serde_json::to_vec(&manifest).unwrap().as_slice())
+            .unwrap();
+        zw.start_file(ENTRY_APP_OP, opts).unwrap();
+        zw.write_all(FIXTURE_OP.as_bytes()).unwrap();
+        zw.start_file(ENTRY_AOT_EXPRESSIONS, opts).unwrap();
+        zw.write_all(&exprs.write_bytes().unwrap()).unwrap();
+        zw.finish().unwrap();
+
+        let contents = read_op_pack(&pack_path).expect("read");
+        assert!(
+            contents.expressions.is_none(),
+            "uninventoried expressions.bin MUST NOT be consumed"
+        );
     }
 
     #[test]

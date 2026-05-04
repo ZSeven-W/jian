@@ -72,6 +72,7 @@ use crate::Runtime;
 use jian_ops_schema::document::PenDocument;
 use jian_ops_schema::font_plan::FontPlan;
 use jian_ops_schema::node::PenNode;
+use jian_ops_schema::pack::expressions::ExpressionsSnapshot;
 use jian_ops_schema::pack::initial_layout::InitialLayoutSnapshot;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -176,6 +177,16 @@ struct BootstrapShared {
     /// A subsequent resize-driven `build_layout` clears the preload
     /// and runs a fresh compute, so resize correctness is preserved.
     aot_initial_layout: Option<InitialLayoutSnapshot>,
+    /// Plan 19 D2 cold-start: optional pre-compiled-expression
+    /// snapshot from `aot/expressions.bin`. When `Some`,
+    /// `SeedStateGraph` installs the chunks into the runtime's
+    /// expression cache *immediately after* `Runtime::
+    /// new_from_document` constructs the cache. A binding's first
+    /// `get_or_compile(source)` then returns the pre-compiled
+    /// chunk and skips parse + compile. The seed is opportunistic:
+    /// sources missing from the snapshot fall through to JIT
+    /// compile, exactly as without `--aot`.
+    aot_expressions: Option<ExpressionsSnapshot>,
 }
 
 /// Host-agnostic DataPath bootstrap. Stateless type — every method
@@ -209,12 +220,30 @@ impl HostAgnosticBootstrap {
     ///
     /// Hosts that don't ship a `.op.pack` (or whose pack omits the
     /// AOT entry) call `install_data_path` and pay the regular
-    /// `ComputeFirstLayout` cost.
+    /// `ComputeFirstLayout` cost. For the Plan 19 D2 expressions
+    /// preload as well, use [`install_data_path_with_aot_full`].
     pub fn install_data_path_with_aot(
         driver: &mut StartupDriver,
         source: BootstrapSource,
         viewport: (f32, f32),
         aot_initial_layout: Option<InitialLayoutSnapshot>,
+    ) -> BootstrapHandles {
+        Self::install_data_path_with_aot_full(driver, source, viewport, aot_initial_layout, None)
+    }
+
+    /// Plan 19 D1 + D2 cold-start variant: accepts both an optional
+    /// initial-layout snapshot AND an optional pre-compiled-
+    /// expressions snapshot. When `aot_expressions` is `Some`, the
+    /// `SeedStateGraph` phase installs the chunks into the
+    /// runtime's `ExpressionCache` immediately after construction,
+    /// so binding evaluation hits pre-compiled bytecode without
+    /// paying parse + compile.
+    pub fn install_data_path_with_aot_full(
+        driver: &mut StartupDriver,
+        source: BootstrapSource,
+        viewport: (f32, f32),
+        aot_initial_layout: Option<InitialLayoutSnapshot>,
+        aot_expressions: Option<ExpressionsSnapshot>,
     ) -> BootstrapHandles {
         let shared = Rc::new(BootstrapShared {
             source_text: RefCell::new(None),
@@ -225,6 +254,7 @@ impl HostAgnosticBootstrap {
             viewport,
             source,
             aot_initial_layout,
+            aot_expressions,
         });
         // Pre-seed cells from the source variant so the relevant
         // phase impls below short-circuit (their bodies see the
@@ -314,6 +344,40 @@ fn register_seed_state_graph(driver: &mut StartupDriver, shared: &Rc<BootstrapSh
             .ok_or_else(|| "ParseSchema produced no schema".to_owned())?;
         let mut runtime = Runtime::new_from_document(schema)
             .map_err(|e| format!("Runtime::new_from_document: {e}"))?;
+        // Plan 19 D2 cold-start: install the AOT pre-compiled-
+        // expression snapshot before any binding evaluates. The
+        // cache is empty at this point (`Runtime::new_from_document`
+        // just constructed it), so every snapshot entry seeds a slot
+        // and the first `BindingEffect::new_lazy` for a seeded source
+        // returns the pre-compiled chunk. The `&` borrow keeps the
+        // snapshot in `BootstrapShared` for the host (diagnostics /
+        // replay); the helper clones each PackedChunk into the
+        // cache's owned `Chunk` shape.
+        //
+        // Codex review BLOCK: a structurally-valid `aot/expressions
+        // .bin` could still carry VM-unsafe bytecode (out-of-range
+        // indices, backwards jumps that infinite-loop). Run the
+        // structural verifier before installing; on failure, drop
+        // the whole snapshot (no per-entry partial-install) and
+        // emit a stderr warning so the host operator sees the
+        // tampering signal. The runtime then JIT-compiles every
+        // binding source on first eval, exactly as without `--aot`.
+        if let Some(snap) = shared.aot_expressions.as_ref() {
+            match snap.verify_all() {
+                Ok(()) => {
+                    runtime
+                        .expr_cache
+                        .install_precompiled(crate::expression::snapshot_to_chunks(snap));
+                }
+                Err((source, err)) => {
+                    eprintln!(
+                        "jian: warning — aot/expressions.bin entry for `{source}` failed \
+                         structural verify ({err}); falling back to JIT compile for every \
+                         binding"
+                    );
+                }
+            }
+        }
         // Plan 19 D1 cold-start: preload the AOT initial-layout
         // snapshot now so `ComputeFirstLayout` can short-circuit
         // without racing a future host-side mutation. We feed

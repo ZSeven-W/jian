@@ -194,6 +194,17 @@ impl DeferredBindingQueue {
         self.entries.is_empty()
     }
 
+    /// Read-only iterator over the raw expression source strings
+    /// queued for deferred binding. Used by [`crate::Runtime::
+    /// warm_expression_cache`] to pre-compile every binding source
+    /// at pack time (Plan 19 D2 — `aot/expressions.bin` writer needs
+    /// the cache populated *before* `drain_into_effects`, since
+    /// dispatching an effect requires an event-pump bridge the
+    /// probe runtime doesn't run).
+    pub fn sources(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().map(|e| e.source.as_str())
+    }
+
     /// Drain every queued entry into a registered `BindingEffect`. The
     /// returned vector must be kept alive for the runtime's lifetime —
     /// dropping a `BindingEffect` deregisters the underlying effect and

@@ -37,8 +37,11 @@
 //!   freshly seeded `Runtime` and the runtime side restores them
 //!   ahead of `SeedStateGraph` so the schema-default scan can be
 //!   skipped on cold start.
-//! - `aot/expressions.bin` — **deferred**. Needs `jian_core::expression::Chunk`
-//!   to derive `Serialize`, a touchier refactor.
+//! - `aot/expressions.bin` — **shipped** (Plan 19 D2). Hand-rolled
+//!   little-endian frame (`OPE1` magic) with a wire-stable
+//!   [`expressions::PackedOpCode`] mirror. Lives in
+//!   [`expressions`]; conversion to/from `jian_core::expression::
+//!   bytecode::Chunk` lives in `jian_core::expression::aot`.
 //!
 //! The font subset entries depend on the subsetter wiring (Plan 19
 //! D2 — runtime side shipped, AOT side waits on D1's expression
@@ -51,11 +54,16 @@
 //! migration lands without touching `manifest.json` consumers.
 
 pub mod default_state;
+pub mod expressions;
 pub mod initial_layout;
 pub mod manifest;
 
 pub use default_state::{
     DefaultStateError, DefaultStateSnapshot, DEFAULT_STATE_MAGIC, DEFAULT_STATE_VERSION,
+};
+pub use expressions::{
+    ChunkVerifyError, ExpressionsError, ExpressionsSnapshot, PackedChunk, PackedOpCode,
+    EXPRESSIONS_MAGIC, EXPRESSIONS_VERSION,
 };
 pub use initial_layout::{
     InitialLayoutError, InitialLayoutSnapshot, PackedRect, INITIAL_LAYOUT_MAGIC,

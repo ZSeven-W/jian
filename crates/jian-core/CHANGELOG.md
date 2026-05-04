@@ -105,7 +105,35 @@ additions targeted at the workspace's `0.0.1` development release.
   `SpatialIndex::fill_rest` folds in the remainder from the
   Background stage.
 - `LazyBinding` / `DeferredBindingQueue` so off-viewport bindings
-  evaluate after the first paint.
+  evaluate after the first paint. `DeferredBindingQueue::sources()`
+  read-only iterator surfaces queued source strings to the AOT
+  pack writer (`Runtime::warm_expression_cache` consumes it).
+- `expression::ExpressionCache::dump()` returns a sorted
+  `BTreeMap<String, Chunk>` so the AOT pack writer can emit
+  byte-identical content-addressed `aot/expressions.bin` across
+  runs. `install_precompiled` (entry-API: pre-existing entries
+  win) seeds the cache from a decoded snapshot ahead of any
+  binding evaluation.
+- `expression::aot` conversion glue: `From<&OpCode> for PackedOpCode`
+  and inverse, `From<&Chunk> for PackedChunk` and inverse, plus
+  `chunks_to_snapshot` / `snapshot_to_chunks` helpers so the pack
+  writer / reader never imports `jian-core` internals from the
+  ops-schema side.
+- `Runtime::warm_expression_cache()` pre-compiles every queued
+  binding source into the cache so the AOT writer captures the
+  doc's binding surface — not just whatever `build_layout`
+  incidentally fired.
+- VM stack-underflow and overflow guards (`MakeArray`,
+  `MakeObject`, `CallBuiltin`): `checked_sub` / `checked_mul`
+  return a `vm_bug` diagnostic instead of panicking, so a
+  malformed AOT chunk that bypassed the structural verifier is
+  still safe at runtime.
+- Bootstrap `install_data_path_with_aot_full(driver, source,
+  viewport, aot_initial_layout, aot_expressions)` accepts both
+  AOT slots. `SeedStateGraph` calls `verify_all` on the
+  expressions snapshot before `install_precompiled`; structural-
+  verify failure drops the whole snapshot and emits a stderr
+  warning so a tampered pack falls back to JIT compile cleanly.
 - End-to-end pipeline smoke test (`counter.op` fixture); Signal
   update microbenchmark (10 / 100 / 1000 subscribers). Integration
   suite `tests/capability_enforcement.rs` (10 tests) and

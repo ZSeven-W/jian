@@ -541,6 +541,32 @@ impl Runtime {
         )
     }
 
+    /// Pre-compile every queued binding's source into the expression
+    /// cache without registering effects. Used by `jian pack --aot`
+    /// (Plan 19 D2) so the AOT `expressions.bin` snapshot contains
+    /// every expression the runtime will eventually evaluate, not
+    /// just the ones an opportunistic first-paint dispatch happens
+    /// to fire.
+    ///
+    /// Returns the count of unique sources compiled. Sources that
+    /// fail to parse are silently skipped — `ExpressionCache::
+    /// get_or_compile` doesn't insert on error and the runtime will
+    /// surface the same diagnostic at evaluation time. Skipping
+    /// here keeps pack-time success decoupled from runtime-time
+    /// expression diagnostics; an author who ships a doc with a
+    /// broken binding still gets a working pack (sans AOT entry for
+    /// that one source) and the same error at runtime as without
+    /// `--aot`.
+    pub fn warm_expression_cache(&self) -> usize {
+        let mut compiled = 0usize;
+        for source in self.deferred_bindings.sources() {
+            if self.expr_cache.get_or_compile(source).is_ok() {
+                compiled += 1;
+            }
+        }
+        compiled
+    }
+
     /// Build an `ActionContext` tied to this runtime's services. Exposed
     /// for integration tests and host embedders that want to run a
     /// standalone ActionList outside the gesture pipeline.

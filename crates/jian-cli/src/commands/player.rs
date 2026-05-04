@@ -31,6 +31,7 @@ struct LoadedSource {
     schema: PenDocument,
     initial_layout: Option<InitialLayoutSnapshot>,
     default_state: Option<DefaultStateSnapshot>,
+    expressions: Option<jian_ops_schema::pack::ExpressionsSnapshot>,
 }
 
 pub fn run(args: PlayerArgs) -> Result<ExitCode> {
@@ -178,17 +179,20 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         schema,
         initial_layout,
         default_state,
+        expressions,
     } = if looks_like_op_pack(&resolved_path) {
         let PackContents {
             schema,
             initial_layout,
             default_state,
+            expressions,
         } = read_op_pack(&resolved_path)
             .with_context(|| format!("read pack {}", resolved_path.display()))?;
         LoadedSource {
             schema,
             initial_layout,
             default_state,
+            expressions,
         }
     } else {
         let src = fs::read_to_string(&resolved_path)
@@ -200,6 +204,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
             schema,
             initial_layout: None,
             default_state: None,
+            expressions: None,
         }
     };
 
@@ -279,18 +284,26 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // `initial_layout == None` and we use the regular
     // `install_data_path` entry so the bootstrap's behaviour is
     // unchanged.
-    let bootstrap = match initial_layout {
-        Some(snap) => HostAgnosticBootstrap::install_data_path_with_aot(
+    // Plan 19 D2: when the pack ships `aot/expressions.bin`, feed
+    // it alongside the layout snapshot so the bootstrap installs
+    // pre-compiled chunks into the runtime's expression cache.
+    // `install_data_path_with_aot_full` accepts both as `Option`,
+    // so a layout-only pack and a JSON-only `.op` both fall through
+    // to the original code paths unchanged.
+    let bootstrap = if initial_layout.is_some() || expressions.is_some() {
+        HostAgnosticBootstrap::install_data_path_with_aot_full(
             &mut driver,
             BootstrapSource::Schema(Box::new(schema)),
             (w, h),
-            Some(snap),
-        ),
-        None => HostAgnosticBootstrap::install_data_path(
+            initial_layout,
+            expressions,
+        )
+    } else {
+        HostAgnosticBootstrap::install_data_path(
             &mut driver,
             BootstrapSource::Schema(Box::new(schema)),
             (w, h),
-        ),
+        )
     };
     // Capture the offset between launch_epoch and the DataPath
     // stage's t0 (the moment block_on enters run_filtered) so the

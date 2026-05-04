@@ -6,6 +6,7 @@
 //! that `get()` reads, so effects built on top of `eval_with_tracker` get
 //! proper fine-grained reactivity.
 
+pub mod aot;
 pub mod ast;
 pub mod builtins;
 pub mod bytecode;
@@ -18,6 +19,7 @@ pub mod scope;
 pub mod token;
 pub mod vm;
 
+pub use aot::{chunks_to_snapshot, snapshot_to_chunks};
 pub use bytecode::Chunk;
 pub use cache::ExpressionCache;
 pub use diag::{DiagKind, Diagnostic, Span};

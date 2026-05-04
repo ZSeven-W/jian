@@ -36,18 +36,31 @@
 //!   `BootstrapSource::Pack` reader preloads the rects to skip
 //!   `ComputeFirstLayout` at runtime (~30-80 ms on real docs).
 //!
-//! Logic-module bundling (`logic/<id>.wasm`) and AOT expressions
-//! (`aot/expressions.bin`) are Plan-19 follow-ups. AOT default-state
-//! (`aot/default_state.bin`) ships under `--aot` alongside the layout
-//! snapshot — both are dumped from the same probe runtime so the
-//! state values reflect the schema-default seed at pack time.
+//! Logic-module bundling (`logic/<id>.wasm`) is a Plan-19 follow-up.
+//! AOT default-state (`aot/default_state.bin`) and AOT expressions
+//! (`aot/expressions.bin`) ship under `--aot` alongside the layout
+//! snapshot — all three are captured from the same probe runtime so
+//! state values, layout rects, and the compiled-expression cache
+//! reflect a single coherent schema-default seed at pack time.
+//!
+//! ### Expression-coverage caveat
+//!
+//! `aot/expressions.bin` carries every expression that the probe
+//! runtime evaluated during `build_layout` — bindings and template
+//! strings that fire on first paint. Event-handler expressions
+//! (onTap / onChange action `set` bodies) compile lazily on first
+//! dispatch and won't appear in the snapshot; the runtime falls
+//! through to `parse + compile` for those, paying a tiny one-shot
+//! cost outside the cold-start critical path. A static walker that
+//! eagerly collects every expression source in the document is a
+//! Plan 19 D2 follow-up.
 
 use crate::PackArgs;
 use anyhow::{anyhow, Context, Result};
 use jian_ops_schema::document::PenDocument;
 use jian_ops_schema::pack::{
-    DefaultStateSnapshot, InitialLayoutSnapshot, PackedRect, ENTRY_AOT_DEFAULT_STATE,
-    ENTRY_AOT_INITIAL_LAYOUT,
+    DefaultStateSnapshot, ExpressionsSnapshot, InitialLayoutSnapshot, PackedRect,
+    ENTRY_AOT_DEFAULT_STATE, ENTRY_AOT_EXPRESSIONS, ENTRY_AOT_INITIAL_LAYOUT,
 };
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -82,38 +95,40 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         Vec::new()
     };
 
-    // AOT initial-layout snapshot + default-state snapshot (Plan 19
-    // D1 / Task 6). Computed before opening the zip so a layout
-    // error fails fast with a clear message instead of a half-written
-    // archive. Both come from the SAME probe runtime so the rect set
-    // and the seeded state agree on which document was hashed —
+    // AOT initial-layout snapshot + default-state snapshot + compiled-
+    // expression snapshot (Plan 19 D1+D2 / Task 6). Computed before
+    // opening the zip so an error fails fast with a clear message
+    // instead of a half-written archive. All three come from the SAME
+    // probe runtime so the rect set, the seeded state, and the
+    // compiled-expression cache agree on which document was hashed —
     // walking the schema twice would race a future loader change.
-    let aot_payload: Option<(
-        InitialLayoutSnapshot,
-        Vec<u8>,
-        DefaultStateSnapshot,
-        Vec<u8>,
-    )> = if args.aot {
+    let aot_payload: Option<AotPayload> = if args.aot {
         let viewport = parse_viewport(&args.aot_viewport)?;
-        let (layout_snap, state_snap) = compute_aot_payload(&loaded.value, viewport).context(
-            "computing AOT initial layout / default state (jian pack --aot). \
+        let (layout_snap, state_snap, exprs_snap) = compute_aot_payload(&loaded.value, viewport)
+            .context(
+                "computing AOT initial layout / default state / expressions (jian pack --aot). \
                  Falls back when ComputeFirstLayout fails",
-        )?;
+            )?;
         let layout_bytes = layout_snap
             .write_bytes()
             .map_err(|e| anyhow!("encode AOT initial layout: {e}"))?;
         let state_bytes = state_snap
             .write_bytes()
             .map_err(|e| anyhow!("encode AOT default state: {e}"))?;
-        Some((layout_snap, layout_bytes, state_snap, state_bytes))
+        let exprs_bytes = exprs_snap
+            .write_bytes()
+            .map_err(|e| anyhow!("encode AOT expressions: {e}"))?;
+        Some(AotPayload {
+            layout_snap,
+            layout_bytes,
+            state_snap,
+            state_bytes,
+            exprs_snap,
+            exprs_bytes,
+        })
     } else {
         None
     };
-    // Backwards-compat alias — the rest of the function reads the
-    // layout pair directly.
-    let aot_layout: Option<(InitialLayoutSnapshot, Vec<u8>)> = aot_payload
-        .as_ref()
-        .map(|(s, b, _, _)| (s.clone(), b.clone()));
 
     let mut entries: Vec<String> = vec!["app.op".into()];
     let mut seen_entries: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -122,9 +137,10 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
             entries.push(asset.zip_path.clone());
         }
     }
-    if aot_layout.is_some() {
+    if aot_payload.is_some() {
         entries.push(ENTRY_AOT_INITIAL_LAYOUT.to_owned());
         entries.push(ENTRY_AOT_DEFAULT_STATE.to_owned());
+        entries.push(ENTRY_AOT_EXPRESSIONS.to_owned());
     }
 
     let images_manifest: BTreeMap<String, String> = images
@@ -136,7 +152,7 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         &loaded.value,
         &entries,
         &images_manifest,
-        aot_layout.as_ref().map(|(s, _)| s.viewport),
+        aot_payload.as_ref().map(|p| p.layout_snap.viewport),
     );
 
     let file =
@@ -162,24 +178,28 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         zw.write_all(&asset.bytes)?;
     }
 
-    if let Some((_, layout_bytes, _, state_bytes)) = aot_payload.as_ref() {
+    if let Some(p) = aot_payload.as_ref() {
         zw.start_file(ENTRY_AOT_INITIAL_LAYOUT, opts)?;
-        zw.write_all(layout_bytes)?;
+        zw.write_all(&p.layout_bytes)?;
         zw.start_file(ENTRY_AOT_DEFAULT_STATE, opts)?;
-        zw.write_all(state_bytes)?;
+        zw.write_all(&p.state_bytes)?;
+        zw.start_file(ENTRY_AOT_EXPRESSIONS, opts)?;
+        zw.write_all(&p.exprs_bytes)?;
     }
 
     zw.finish()?;
 
     let aot_msg = match aot_payload.as_ref() {
-        Some((s, layout_bytes, state, state_bytes)) => format!(
-            ", AOT layout {}×{} ({} rect(s), {} bytes), AOT state ({} app key(s), {} bytes)",
-            s.viewport.width as i32,
-            s.viewport.height as i32,
-            s.rects.len(),
-            layout_bytes.len(),
-            state.app.len(),
-            state_bytes.len(),
+        Some(p) => format!(
+            ", AOT layout {}×{} ({} rect(s), {} bytes), AOT state ({} app key(s), {} bytes), AOT exprs ({} cached, {} bytes)",
+            p.layout_snap.viewport.width as i32,
+            p.layout_snap.viewport.height as i32,
+            p.layout_snap.rects.len(),
+            p.layout_bytes.len(),
+            p.state_snap.app.len(),
+            p.state_bytes.len(),
+            p.exprs_snap.len(),
+            p.exprs_bytes.len(),
         ),
         None => String::new(),
     };
@@ -215,13 +235,26 @@ fn parse_viewport(s: &str) -> Result<(f32, f32)> {
     Ok((w, h))
 }
 
+/// All-in-one AOT payload assembled in `pack --aot`. Holding the
+/// snapshots and their already-encoded byte buffers together keeps
+/// the writer pass linear: validate → encode → emit.
+struct AotPayload {
+    layout_snap: InitialLayoutSnapshot,
+    layout_bytes: Vec<u8>,
+    state_snap: DefaultStateSnapshot,
+    state_bytes: Vec<u8>,
+    exprs_snap: ExpressionsSnapshot,
+    exprs_bytes: Vec<u8>,
+}
+
 /// Build a runtime, run `build_layout(viewport)`, then walk every
 /// node and collect its scene-coord rect into an
 /// [`InitialLayoutSnapshot`] alongside a snapshot of every state
-/// scope's seeded values. Nodes without a layout rect (very rare —
-/// typically a virtual `<ref>` placeholder the layout engine
-/// omitted) are silently skipped; the host falls back to a fresh
-/// layout pass for them.
+/// scope's seeded values and the expression cache the layout pass
+/// populated. Nodes without a layout rect (very rare — typically a
+/// virtual `<ref>` placeholder the layout engine omitted) are
+/// silently skipped; the host falls back to a fresh layout pass for
+/// them.
 ///
 /// First validates that every node id in the document is unique —
 /// `NodeTree::insert_subtree` overwrites duplicates silently, which
@@ -230,13 +263,25 @@ fn parse_viewport(s: &str) -> Result<(f32, f32)> {
 /// The state snapshot reflects the schema-default seed at the moment
 /// `Runtime::new_from_document` finishes; no events have fired and
 /// no signals have been mutated, so the dump is exactly what
-/// `SeedStateGraph` would otherwise reproduce. Capturing both
-/// payloads from the same runtime keeps the layout↔state pair
-/// internally consistent.
+/// `SeedStateGraph` would otherwise reproduce. Capturing all three
+/// payloads from the same runtime keeps the layout ↔ state ↔
+/// expression-cache trio internally consistent.
+///
+/// The expression snapshot reflects every binding / template that
+/// the probe runtime evaluated during `build_layout`. Event-handler
+/// expressions don't fire on first paint and are therefore absent
+/// (see the module doc's "Expression-coverage caveat"). The
+/// per-source dedup is automatic — `ExpressionCache::get_or_compile`
+/// stores at most one chunk per source, so the dump is naturally
+/// minimal.
 fn compute_aot_payload(
     doc: &PenDocument,
     viewport: (f32, f32),
-) -> Result<(InitialLayoutSnapshot, DefaultStateSnapshot)> {
+) -> Result<(
+    InitialLayoutSnapshot,
+    DefaultStateSnapshot,
+    ExpressionsSnapshot,
+)> {
     if let Some(dup) = first_duplicate_node_id(doc) {
         return Err(anyhow!(
             "AOT initial layout: document has duplicate node id `{dup}`. \
@@ -247,6 +292,13 @@ fn compute_aot_payload(
         .map_err(|e| anyhow!("Runtime::new_from_document: {e}"))?;
     rt.build_layout(viewport)
         .map_err(|e| anyhow!("build_layout({:?}): {e}", viewport))?;
+    // Plan 19 D2: pre-compile every queued binding source so the
+    // expression cache reflects the doc's full binding surface
+    // (not just whatever build_layout incidentally fired). The
+    // warm-up is a parse + compile per unique source; failures are
+    // skipped silently and surface at runtime exactly as they
+    // would without --aot.
+    let _warmed = rt.warm_expression_cache();
     let tree = rt
         .document
         .as_ref()
@@ -276,7 +328,11 @@ fn compute_aot_payload(
         rects,
     };
     let state = rt.state.dump_default_state();
-    Ok((layout, state))
+    // Plan 19 D2: convert the runtime's BTreeMap<String, Chunk>
+    // dump to the wire-stable `ExpressionsSnapshot` shape. The
+    // helper is total — every Chunk has a 1:1 PackedChunk mirror.
+    let exprs = jian_core::expression::chunks_to_snapshot(&rt.expr_cache.dump());
+    Ok((layout, state, exprs))
 }
 
 /// Walk the **first-frame root set** of `doc` and return the first
@@ -490,6 +546,7 @@ fn build_manifest(
             serde_json::json!({
                 "initial_layout": ENTRY_AOT_INITIAL_LAYOUT,
                 "default_state": ENTRY_AOT_DEFAULT_STATE,
+                "expressions": ENTRY_AOT_EXPRESSIONS,
                 "default_viewport": { "width": vp.width, "height": vp.height },
                 "measurement_backend": AOT_MEASUREMENT_BACKEND,
             }),

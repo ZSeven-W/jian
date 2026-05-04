@@ -708,8 +708,9 @@ fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
     // preload reader can reject mismatched-shaping snapshots.
     assert_eq!(aot["measurement_backend"], "estimate");
 
-    // Manifest records both AOT entries (Plan 19 D1 follow-up).
+    // Manifest records all three AOT entries (Plan 19 D1 + D2).
     assert_eq!(aot["default_state"], "aot/default_state.bin");
+    assert_eq!(aot["expressions"], "aot/expressions.bin");
 
     // Binary snapshot decodes and contains the document's nodes.
     let bin = fs::read(extracted.join("aot/initial_layout.bin"))
@@ -732,7 +733,38 @@ fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
     let state_snap = jian_ops_schema::pack::DefaultStateSnapshot::read_bytes(&state_bin)
         .expect("state snapshot decodes");
     assert!(state_snap.is_empty(), "fixture has no state to seed");
+
+    // AOT expressions file decodes (Plan 19 D2). The fixture has no
+    // bindings or templates so the snapshot is empty — but the file
+    // MUST exist so a runtime preload reader sees a deterministic
+    // "no precompiled chunks" signal rather than fall back to JIT
+    // for what was actually a binding-free document.
+    let exprs_bin = fs::read(extracted.join("aot/expressions.bin"))
+        .expect("aot/expressions.bin must be extracted");
+    let exprs_snap = jian_ops_schema::pack::ExpressionsSnapshot::read_bytes(&exprs_bin)
+        .expect("expressions snapshot decodes");
+    assert!(
+        exprs_snap.is_empty(),
+        "fixture has no expressions to compile"
+    );
 }
+
+// Coverage note (Plan 19 D2): the AOT writer dumps whatever the
+// probe runtime's `ExpressionCache` contains after `build_layout`
+// + `warm_expression_cache`. Today most action expressions compile
+// via `jian_core::expression::Expression::compile` directly (not
+// through the cache), and `DeferredBindingQueue` isn't populated by
+// the document loader yet (Plan 19 Task 3 follow-up). The result is
+// that AOT-published packs ship an `aot/expressions.bin` that can
+// be empty even for docs with bindings — the format and the
+// writer/reader/preload wiring all ship, and coverage will fill in
+// once the loader pushes binding sources into the deferred queue
+// (or once action constructors switch to the shared cache).
+//
+// The end-to-end wiring (writer emit + reader decode + bootstrap
+// preload) is exercised by `pack_aot_writes_initial_layout_bin_and_
+// manifest_records_it` above; a non-empty-cache integration test
+// will land alongside the loader change.
 
 #[test]
 fn pack_without_aot_omits_initial_layout_bin() {
@@ -768,6 +800,10 @@ fn pack_without_aot_omits_initial_layout_bin() {
     assert!(
         !extracted.join("aot/default_state.bin").exists(),
         "no AOT default_state binary by default"
+    );
+    assert!(
+        !extracted.join("aot/expressions.bin").exists(),
+        "no AOT expressions binary by default"
     );
 }
 

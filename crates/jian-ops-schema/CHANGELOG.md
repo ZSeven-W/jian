@@ -49,5 +49,26 @@ additions targeted at the workspace's `0.0.1` development release.
   DepthExceeded. 15 unit tests covering round-trip, deterministic
   byte order (flat / nested / array-of-objects), every rejection
   variant, and the depth-limit boundary across scopes.
-- `aot/expressions.bin` precompiled bytecode is **not yet** shipped
-  — needs `jian_core::expression::Chunk: Serialize` refactor first.
+- `pack::expressions::ExpressionsSnapshot` — pre-compiled-bytecode
+  AOT capture for every expression source the writer baked.
+  `OPE1` little-endian wire format (10-byte header + per-entry
+  `(u32 src_len, utf8 source, PackedChunk)` where `PackedChunk` is
+  `(u32 ops_len, [(u8 op_tag, payload)], u32 strings_len, [strings],
+  u32 scope_paths_len, [paths])`). Wire-stable `PackedOpCode` mirror
+  with pinned u8 tags 0..=32 (one per `jian_core::expression::
+  bytecode::OpCode` variant). Per-field caps `MAX_STRING_BYTES =
+  64 KiB`, `MAX_VEC_LEN = 64K`, `MAX_ENTRIES = 64K`; aggregate
+  budget enforced upstream by the pack reader's
+  `AOT_EXPRS_MAX_BYTES = 16 MiB` zip-entry cap. Typed rejections
+  (TooShort / BadMagic / UnsupportedVersion / Truncated /
+  InvalidUtf8 / StringTooLong / VecTooLong / EntryCountTooLarge /
+  UnknownOpTag / TrailingBytes / DuplicateSource / SourceTooLong).
+  Plus a structural `PackedChunk::verify()` (and snapshot-level
+  `verify_all`) that rejects out-of-range pool indices, jumps
+  past `ops.len()`, and backwards / zero-offset jumps before any
+  AOT chunk reaches the VM. 30 unit tests pinning round-trip
+  determinism, every rejection variant, f64 bit pattern
+  preservation, i32 jump sign-extension, structural-verify
+  acceptance + every rejection class, and a `variant_count_pinned_
+  to_version` test that forces `EXPRESSIONS_VERSION` to bump in
+  lockstep with any new `PackedOpCode` variant.

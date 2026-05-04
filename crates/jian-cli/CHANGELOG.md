@@ -13,15 +13,19 @@ additions targeted at the workspace's `0.0.1` development release.
 - `jian pack INPUT OUTPUT [--include-fonts] [--include-images]
   [--aot] [--aot-viewport WxH]` — deflate-compressed `.op.pack`
   containing `manifest.json` + `app.op` + assets. With `--aot` the
-  archive carries both `aot/initial_layout.bin` and
-  `aot/default_state.bin`, dumped from a single probe runtime so
-  the layout↔state pair stays internally consistent. Manifest's
-  `aot` block records `default_viewport`, `initial_layout`,
-  `default_state`, and the `measurement_backend` tag (currently
-  `"estimate"`) so a runtime preload reader can refuse a
-  mismatched-shaping snapshot. Console summary prints both file
-  sizes (`AOT layout 800×600 (N rect(s), M bytes), AOT state (K
-  app key(s), J bytes)`).
+  archive carries `aot/initial_layout.bin`, `aot/default_state.bin`,
+  AND `aot/expressions.bin`, dumped from a single probe runtime so
+  the layout ↔ state ↔ expression-cache trio stays internally
+  consistent. Manifest's `aot` block records `default_viewport`,
+  `initial_layout`, `default_state`, `expressions`, and the
+  `measurement_backend` tag (currently `"estimate"`) so a runtime
+  preload reader can refuse a mismatched-shaping snapshot. The
+  probe runtime calls `Runtime::warm_expression_cache` after
+  `build_layout` so every queued binding source compiles into the
+  cache before the dump, not just whatever first-frame layout
+  incidentally fired. Console summary prints all three file sizes
+  (`AOT layout 800×600 (N rect(s), M bytes), AOT state (K app
+  key(s), J bytes), AOT exprs (E cached, F bytes)`).
 - `jian unpack INPUT OUT_DIR` — extract every entry; zip-slip
   guard on entry names.
 - `jian new NAME [--template counter|form] [--path DIR]` —
@@ -65,12 +69,14 @@ additions targeted at the workspace's `0.0.1` development release.
 - `pack_reader` module — opens a `.op.pack` zip, validates the
   typed `AotManifest` (`format == "op.pack"` + version match +
   `entries` includes `app.op`), parses `app.op` into `PenDocument`,
-  and decodes both AOT entries with their own `read_bytes` validators.
-  Garbled AOT entries warn to stderr and drop to `None` so the
-  runtime falls back to `ComputeFirstLayout` / `SeedStateGraph`
-  rather than misparse. Defensive guards: per-entry decompressed
-  byte ceilings (manifest 1 MiB, app.op 32 MiB, AOT entries 8 MiB)
-  via `entry.take(limit + 1)` to refuse decompression bombs;
+  and decodes all three AOT entries (`initial_layout`,
+  `default_state`, `expressions`) with their own `read_bytes`
+  validators. Garbled AOT entries warn to stderr and drop to `None`
+  so the runtime falls back to `ComputeFirstLayout` /
+  `SeedStateGraph` / JIT compile rather than misparse. Defensive
+  guards: per-entry decompressed byte ceilings (manifest 1 MiB,
+  app.op 32 MiB, layout/state 8 MiB, expressions 16 MiB) via
+  `entry.take(limit + 1)` to refuse decompression bombs;
   `READER_EXPECTED_BACKEND = "estimate"` requires the manifest's
   `aot.measurement_backend` to match before the layout snapshot
   drives preload (mismatched-shaper rects would diverge from the
@@ -80,23 +86,28 @@ additions targeted at the workspace's `0.0.1` development release.
   routes the `jian player` entry between raw-`.op` and pack-archive
   load paths.
 - `jian player path/to/foo.op.pack` — pack archive load path. Reads
-  the schema + both AOT entries, threads the initial-layout snapshot
-  through `install_data_path_with_aot` (which gates the
+  the schema + all three AOT entries, threads the initial-layout
+  snapshot AND the expressions snapshot through
+  `install_data_path_with_aot_full` (which gates the
   `ComputeFirstLayout` short-circuit on viewport bit-match + total
-  coverage in the bootstrap layer), then overlays the default-state
+  coverage in the bootstrap layer, AND runs `verify_all` on the
+  expressions snapshot before installing — verify failure drops the
+  whole snapshot to JIT compile), then overlays the default-state
   snapshot via `restore_default_state`. The state overlay is gated
-  by `snapshot_extra_keys` against a fresh
-  `dump_default_state()` baseline — recursively type-compatible at
-  every leaf (Null/Bool/Number/String outer match; Array length +
-  element-wise; Object exact key parity + recursive value match) and
-  no extra keys vs the schema-fresh seed. Mismatch → warn + skip
-  the whole restore, keeping the schema-default seed intact.
-- 17 `pack_reader` unit tests covering: extension routing
+  by `snapshot_extra_keys` against a fresh `dump_default_state()`
+  baseline — recursively type-compatible at every leaf
+  (Null/Bool/Number/String outer match; Array length + element-
+  wise; Object exact key parity + recursive value match) and no
+  extra keys vs the schema-fresh seed. Mismatch → warn + skip the
+  whole restore, keeping the schema-default seed intact.
+- 20 `pack_reader` unit tests covering: extension routing
   (case-insensitive, rejects `.op.pack.bak`); zip-no-manifest
   rejection; wrong-format / unsupported-version / missing-app-op
   manifest rejection; AOT round-trip happy path; uninventoried-AOT
-  silent-drop; backend-mismatch layout drop; garbled-AOT-snapshot
-  fall-through; snapshot extras (basic + nested type drift + nested
-  baseline-extra-key + array length mismatch + subset).
+  silent-drop (per-entry, including expressions); backend-mismatch
+  layout drop; garbled-AOT-snapshot fall-through (layout AND
+  expressions); expressions round-trip; snapshot extras (basic +
+  nested type drift + nested baseline-extra-key + array length
+  mismatch + subset).
 - `cargo dist`, Homebrew, winget distribution configs are **not
   yet** shipped.
