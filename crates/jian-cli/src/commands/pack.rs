@@ -43,17 +43,19 @@
 //! state values, layout rects, and the compiled-expression cache
 //! reflect a single coherent schema-default seed at pack time.
 //!
-//! ### Expression-coverage caveat
+//! ### Expression coverage
 //!
-//! `aot/expressions.bin` carries every expression that the probe
-//! runtime evaluated during `build_layout` — bindings and template
-//! strings that fire on first paint. Event-handler expressions
-//! (onTap / onChange action `set` bodies) compile lazily on first
-//! dispatch and won't appear in the snapshot; the runtime falls
-//! through to `parse + compile` for those, paying a tiny one-shot
-//! cost outside the cold-start critical path. A static walker that
-//! eagerly collects every expression source in the document is a
-//! Plan 19 D2 follow-up.
+//! `aot/expressions.bin` carries every Tier-1 expression source the
+//! schema declares: a static `serde_json::Value` walk via
+//! `jian_core::expression::warm_cache_from_document` tries to
+//! compile every string-typed leaf and inserts successful chunks
+//! into the cache. Event-handler action expressions, bindings,
+//! template literals, `NumberOrExpression` / `BoolOrExpression`
+//! union strings — all flow through the same gate. A post-compile
+//! filter drops bare-identifier chunks (single `PushScopeRef(s)` +
+//! `Return` where `s` doesn't start with `$`) so node-id /
+//! enum-value pollution stays out of the snapshot. Parse failures
+//! drop silently per `cache::compile_error_not_cached`.
 
 use crate::PackArgs;
 use anyhow::{anyhow, Context, Result};
@@ -267,13 +269,16 @@ struct AotPayload {
 /// payloads from the same runtime keeps the layout ↔ state ↔
 /// expression-cache trio internally consistent.
 ///
-/// The expression snapshot reflects every binding / template that
-/// the probe runtime evaluated during `build_layout`. Event-handler
-/// expressions don't fire on first paint and are therefore absent
-/// (see the module doc's "Expression-coverage caveat"). The
-/// per-source dedup is automatic — `ExpressionCache::get_or_compile`
-/// stores at most one chunk per source, so the dump is naturally
-/// minimal.
+/// The expression snapshot reflects every expression source the
+/// schema declares: a static `serde_json::Value` walk over the
+/// doc (`expression::warm_cache_from_document`) tries to compile
+/// every string-typed leaf via `cache.get_or_compile`, plus
+/// `Runtime::warm_expression_cache` covers the (today empty)
+/// `DeferredBindingQueue`. Parse failures (text content, color
+/// names, layout enums) drop silently per
+/// `cache::compile_error_not_cached`. The per-source dedup is
+/// automatic — `ExpressionCache::get_or_compile` stores at most
+/// one chunk per source, so the dump is naturally minimal.
 fn compute_aot_payload(
     doc: &PenDocument,
     viewport: (f32, f32),
@@ -292,13 +297,18 @@ fn compute_aot_payload(
         .map_err(|e| anyhow!("Runtime::new_from_document: {e}"))?;
     rt.build_layout(viewport)
         .map_err(|e| anyhow!("build_layout({:?}): {e}", viewport))?;
-    // Plan 19 D2: pre-compile every queued binding source so the
-    // expression cache reflects the doc's full binding surface
-    // (not just whatever build_layout incidentally fired). The
-    // warm-up is a parse + compile per unique source; failures are
-    // skipped silently and surface at runtime exactly as they
-    // would without --aot.
+    // Plan 19 D2: pre-compile every queued binding source AND
+    // every static expression source the doc-walk extractor can
+    // reach. `warm_expression_cache` covers `DeferredBindingQueue`
+    // (today usually empty — loader doesn't populate it yet); the
+    // walker covers bindings / NumberOrExpression / BoolOrExpression
+    // / EventHandler action bodies / template literals statically.
+    // Together they pull every realistic expression source the
+    // schema declares into the cache before `cache.dump()` for the
+    // AOT snapshot. Parse failures drop silently per
+    // `ExpressionCache::compile_error_not_cached`'s contract.
     let _warmed = rt.warm_expression_cache();
+    let _walked = jian_core::expression::warm_cache_from_document(doc, &rt.expr_cache);
     let tree = rt
         .document
         .as_ref()

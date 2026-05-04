@@ -734,37 +734,101 @@ fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
         .expect("state snapshot decodes");
     assert!(state_snap.is_empty(), "fixture has no state to seed");
 
-    // AOT expressions file decodes (Plan 19 D2). The fixture has no
-    // bindings or templates so the snapshot is empty — but the file
-    // MUST exist so a runtime preload reader sees a deterministic
-    // "no precompiled chunks" signal rather than fall back to JIT
-    // for what was actually a binding-free document.
+    // AOT expressions file decodes (Plan 19 D2). Even a no-
+    // binding fixture produces a non-empty snapshot under the
+    // gate-free walker — every parser-valid string-typed schema
+    // leaf (node ids, the `state.type` enum, etc.) lands as a
+    // chunk. The contract is "the file decodes and verifies,"
+    // not "the count matches a hand-coded number."
+    let exprs_bin = fs::read(extracted.join("aot/expressions.bin"))
+        .expect("aot/expressions.bin must be extracted");
+    let exprs_snap = jian_ops_schema::pack::ExpressionsSnapshot::read_bytes(&exprs_bin)
+        .expect("expressions snapshot decodes");
+    exprs_snap
+        .verify_all()
+        .expect("every compiled chunk passes structural verify");
+}
+
+const AOT_OP_BOUND_FIXTURE: &str = r##"{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "aot-bound",
+  "app": { "name": "AotBound", "version": "1", "id": "aot.bound" },
+  "state": { "count": { "type": "int", "default": 0 } },
+  "children": [
+    { "type": "frame", "id": "root", "width": 320, "height": 240, "x": 0, "y": 0,
+      "children": [
+        { "type": "text", "id": "label",
+          "x": 16, "y": 16, "width": 200, "height": 32,
+          "content": "0",
+          "bindings": { "content": "$app.count + 1" } },
+        { "type": "rectangle", "id": "btn",
+          "x": 16, "y": 64, "width": 100, "height": 40,
+          "events": { "onTap": [ { "set": { "$app.count": "$app.count + 1" } } ] } }
+      ]
+    }
+  ]
+}"##;
+
+#[test]
+fn pack_aot_walks_doc_for_binding_and_action_expressions() {
+    // End-to-end: a doc with an `$app.count + 1` binding AND
+    // the same expression as an `onTap.set` value must produce
+    // a non-empty `aot/expressions.bin`. The doc-walk extractor
+    // (`jian_core::expression::warm_cache_from_document`) feeds
+    // both occurrences through the cache; BTreeMap dedup keeps a
+    // single entry.
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "bound.op", AOT_OP_BOUND_FIXTURE);
+    let packed = dir.path().join("bound.op.pack");
+
+    jian_cmd()
+        .args([
+            "pack",
+            "--aot",
+            "--aot-viewport",
+            "320x240",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        // Gate-free walker: ≥1 entry. Exact count varies as the
+        // schema's parser-valid string-typed leaves shift; the
+        // contract is "the binding+action shared source IS in
+        // the snapshot," not "exactly one entry."
+        .stdout(predicates::str::contains("AOT exprs ("));
+
+    let extracted = dir.path().join("extracted");
+    jian_cmd()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
     let exprs_bin = fs::read(extracted.join("aot/expressions.bin"))
         .expect("aot/expressions.bin must be extracted");
     let exprs_snap = jian_ops_schema::pack::ExpressionsSnapshot::read_bytes(&exprs_bin)
         .expect("expressions snapshot decodes");
     assert!(
-        exprs_snap.is_empty(),
-        "fixture has no expressions to compile"
+        !exprs_snap.is_empty(),
+        "binding+action doc must produce non-empty snapshot"
     );
+    assert!(
+        exprs_snap.entries.contains_key("$app.count + 1"),
+        "expected `$app.count + 1` in snapshot, got: {:?}",
+        exprs_snap.entries.keys().collect::<Vec<_>>()
+    );
+    // Structural verifier sanity-check: the compiled chunk must
+    // pass `verify` (the bootstrap install gate) so a runtime
+    // preload would actually accept it.
+    exprs_snap
+        .verify_all()
+        .expect("compiled chunk must pass structural verify");
 }
-
-// Coverage note (Plan 19 D2): the AOT writer dumps whatever the
-// probe runtime's `ExpressionCache` contains after `build_layout`
-// + `warm_expression_cache`. Today most action expressions compile
-// via `jian_core::expression::Expression::compile` directly (not
-// through the cache), and `DeferredBindingQueue` isn't populated by
-// the document loader yet (Plan 19 Task 3 follow-up). The result is
-// that AOT-published packs ship an `aot/expressions.bin` that can
-// be empty even for docs with bindings — the format and the
-// writer/reader/preload wiring all ship, and coverage will fill in
-// once the loader pushes binding sources into the deferred queue
-// (or once action constructors switch to the shared cache).
-//
-// The end-to-end wiring (writer emit + reader decode + bootstrap
-// preload) is exercised by `pack_aot_writes_initial_layout_bin_and_
-// manifest_records_it` above; a non-empty-cache integration test
-// will land alongside the loader change.
 
 #[test]
 fn pack_without_aot_omits_initial_layout_bin() {

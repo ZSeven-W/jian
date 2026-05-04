@@ -119,6 +119,20 @@ additions targeted at the workspace's `0.0.1` development release.
   `chunks_to_snapshot` / `snapshot_to_chunks` helpers so the pack
   writer / reader never imports `jian-core` internals from the
   ops-schema side.
+- `expression::aot::warm_cache_from_document(doc, cache)` typed
+  walker that compiles every expression-typed schema field into
+  the cache: each PenNode's `bindings: BTreeMap<String,
+  Expression>`, `opacity: NumberOrExpression::Expression(s)`,
+  `enabled: BoolOrExpression::Expression(s)`, the 21 `events.on_*`
+  action arrays (with an exhaustive-destructure regression test
+  pinning the count), and the 4 + 4 + 2 lifecycle hooks
+  (app `onLaunch`/`onResume`/`onBackground`/`onTerminate`, page
+  `onEnter`/`onLeave`/`onForeground`/`onBackground`, node
+  `onMount`/`onUnmount`). Action bodies recurse structurally —
+  `is_trivial_bare_id_chunk` filter drops 2-op `PushScopeRef +
+  Return` chunks whose source doesn't start with `$` so action-
+  data fields like `fetch.method: "GET"` don't pollute the
+  snapshot.
 - `Runtime::warm_expression_cache()` pre-compiles every queued
   binding source into the cache so the AOT writer captures the
   doc's binding surface — not just whatever `build_layout`

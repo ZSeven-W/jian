@@ -19,7 +19,7 @@ pub mod scope;
 pub mod token;
 pub mod vm;
 
-pub use aot::{chunks_to_snapshot, snapshot_to_chunks};
+pub use aot::{chunks_to_snapshot, snapshot_to_chunks, warm_cache_from_document};
 pub use bytecode::Chunk;
 pub use cache::ExpressionCache;
 pub use diag::{DiagKind, Diagnostic, Span};
