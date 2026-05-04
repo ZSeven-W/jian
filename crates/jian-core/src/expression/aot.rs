@@ -163,32 +163,11 @@ impl From<&PackedChunk> for Chunk {
 /// Action body walking is structural. A future iteration that wires
 /// the schema-declared `Action(BTreeMap<String, Value>)` body to
 /// per-action typed extractors (mirroring `crate::action::actions::
-/// {state,feedback,navigation,...}::factory_*`) will replace the
-/// `walk_action_value_for_strings` body walker. Today's version is
+/// {state,feedback,navigation,...}::factory_*`) will replace
+/// `walk_action_value_for_strings`. Today's version is
 /// "best-effort coverage of action expression sources" — the
 /// post-compile filter catches the bare-id pollution that survives
 /// the structural walk.
-///
-/// ## Why a `serde_json::Value` walk
-///
-/// The schema's expression sources span:
-/// - `bindings: Bindings` maps (every value is an `Expression(String)`),
-/// - `NumberOrExpression` / `BoolOrExpression` typed unions on
-///   every node base,
-/// - `EventHandlers` action bodies (`Action(BTreeMap<String,
-///   Value>)` — values are arbitrary JSON, set / if / for_each /
-///   call / fetch / toast / confirm / push / etc embed expression
-///   strings in named fields that vary per action type),
-/// - text-content templates,
-/// - app / page / route lifecycle hooks.
-///
-/// A typed walker would have to mirror every action's payload
-/// shape — fragile against new actions, and the loader doesn't
-/// have a single binding-discovery path the walker could hook
-/// into. Walking the whole serialised doc and compile-testing
-/// every string is robust, dedupes via the cache (BTreeMap-keyed
-/// by source), and keeps maintenance to a single heuristic in
-/// [`looks_like_expression`].
 pub fn warm_cache_from_document(doc: &PenDocument, cache: &ExpressionCache) -> usize {
     let mut compiled = 0usize;
     // Codex round 4 CONCERN: app/page/node lifecycle hooks ARE
