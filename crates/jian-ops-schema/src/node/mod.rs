@@ -54,6 +54,39 @@ pub enum PenNode {
     Ref(RefNode),
 }
 
+impl PenNode {
+    /// Borrow the optional `gestures` and `semantics` blocks from any
+    /// variant. Used by the focus-chain extractor in `jian-core` to
+    /// avoid round-tripping the entire schema through
+    /// `serde_json::to_value` for each lookup — which would
+    /// re-serialise every container's recursive `children` subtree
+    /// O(n) times during a chain rebuild on a nested document. The
+    /// `rawPointer` opt-in still goes through `serde_json::to_value`
+    /// today (see `gesture::raw::find_raw_root` in `jian-core`);
+    /// migrating it onto this accessor is a follow-up.
+    pub fn gestures_and_semantics(
+        &self,
+    ) -> (
+        Option<&crate::gestures::GestureOverrides>,
+        Option<&crate::semantics::SemanticsMeta>,
+    ) {
+        match self {
+            PenNode::Frame(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Group(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Rectangle(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Ellipse(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Line(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Polygon(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Path(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Text(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::TextInput(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Image(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::IconFont(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Ref(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

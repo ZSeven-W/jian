@@ -29,6 +29,16 @@ pub struct GestureOverrides {
     /// Override long-press duration in ms (default 500).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub long_press_duration: Option<u32>,
+    /// Author-explicit Tab-traversal opt-in.
+    ///
+    /// `Some(true)` — node enters the focus chain regardless of its
+    /// semantic role.
+    /// `Some(false)` — node is excluded even if its `semantics.role`
+    /// would otherwise auto-include it (e.g. a decorative `Input`).
+    /// `None` — falls back to the role heuristic (`Button` / `Link`
+    /// / `Input` are auto-included; everything else is opt-in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focusable: Option<bool>,
 }
 
 #[cfg(test)]
@@ -48,5 +58,19 @@ mod tests {
         assert!(matches!(g.scroll_behavior, Some(ScrollBehavior::Contain)));
         assert_eq!(g.drag_threshold, Some(16.0));
         assert_eq!(g.long_press_duration, Some(300));
+    }
+
+    #[test]
+    fn focusable_round_trips() {
+        let yes: GestureOverrides = serde_json::from_str(r#"{"focusable":true}"#).unwrap();
+        assert_eq!(yes.focusable, Some(true));
+        let no: GestureOverrides = serde_json::from_str(r#"{"focusable":false}"#).unwrap();
+        assert_eq!(no.focusable, Some(false));
+        let unset: GestureOverrides = serde_json::from_str("{}").unwrap();
+        assert_eq!(unset.focusable, None);
+        // Round-trip preserves the explicit `false` (so an author can
+        // opt a default-focusable role *out*).
+        let ser = serde_json::to_string(&no).unwrap();
+        assert!(ser.contains("\"focusable\":false"));
     }
 }

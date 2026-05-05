@@ -90,6 +90,35 @@ impl PointerRouter {
         id
     }
 
+    /// Drop every per-pointer arena and cross-arena recognizer state.
+    ///
+    /// Hot-reload (`Runtime::replace_document`) swaps the document's
+    /// SlotMap underneath. SlotMap keys are *not* globally unique
+    /// across SlotMaps — two trees can produce keys that compare
+    /// equal — so any `NodeKey` cached in `raw_roots`,
+    /// `last_hover_target`, `last_tap`, or `multi_instances` from the
+    /// pre-reload tree could silently dispatch the next hover or
+    /// pointer event to an unrelated node in the new tree (notably,
+    /// `handle_hover` would emit `HoverLeave` against a stale-but-
+    /// equal key that now points elsewhere). Resetting unconditionally
+    /// on doc swap is the safe default; in-flight gestures are torn
+    /// down, which matches the user-visible behaviour that a `.op`
+    /// edit mid-gesture cancels what was tracking the old tree.
+    ///
+    /// `next_id` deliberately keeps counting — recognizer ids are
+    /// monotonic and we don't want a new doc's first allocation to
+    /// alias any id that any external state may still be holding from
+    /// before the swap.
+    pub fn reset(&mut self) {
+        self.arenas.clear();
+        self.raw_roots.clear();
+        self.last_hover_target = None;
+        self.last_tap = None;
+        self.multi.clear();
+        self.shared.clear();
+        self.multi_instances.clear();
+    }
+
     pub fn dispatch(
         &mut self,
         event: PointerEvent,

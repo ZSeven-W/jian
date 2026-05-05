@@ -80,6 +80,12 @@ pub enum SemanticEvent {
         phase: super::pointer::PointerPhase,
         position: Point,
     },
+    /// Tab-tree focus moved onto `node`. Fires after any `FocusLost`
+    /// for the previously-focused node so authored handlers can rely
+    /// on the documented blur-then-focus ordering.
+    FocusGained { node: NodeKey },
+    /// Tab-tree focus moved off `node`.
+    FocusLost { node: NodeKey },
 }
 
 impl SemanticEvent {
@@ -102,7 +108,9 @@ impl SemanticEvent {
             | Self::HoverEnter { node, .. }
             | Self::HoverLeave { node, .. }
             | Self::KeyDown { node, .. }
-            | Self::RawPointer { node, .. } => *node,
+            | Self::RawPointer { node, .. }
+            | Self::FocusGained { node }
+            | Self::FocusLost { node } => *node,
         }
     }
 
@@ -127,6 +135,8 @@ impl SemanticEvent {
             Self::HoverLeave { .. } => "onHoverLeave",
             Self::KeyDown { .. } => "onKey",
             Self::RawPointer { .. } => "onRawPointer",
+            Self::FocusGained { .. } => "onFocus",
+            Self::FocusLost { .. } => "onBlur",
         }
     }
 }

@@ -3887,6 +3887,13 @@
           ],
           "format": "uint32",
           "minimum": 0.0
+        },
+        "focusable": {
+          "description": "Author-explicit Tab-traversal opt-in.\n\n`Some(true)` — node enters the focus chain regardless of its semantic role. `Some(false)` — node is excluded even if its `semantics.role` would otherwise auto-include it (e.g. a decorative `Input`). `None` — falls back to the role heuristic (`Button` / `Link` / `Input` are auto-included; everything else is opt-in).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },

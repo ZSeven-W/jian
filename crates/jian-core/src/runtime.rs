@@ -28,7 +28,9 @@ use crate::effect::EffectRegistry;
 use crate::error::CoreResult;
 use crate::expression::ExpressionCache;
 use crate::geometry::size;
-use crate::gesture::{dispatch_event, PointerEvent, PointerRouter, SemanticEvent};
+use crate::gesture::{
+    collect_focus_chain, dispatch_event, FocusManager, PointerEvent, PointerRouter, SemanticEvent,
+};
 use crate::layout::LayoutEngine;
 use crate::scene::SceneGraph;
 use crate::signal::scheduler::Scheduler;
@@ -57,6 +59,10 @@ pub struct Runtime {
 
     // --- Gesture + Action wiring (Plan 5 T15) ---
     pub gestures: PointerRouter,
+    /// Tab-tree focus state. Rebuilt on every document swap from the
+    /// runtime tree. See [`Runtime::dispatch_keyboard`] /
+    /// [`Runtime::focus_next`] / [`Runtime::focus_request`].
+    pub focus: FocusManager,
     pub actions: SharedRegistry,
     pub expr_cache: Rc<ExpressionCache>,
     /// Bindings whose evaluation is deferred past first-paint. Schema
@@ -100,6 +106,7 @@ impl Runtime {
             scene: SceneGraph::new(),
 
             gestures: PointerRouter::new(),
+            focus: FocusManager::new(),
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
             deferred_bindings: DeferredBindingQueue::new(),
@@ -153,6 +160,9 @@ impl Runtime {
 
         let state = Rc::new(StateGraph::new(scheduler.clone()));
         let doc = loader::build(schema, &state)?;
+        let focus_chain = collect_focus_chain(&doc);
+        let mut focus = FocusManager::new();
+        focus.set_chain(focus_chain);
 
         Ok(Self {
             state,
@@ -165,6 +175,7 @@ impl Runtime {
             scene: SceneGraph::new(),
 
             gestures: PointerRouter::new(),
+            focus,
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
             deferred_bindings: DeferredBindingQueue::new(),
@@ -224,7 +235,31 @@ impl Runtime {
         self.capabilities = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit)));
 
         let doc = loader::build_with(schema, &self.state, loader::SeedMode::PreserveExisting)?;
+        let focus_chain = collect_focus_chain(&doc);
         self.document = Some(doc);
+        // Hot-reload swaps the SlotMap underneath. SlotMap keys are
+        // *not* unique across different SlotMaps — both the old and
+        // new tree start their version counter at 1, so the first
+        // insert into each map yields equal keys. Any cached
+        // `NodeKey` from the pre-swap tree could silently dispatch
+        // the next event to an unrelated new node, so blow away
+        // every gesture-pipeline cache that holds one:
+        //
+        // - `focus.current` — cleared first (`set_chain` alone can't
+        //   tell stale-but-equal apart from "really still in the
+        //   chain"). Authors who want focus preserved across reload
+        //   re-issue `focus_request` post-swap from
+        //   `lifecycle.on_load`.
+        // - `gestures` (PointerRouter): `raw_roots`,
+        //   `last_hover_target`, `last_tap`, `multi_instances` —
+        //   reset wholesale; in-flight pointer / hover sequences
+        //   are torn down on hot-reload. Without this, the next
+        //   hover after a `.op` edit could fire `HoverLeave`
+        //   against a stale-but-equal key that now points to a
+        //   different node in the new tree.
+        self.focus.clear();
+        self.focus.set_chain(focus_chain);
+        self.gestures.reset();
         // Plan 19 D1 codex round 2 MEDIUM: a stale preload from a
         // prior `.op.pack` load survives the doc swap and `node_rect`
         // would serve rects keyed against the OLD slot keys whenever
@@ -408,6 +443,112 @@ impl Runtime {
         };
         self.dispatch_semantic(&event);
         vec![event]
+    }
+
+    /// High-level keyboard entry point that's focus-aware.
+    ///
+    /// `Tab` (and `Shift+Tab`) drive [`Self::focus_next`] /
+    /// [`Self::focus_previous`] — the chain advances and `FocusLost`
+    /// (for the previously-focused node, if any) and `FocusGained`
+    /// (for the new node) are fired in that order. The Tab key
+    /// itself does **not** propagate to the focused node — Tab is a
+    /// focus-traversal key, not an authored input event.
+    ///
+    /// Every other key is forwarded to the currently-focused node
+    /// via [`Self::dispatch_key`]. When nothing is focused, the
+    /// keystroke is dropped (no host on the stack today fires
+    /// untargeted KeyDowns; future scope might add a window-level
+    /// handler — at which point this branch is the right one to
+    /// extend).
+    ///
+    /// Returns the emitted semantic events for host inspection /
+    /// tests.
+    pub fn dispatch_keyboard(
+        &mut self,
+        key: impl Into<String>,
+        modifiers: crate::gesture::pointer::Modifiers,
+    ) -> Vec<SemanticEvent> {
+        if self.document.is_none() {
+            return Vec::new();
+        }
+        let key = key.into();
+        if key == "Tab" {
+            if modifiers.contains(crate::gesture::pointer::Modifiers::SHIFT) {
+                return self.focus_previous();
+            }
+            return self.focus_next();
+        }
+        let Some(target) = self.focus.current() else {
+            return Vec::new();
+        };
+        self.dispatch_key(target, key, modifiers)
+    }
+
+    /// Move focus forward one step (`Tab`) and emit the corresponding
+    /// `FocusLost` / `FocusGained` events.
+    pub fn focus_next(&mut self) -> Vec<SemanticEvent> {
+        let change = self.focus.next();
+        self.emit_focus_change(change)
+    }
+
+    /// Move focus backward one step (`Shift+Tab`).
+    pub fn focus_previous(&mut self) -> Vec<SemanticEvent> {
+        let change = self.focus.previous();
+        self.emit_focus_change(change)
+    }
+
+    /// Programmatically focus an explicit node. Hosts call this from
+    /// click handlers (focus-on-click) or from `jian-action-surface`
+    /// when an AI client requests a focus change.
+    pub fn focus_request(
+        &mut self,
+        node: crate::document::NodeKey,
+    ) -> Vec<SemanticEvent> {
+        let change = self.focus.request(node);
+        self.emit_focus_change(change)
+    }
+
+    /// Drop focus entirely — typically wired to clicking outside any
+    /// focusable node, or to the window losing OS focus.
+    pub fn focus_clear(&mut self) -> Vec<SemanticEvent> {
+        let change = self.focus.clear();
+        self.emit_focus_change(change)
+    }
+
+    fn emit_focus_change(
+        &mut self,
+        change: crate::gesture::FocusChange,
+    ) -> Vec<SemanticEvent> {
+        if change.is_noop() {
+            return Vec::new();
+        }
+        let mut emitted = Vec::with_capacity(2);
+        if let Some(prev) = change.previous {
+            let ev = SemanticEvent::FocusLost { node: prev };
+            self.dispatch_semantic(&ev);
+            emitted.push(ev);
+        }
+        // Re-entrancy guard. The `FocusLost` dispatch above runs the
+        // node's `events.onBlur` ActionList synchronously, which can
+        // call back into `Runtime::focus_request` / `focus_clear` /
+        // even `dispatch_keyboard("Tab", ...)`. Any such nested call
+        // already moved `self.focus.current` and emitted its own
+        // `FocusGained` for the new target — surfacing
+        // `FocusGained { change.current }` unconditionally would
+        // raise the *original* target's `onFocus` after focus has
+        // moved on. So we re-read `focus.current()` here and gate:
+        // when the nested re-entry took over, the outer event is
+        // suppressed; when nothing nested moved focus, the
+        // unchanged `current` matches `change.current` and we emit
+        // as planned.
+        if let Some(next) = change.current {
+            if self.focus.current() == Some(next) {
+                let ev = SemanticEvent::FocusGained { node: next };
+                self.dispatch_semantic(&ev);
+                emitted.push(ev);
+            }
+        }
+        emitted
     }
 
     /// Drain pending WebSocket messages and fire each session's
@@ -1065,5 +1206,393 @@ mod tests {
         assert_eq!(Rc::as_ptr(&rt.state), original_state);
         // Tree contents reflect the new schema.
         assert_eq!(rt.spatial.len(), 2);
+    }
+
+    /// Tab walks the focus chain in DFS pre-order and emits
+    /// `FocusLost` (for the previous node) followed by `FocusGained`
+    /// (for the new node) — the documented blur-then-focus order.
+    #[test]
+    fn dispatch_keyboard_tab_walks_focus_chain() {
+        use crate::gesture::pointer::Modifiers;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "children":[
+                { "type":"frame","id":"root","width":400,"height":300,"children":[
+                  { "type":"rectangle","id":"a","width":50,"height":20,
+                    "semantics":{"role":"button","label":"A"} },
+                  { "type":"rectangle","id":"b","width":50,"height":20,
+                    "gestures":{"focusable":true} },
+                  { "type":"rectangle","id":"c","width":50,"height":20,
+                    "semantics":{"role":"input"} }
+                ]}
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+
+        let chain = rt.focus.chain().to_vec();
+        assert_eq!(chain.len(), 3);
+        // Snapshot the id-by-key lookup once so the closure doesn't
+        // hold a borrow on `rt` across `dispatch_keyboard` calls.
+        let id_of = |rt: &Runtime, k: crate::document::NodeKey| -> String {
+            crate::document::tree::node_schema_id(
+                &rt.document.as_ref().unwrap().tree.nodes[k].schema,
+            )
+            .to_owned()
+        };
+        let chain_ids: Vec<String> = chain.iter().map(|k| id_of(&rt, *k)).collect();
+        assert_eq!(chain_ids, vec!["a", "b", "c"]);
+
+        // First Tab — no previous focus → only FocusGained on "a".
+        let evs = rt.dispatch_keyboard("Tab", Modifiers::empty());
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], SemanticEvent::FocusGained { .. }));
+        assert_eq!(id_of(&rt, evs[0].node()), "a");
+
+        // Second Tab — blur "a", focus "b".
+        let evs = rt.dispatch_keyboard("Tab", Modifiers::empty());
+        assert_eq!(evs.len(), 2);
+        assert!(matches!(evs[0], SemanticEvent::FocusLost { .. }));
+        assert!(matches!(evs[1], SemanticEvent::FocusGained { .. }));
+        assert_eq!(id_of(&rt, evs[0].node()), "a");
+        assert_eq!(id_of(&rt, evs[1].node()), "b");
+
+        // Shift+Tab — blur "b", focus "a" (step backward).
+        let evs = rt.dispatch_keyboard("Tab", Modifiers::SHIFT);
+        assert_eq!(evs.len(), 2);
+        assert_eq!(id_of(&rt, evs[0].node()), "b");
+        assert_eq!(id_of(&rt, evs[1].node()), "a");
+    }
+
+    /// Non-Tab keys forward to the currently-focused node — Tab is the
+    /// only key consumed by the focus traversal.
+    #[test]
+    fn dispatch_keyboard_non_tab_routes_to_focused_node() {
+        use crate::gesture::pointer::Modifiers;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "state":{"hits":{"type":"int","default":0}},
+              "children":[
+                { "type":"rectangle","id":"input",
+                  "width":50,"height":20,
+                  "semantics":{"role":"input"},
+                  "events":{
+                    "onKey":[
+                      { "set": { "$app.hits": "$state.hits + 1" } }
+                    ]
+                  }
+                }
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+
+        // Tab in to focus the input.
+        rt.dispatch_keyboard("Tab", Modifiers::empty());
+        assert!(rt.focus.current().is_some());
+
+        let evs = rt.dispatch_keyboard("Enter", Modifiers::empty());
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], SemanticEvent::KeyDown { .. }));
+
+        let hits = rt
+            .state
+            .app_get("hits")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
+        assert_eq!(hits, 1);
+    }
+
+    /// onFocus / onBlur ActionLists fire when the chain advances —
+    /// closes the loop end-to-end (gesture event → dispatcher →
+    /// expression VM → state graph write).
+    #[test]
+    fn focus_handlers_fire_on_chain_step() {
+        use crate::gesture::pointer::Modifiers;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "state":{
+                "gained":{"type":"int","default":0},
+                "lost":{"type":"int","default":0}
+              },
+              "children":[
+                { "type":"rectangle","id":"a","width":50,"height":20,
+                  "semantics":{"role":"button","label":"A"},
+                  "events":{
+                    "onFocus":[ { "set": { "$app.gained": "$state.gained + 1" } } ],
+                    "onBlur":[ { "set": { "$app.lost": "$state.lost + 1" } } ]
+                  } },
+                { "type":"rectangle","id":"b","width":50,"height":20,
+                  "semantics":{"role":"button","label":"B"} }
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+
+        // Tab in → gained == 1, lost == 0.
+        rt.dispatch_keyboard("Tab", Modifiers::empty());
+        assert_eq!(
+            rt.state.app_get("gained").and_then(|v| v.as_i64()).unwrap(),
+            1
+        );
+        assert_eq!(
+            rt.state.app_get("lost").and_then(|v| v.as_i64()).unwrap(),
+            0
+        );
+
+        // Tab to "b" → "a" loses focus, "b" gains. Only "a" has
+        // handlers, so gained stays at 1 and lost ticks to 1.
+        rt.dispatch_keyboard("Tab", Modifiers::empty());
+        assert_eq!(
+            rt.state.app_get("gained").and_then(|v| v.as_i64()).unwrap(),
+            1
+        );
+        assert_eq!(
+            rt.state.app_get("lost").and_then(|v| v.as_i64()).unwrap(),
+            1
+        );
+    }
+
+    /// Hot-reload swaps the runtime tree underneath; the focus chain
+    /// must rebuild against the new keys and any prior focus must
+    /// drop (the old `NodeKey` no longer maps to a real node).
+    #[test]
+    fn replace_document_rebuilds_focus_chain() {
+        use crate::gesture::pointer::Modifiers;
+        let mut rt = Runtime::new();
+        rt.load_str(
+            r#"{
+          "version":"0.8.0",
+          "children":[
+            { "type":"rectangle","id":"old-btn","width":50,"height":20,
+              "semantics":{"role":"button"} }
+          ]
+        }"#,
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+        rt.dispatch_keyboard("Tab", Modifiers::empty());
+        assert!(rt.focus.current().is_some());
+
+        rt.replace_document(
+            serde_json::from_str(
+                r#"{
+              "version":"0.8.0",
+              "children":[
+                { "type":"rectangle","id":"new-input","width":50,"height":20,
+                  "semantics":{"role":"input"} },
+                { "type":"rectangle","id":"new-link","width":50,"height":20,
+                  "semantics":{"role":"link"} }
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // No carry-over focus.
+        assert!(rt.focus.current().is_none());
+        let chain_len = rt.focus.chain().len();
+        assert_eq!(chain_len, 2);
+
+        rt.dispatch_keyboard("Tab", Modifiers::empty());
+        // First Tab post-reload focuses the new chain's first node.
+        let cur = rt.focus.current().unwrap();
+        let id = crate::document::tree::node_schema_id(
+            &rt.document.as_ref().unwrap().tree.nodes[cur].schema,
+        );
+        assert_eq!(id, "new-input");
+    }
+
+    /// Hot-reload must reset PointerRouter caches alongside focus state.
+    /// Pre-fix, the router kept `last_hover_target` from the old tree;
+    /// after a doc swap, the next hover with the same SlotMap-equal
+    /// (but semantically different) key would emit `HoverLeave`
+    /// against the wrong node. We assert the smaller-but-sufficient
+    /// invariant: `replace_document` zeroes the router's
+    /// `last_hover_target` so the next off-target hover doesn't fire
+    /// a stale `HoverLeave`.
+    #[test]
+    fn replace_document_resets_pointer_router_state() {
+        use crate::geometry::point;
+        use crate::gesture::pointer::{PointerEvent, PointerPhase};
+        let mut rt = Runtime::new();
+        rt.load_str(
+            r#"{
+          "version":"0.8.0",
+          "children":[
+            { "type":"rectangle","id":"hover-target","width":100,"height":50 }
+          ]
+        }"#,
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+        rt.rebuild_spatial();
+        // Hover into the rectangle — stamps the router's
+        // `last_hover_target` regardless of whether the node carries
+        // an `onHover*` handler (handle_hover unconditionally
+        // updates `last_hover_target` to the topmost hit).
+        let _enter = rt.dispatch_pointer(PointerEvent::simple(
+            0,
+            PointerPhase::Hover,
+            point(20.0, 20.0),
+        ));
+        // Sanity: a second hover off the rectangle would normally
+        // emit `HoverLeave` for the stamped target — that's the
+        // path that goes wrong on hot-reload without the reset.
+        let leave = rt.dispatch_pointer(PointerEvent::simple(
+            0,
+            PointerPhase::Hover,
+            point(500.0, 500.0),
+        ));
+        assert!(
+            leave.iter().any(|e| matches!(e, SemanticEvent::HoverLeave { .. })),
+            "pre-reload sanity: off-target hover should emit HoverLeave, got {:?}",
+            leave
+        );
+
+        // Re-stamp last_hover_target by hovering over the rect again.
+        rt.dispatch_pointer(PointerEvent::simple(
+            0,
+            PointerPhase::Hover,
+            point(20.0, 20.0),
+        ));
+
+        // Hot-reload to a different document.
+        rt.replace_document(
+            serde_json::from_str(
+                r#"{
+              "version":"0.8.0",
+              "children":[
+                { "type":"rectangle","id":"plain","width":100,"height":50 }
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+        rt.rebuild_spatial();
+        // Hover off-target. Pre-fix, the stale `last_hover_target`
+        // from the old tree would still cause a `HoverLeave` to fire
+        // (against a SlotMap key that may or may not alias a real
+        // node in the new tree). Post-fix the router is reset, so
+        // the off-target hover emits nothing.
+        let off = rt.dispatch_pointer(PointerEvent::simple(
+            0,
+            PointerPhase::Hover,
+            point(500.0, 500.0),
+        ));
+        assert!(
+            !off.iter().any(|e| matches!(e, SemanticEvent::HoverLeave { .. })),
+            "router state from prior tree leaked through reload, got {:?}",
+            off
+        );
+    }
+
+    /// Re-entrancy guard. An `onBlur` handler that itself calls
+    /// `focus_request` (or any focus-mutating action) must take the
+    /// transition over — the outer call's `FocusGained` for the
+    /// originally-targeted node would otherwise fire its `onFocus`
+    /// even though focus has already moved on.
+    ///
+    /// Default action builtins don't yet expose focus-mutating verbs
+    /// — the only focus mutator is `Runtime`'s own `focus_*` API,
+    /// which is unreachable from inside `dispatch_semantic` without
+    /// a custom `LogicProvider`. So the test uses the
+    /// equivalent-but-direct shape: synthesise a `FocusChange`,
+    /// pre-mutate `self.focus.current` to simulate exactly what a
+    /// nested re-entry would have done, and call
+    /// [`Self::emit_focus_change`] directly. The mutation is the
+    /// only state difference between "guarded" and "unguarded"
+    /// behaviour, so this covers the entire invariant the guard
+    /// exists to enforce. (When focus actions become first-class
+    /// builtins, an end-to-end test through `dispatch_keyboard`
+    /// becomes possible — TODO follow-up.)
+    #[test]
+    fn focus_change_re_entrant_blur_redirects_skips_stale_focus_gained() {
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{
+              "version":"0.8.0",
+              "children":[
+                { "type":"rectangle","id":"a","width":50,"height":20,
+                  "semantics":{"role":"button"} },
+                { "type":"rectangle","id":"b","width":50,"height":20,
+                  "semantics":{"role":"button"} }
+              ]
+            }"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.build_layout((400.0, 300.0)).unwrap();
+        let chain = rt.focus.chain().to_vec();
+        let key_a = chain[0];
+        let key_b = chain[1];
+
+        // Pin focus on A so the synthetic change below has a real
+        // previous to fire FocusLost against.
+        let evs = rt.focus_request(key_a);
+        assert_eq!(evs.len(), 1);
+        assert!(matches!(evs[0], SemanticEvent::FocusGained { .. }));
+        assert_eq!(evs[0].node(), key_a);
+
+        // Synthesise the racy state. `change` says "moved A → B",
+        // but before we call emit_focus_change we pre-mutate the
+        // manager's `current` to A (the `request` returns a
+        // FocusChange we deliberately ignore — this is just state
+        // installation, not a real transition). At emit time the
+        // outer call sees:
+        //   - change.previous = Some(A) → fires FocusLost{A}
+        //   - change.current  = Some(B) but focus.current() = A
+        //     → guard suppresses FocusGained{B}.
+        // Without the guard, FocusGained{B} would fire even though
+        // focus is on A — the exact stale-event surface that a
+        // re-entrant onBlur would hit.
+        let change = crate::gesture::FocusChange {
+            previous: Some(key_a),
+            current: Some(key_b),
+        };
+        let _ = rt.focus.request(key_a);
+        let evs = rt.emit_focus_change(change);
+        assert_eq!(
+            evs.len(),
+            1,
+            "expected only FocusLost when focus.current != change.current, got {:?}",
+            evs
+        );
+        assert!(matches!(evs[0], SemanticEvent::FocusLost { .. }));
+        assert_eq!(evs[0].node(), key_a);
+        // Focus state untouched by the suppressed FocusGained.
+        assert_eq!(rt.focus.current(), Some(key_a));
+
+        // Positive-control: when focus.current() *does* match
+        // change.current, the FocusGained fires as normal.
+        let _ = rt.focus.request(key_b);
+        let change_match = crate::gesture::FocusChange {
+            previous: Some(key_a),
+            current: Some(key_b),
+        };
+        let evs = rt.emit_focus_change(change_match);
+        assert_eq!(evs.len(), 2);
+        assert!(matches!(evs[0], SemanticEvent::FocusLost { .. }));
+        assert!(matches!(evs[1], SemanticEvent::FocusGained { .. }));
+        assert_eq!(evs[0].node(), key_a);
+        assert_eq!(evs[1].node(), key_b);
     }
 }
