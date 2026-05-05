@@ -83,9 +83,13 @@ pub enum SemanticEvent {
     /// Tab-tree focus moved onto `node`. Fires after any `FocusLost`
     /// for the previously-focused node so authored handlers can rely
     /// on the documented blur-then-focus ordering.
-    FocusGained { node: NodeKey },
+    FocusGained {
+        node: NodeKey,
+    },
     /// Tab-tree focus moved off `node`.
-    FocusLost { node: NodeKey },
+    FocusLost {
+        node: NodeKey,
+    },
 }
 
 impl SemanticEvent {

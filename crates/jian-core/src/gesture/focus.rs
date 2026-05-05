@@ -38,8 +38,9 @@ impl FocusChange {
 #[derive(Debug, Default, Clone)]
 pub struct FocusManager {
     /// Ordered focus ring (DFS pre-order over the document tree,
-    /// filtered to focusable nodes). Hosts rebuild this on every
-    /// document load via [`Runtime::rebuild_focus_chain`].
+    /// filtered to focusable nodes). The runtime rebuilds this on
+    /// every document load via [`collect_focus_chain`] and
+    /// [`Self::set_chain`].
     chain: Vec<NodeKey>,
     current: Option<NodeKey>,
 }
@@ -177,8 +178,9 @@ impl FocusManager {
 /// role.
 ///
 /// Reads the typed `gestures` / `semantics` blocks via
-/// [`PenNode::gestures_and_semantics`] — historically this routed
-/// through `serde_json::to_value(schema)` which re-serialised every
+/// `PenNode::gestures_and_semantics` (defined in
+/// `jian_ops_schema::node`) — historically this routed through
+/// `serde_json::to_value(schema)` which re-serialised every
 /// container's recursive `children` subtree on each lookup, so a
 /// 1000-node document with nested frames was effectively quadratic
 /// during a chain rebuild.
@@ -369,9 +371,7 @@ mod tests {
         // `plain` and `opt-out` skipped.
         let ids: Vec<&str> = chain
             .iter()
-            .map(|k| {
-                crate::document::tree::node_schema_id(&rt_doc.tree.nodes[*k].schema)
-            })
+            .map(|k| crate::document::tree::node_schema_id(&rt_doc.tree.nodes[*k].schema))
             .collect();
         assert_eq!(ids, vec!["btn", "explicit", "inner-link"]);
     }

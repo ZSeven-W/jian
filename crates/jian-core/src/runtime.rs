@@ -500,10 +500,7 @@ impl Runtime {
     /// Programmatically focus an explicit node. Hosts call this from
     /// click handlers (focus-on-click) or from `jian-action-surface`
     /// when an AI client requests a focus change.
-    pub fn focus_request(
-        &mut self,
-        node: crate::document::NodeKey,
-    ) -> Vec<SemanticEvent> {
+    pub fn focus_request(&mut self, node: crate::document::NodeKey) -> Vec<SemanticEvent> {
         let change = self.focus.request(node);
         self.emit_focus_change(change)
     }
@@ -515,10 +512,7 @@ impl Runtime {
         self.emit_focus_change(change)
     }
 
-    fn emit_focus_change(
-        &mut self,
-        change: crate::gesture::FocusChange,
-    ) -> Vec<SemanticEvent> {
+    fn emit_focus_change(&mut self, change: crate::gesture::FocusChange) -> Vec<SemanticEvent> {
         if change.is_noop() {
             return Vec::new();
         }
@@ -1460,7 +1454,9 @@ mod tests {
             point(500.0, 500.0),
         ));
         assert!(
-            leave.iter().any(|e| matches!(e, SemanticEvent::HoverLeave { .. })),
+            leave
+                .iter()
+                .any(|e| matches!(e, SemanticEvent::HoverLeave { .. })),
             "pre-reload sanity: off-target hover should emit HoverLeave, got {:?}",
             leave
         );
@@ -1498,7 +1494,8 @@ mod tests {
             point(500.0, 500.0),
         ));
         assert!(
-            !off.iter().any(|e| matches!(e, SemanticEvent::HoverLeave { .. })),
+            !off.iter()
+                .any(|e| matches!(e, SemanticEvent::HoverLeave { .. })),
             "router state from prior tree leaked through reload, got {:?}",
             off
         );
