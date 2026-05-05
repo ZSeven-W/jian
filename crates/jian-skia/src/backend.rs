@@ -182,6 +182,15 @@ impl SkiaBackend {
     pub fn draw_on(&mut self, surface: &mut SkiaSurface, op: &DrawOp) {
         draw_canvas(surface.canvas(), op, &mut self.image_cache);
     }
+
+    /// GPU-canvas adapter — same as `draw_on` but accepts a borrowed
+    /// `&skia_safe::Canvas` directly. Used by hosts that own a GPU
+    /// `DirectContext` + `Surface` outside of `SkiaBackend` (e.g.
+    /// OpenPencil's `SharedSkiaContext`) and only need the per-`DrawOp`
+    /// canvas dispatch from this crate.
+    pub fn draw_on_canvas(&mut self, canvas: &skia_safe::Canvas, op: &DrawOp) {
+        draw_canvas(canvas, op, &mut self.image_cache);
+    }
 }
 
 fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp, image_cache: &mut ImageCache) {
@@ -421,7 +430,7 @@ fn draw_icon(canvas: &skia_safe::Canvas, r: Rect, name: &str, color: jian_core::
         canvas.draw_rect(to_sk_rect(r), &p);
         return;
     };
-    let Some(mut path) = parse_path::from_svg(d) else {
+    let Some(path) = parse_path::from_svg(d) else {
         return;
     };
     // Lucide icons are authored in a 24×24 viewBox. Scale + translate
@@ -431,7 +440,9 @@ fn draw_icon(canvas: &skia_safe::Canvas, r: Rect, name: &str, color: jian_core::
     let mut m = Matrix::new_identity();
     m.pre_translate((r.min_x(), r.min_y()));
     m.pre_scale((scale_x, scale_y), None);
-    path.transform(&m);
+    // skia-safe 0.97 replaced the mutating `Path::transform(&Matrix)` with
+    // `Path::with_transform(&Matrix) -> Path` returning a fresh path.
+    let path = path.with_transform(&m);
 
     let mut sp = SkPaint::new(to_sk_color(color), None);
     sp.set_anti_alias(true);
@@ -473,16 +484,18 @@ fn draw_linear_gradient_rect(
     g: &jian_core::render::LinearGradient,
     stroke: Option<&jian_core::render::StrokeOp>,
 ) {
-    use skia_safe::{gradient_shader, Shader, TileMode};
+    use skia_safe::{gradient, Shader, TileMode};
     let (p0, p1) = gradient_endpoints(rect, g.angle_deg);
     let colors: Vec<Color4f> = g.stops.iter().map(|s| to_sk_color(s.color)).collect();
     let offsets: Vec<f32> = g.stops.iter().map(|s| s.offset.clamp(0.0, 1.0)).collect();
-    let shader = gradient_shader::linear(
+    // skia-safe 0.97 replaced `gradient_shader::linear` with `gradient::shaders::linear_gradient`
+    // taking a `gradient::Gradient { colors, interpolation }` description.
+    let gradient_colors =
+        gradient::Colors::new(&colors, Some(offsets.as_slice()), TileMode::Clamp, None);
+    let gradient_obj = gradient::Gradient::new(gradient_colors, gradient::Interpolation::default());
+    let shader: Option<Shader> = gradient::shaders::linear_gradient(
         (SkPoint::new(p0.0, p0.1), SkPoint::new(p1.0, p1.1)),
-        skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(&colors, None),
-        offsets.as_slice(),
-        TileMode::Clamp,
-        None,
+        &gradient_obj,
         None,
     );
     let mut paint = SkPaint::default();
@@ -566,7 +579,7 @@ fn draw_radial_gradient_rect(
     g: &jian_core::render::RadialGradient,
     stroke: Option<&jian_core::render::StrokeOp>,
 ) {
-    use skia_safe::{gradient_shader, Shader, TileMode};
+    use skia_safe::{gradient, Shader, TileMode};
 
     // cx/cy ∈ [0,1] within the rect; radius ∈ [0,1] of max(w, h).
     let cx = rect.min_x() + g.cx * rect.size.width;
@@ -575,15 +588,13 @@ fn draw_radial_gradient_rect(
 
     let colors: Vec<Color4f> = g.stops.iter().map(|s| to_sk_color(s.color)).collect();
     let offsets: Vec<f32> = g.stops.iter().map(|s| s.offset.clamp(0.0, 1.0)).collect();
-    let shader = gradient_shader::radial(
-        SkPoint::new(cx, cy),
-        r.max(0.0),
-        skia_safe::gradient_shader::GradientShaderColors::ColorsInSpace(&colors, None),
-        offsets.as_slice(),
-        TileMode::Clamp,
-        None,
-        None,
-    );
+    // skia-safe 0.97 replaced `gradient_shader::radial` with `gradient::shaders::radial_gradient`
+    // taking `(center, radius)` and a `gradient::Gradient` description.
+    let gradient_colors =
+        gradient::Colors::new(&colors, Some(offsets.as_slice()), TileMode::Clamp, None);
+    let gradient_obj = gradient::Gradient::new(gradient_colors, gradient::Interpolation::default());
+    let shader: Option<Shader> =
+        gradient::shaders::radial_gradient((SkPoint::new(cx, cy), r.max(0.0)), &gradient_obj, None);
     let mut paint = SkPaint::default();
     paint.set_anti_alias(true);
     paint.set_style(PaintStyle::Fill);

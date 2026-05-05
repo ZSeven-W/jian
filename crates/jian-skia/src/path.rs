@@ -1,31 +1,36 @@
 //! `PathCommand` → `skia_safe::Path`.
+//!
+//! skia-safe 0.97 split path construction onto `PathBuilder` (mutating
+//! `move_to` / `line_to` / `quad_to` / `cubic_to` / `close`); the
+//! finished `Path` is produced by `builder.detach()` and is itself
+//! immutable for traversal. See `~/.cargo/registry/src/.../skia-safe-0.97.0/src/core/path_builder.rs:238-360`.
 
 use crate::convert::to_sk_point;
 use jian_core::render::PathCommand;
-use skia_safe::Path as SkPath;
+use skia_safe::{Path as SkPath, PathBuilder};
 
 pub fn to_sk_path(commands: &[PathCommand]) -> SkPath {
-    let mut path = SkPath::new();
+    let mut builder = PathBuilder::new();
     for cmd in commands {
         match *cmd {
             PathCommand::MoveTo(p) => {
-                path.move_to(to_sk_point(p));
+                builder.move_to(to_sk_point(p));
             }
             PathCommand::LineTo(p) => {
-                path.line_to(to_sk_point(p));
+                builder.line_to(to_sk_point(p));
             }
             PathCommand::QuadTo(c, p) => {
-                path.quad_to(to_sk_point(c), to_sk_point(p));
+                builder.quad_to(to_sk_point(c), to_sk_point(p));
             }
             PathCommand::CubicTo(c1, c2, p) => {
-                path.cubic_to(to_sk_point(c1), to_sk_point(c2), to_sk_point(p));
+                builder.cubic_to(to_sk_point(c1), to_sk_point(c2), to_sk_point(p));
             }
             PathCommand::Close => {
-                path.close();
+                builder.close();
             }
         }
     }
-    path
+    builder.detach()
 }
 
 #[cfg(test)]

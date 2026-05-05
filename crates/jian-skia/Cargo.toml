@@ -29,7 +29,7 @@ textlayout = ["skia-safe/textlayout"]
 [dependencies]
 jian-core       = { path = "../jian-core" }
 jian-ops-schema = { path = "../jian-ops-schema" }
-skia-safe       = "0.78"
+skia-safe       = "0.97.0"
 base64          = "0.22"
 # Used by `startup::spawn_blocking_init` for the worker → main async
 # bridge (`futures::channel::oneshot`). The receiver is awaited inside
