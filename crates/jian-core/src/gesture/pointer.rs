@@ -1,12 +1,13 @@
 //! Unified PointerEvent — the single input type every host adapter produces.
 
 use crate::geometry::Point;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PointerId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PointerKind {
     Touch,
     Mouse,
@@ -15,7 +16,7 @@ pub enum PointerKind {
     Trackpad,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PointerPhase {
     Down,
     Move,
@@ -25,7 +26,7 @@ pub enum PointerPhase {
 }
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
     pub struct MouseButtons: u32 {
         const LEFT    = 1;
         const RIGHT   = 2;
@@ -36,7 +37,7 @@ bitflags::bitflags! {
 }
 
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
     pub struct Modifiers: u32 {
         const SHIFT = 1;
         const CTRL  = 2;
@@ -79,21 +80,63 @@ impl PointerEvent {
 /// gesture-arena recognizer (no competition with Tap/Pan/etc.) —
 /// hosts call `Runtime::dispatch_wheel` and the runtime hit-tests
 /// directly to find the topmost node with `events.onScroll`. Delta
-/// is in logical pixels per spec convention; positive Y = scroll up.
+/// is in `mode` units (Pixel default; Line / Page only when the host
+/// surfaces a non-pixel `deltaMode`).
+///
+/// **Sign convention (Jian-internal, mirrors winit's `MouseScrollDelta`):**
+/// positive `delta.y` = user scrolled **up** (content moves up to
+/// reveal what's above). This matches `winit::event::MouseScrollDelta`
+/// passthrough on desktop and the existing `scroll_verb` action DSL.
+///
+/// Browser hosts must flip the sign of `WheelEvent.deltaY` (which is
+/// W3C-positive-**down**) before constructing this struct. shell-web's
+/// event/pointer.rs translator owns that sign flip; widget code reads
+/// the Jian-internal convention.
 #[derive(Debug, Clone)]
 pub struct WheelEvent {
     pub position: Point,
     pub delta: Point,
+    /// Mirror of W3C `WheelEvent.deltaZ`. Almost always `0.0` (3-axis
+    /// devices are rare). Kept as a separate field instead of
+    /// promoting `delta` to a 3-vector to keep the 2D-scroll-only call
+    /// sites unchanged. Sign follows Jian's positive-up convention
+    /// (per `delta.y`) when the host surfaces a non-zero value.
+    pub delta_z: f32,
+    /// Mirror of W3C `WheelEvent.deltaMode` — Pixel (0) / Line (1) /
+    /// Page (2). Native hosts emit Pixel; web host fills from
+    /// `WheelEvent.deltaMode`. Note: `mode` describes the unit of
+    /// `delta`'s magnitude; the sign of `delta` follows Jian's
+    /// internal convention (above), not the browser's deltaY sign.
+    pub mode: ScrollMode,
     pub modifiers: Modifiers,
     pub timestamp: Instant,
 }
 
+/// Mirror of W3C `WheelEvent.deltaMode`. Step 1b shell-web sets this
+/// from the browser's deltaMode field; native winit emits `Pixel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScrollMode {
+    Pixel,
+    Line,
+    Page,
+}
+
+impl Default for ScrollMode {
+    fn default() -> Self {
+        Self::Pixel
+    }
+}
+
 impl WheelEvent {
-    /// Minimal constructor used by host adapters and tests.
+    /// Minimal constructor used by host adapters and tests. Defaults
+    /// `mode` to `ScrollMode::Pixel` (W3C `deltaMode = 0`) and
+    /// `delta_z` to `0.0` (no z-axis scroll).
     pub fn simple(position: Point, delta: Point) -> Self {
         Self {
             position,
             delta,
+            delta_z: 0.0,
+            mode: ScrollMode::Pixel,
             modifiers: Modifiers::empty(),
             timestamp: Instant::now(),
         }

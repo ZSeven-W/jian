@@ -8,12 +8,16 @@
 //! wheel doesn't compete with Tap/Swipe.
 //!
 //! Convention (matches `jian_core::gesture::pointer::WheelEvent`'s
-//! doc): positive `delta.y`
-//! means *content moves up* (i.e. the user scrolled up). To keep
-//! the verb's surface intuitive we mirror the OS convention —
-//! `direction: Up` produces `delta.y = +distance`, so a list
-//! whose handler reads `$event.dy > 0` to mean "scroll up" reads
-//! correctly.
+//! doc): Jian uses winit's positive-up sign — positive `delta.y`
+//! means the user scrolled **up** (content moves up). To keep the
+//! verb's surface intuitive we mirror the OS convention —
+//! `direction: Up` produces `delta.y = +distance`, so a list whose
+//! handler reads `$event.dy > 0` to mean "scroll up" reads correctly.
+//!
+//! **Browser-host caveat**: W3C `WheelEvent.deltaY` is the opposite
+//! sign (positive = scroll down). shell-web's event/pointer.rs flips
+//! the sign before constructing Jian `WheelEvent`, so widget code
+//! always reads the Jian-internal convention regardless of host.
 //!
 //! Returns:
 //! - `not_found` when the selector matches zero nodes.

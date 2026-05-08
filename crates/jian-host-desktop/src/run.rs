@@ -713,6 +713,11 @@ impl ApplicationHandler for RunApp {
                 self.host.runtime.dispatch_wheel(JianWheel {
                     position: logical_pos,
                     delta: jian_core::geometry::point(dx, dy),
+                    // winit does not surface a z-axis scroll; web hosts
+                    // override per W3C `WheelEvent.deltaZ` when non-zero.
+                    delta_z: 0.0,
+                    // Native winit emits Pixel deltas; web hosts override per W3C deltaMode.
+                    mode: jian_core::gesture::ScrollMode::Pixel,
                     modifiers: self.translator.modifiers,
                     timestamp: Instant::now(),
                 });

@@ -11,6 +11,28 @@
 //! `focus_next`, `focus_previous`, `focus_request`, `focus_clear`.
 
 use crate::document::{NodeKey, RuntimeDocument};
+use serde::{Deserialize, Serialize};
+
+/// Window-level / widget-level focus transition event. Hosts emit
+/// this for browser DOM `focus` / `blur` and winit `Focused` so
+/// widget code can react without knowing about each platform's
+/// native event shape. This is **not** the same as `FocusManager`'s
+/// internal `FocusChange` (which tracks the Tab-ring chain) — the
+/// public event sits at the host boundary, the chain mechanics stay
+/// inside the runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FocusEvent {
+    pub gained: bool,
+    /// Optional widget node id the host believes received focus.
+    /// `None` = window-level focus / no specific node hint.
+    pub node_id_hint: Option<u64>,
+    /// Mirror of W3C `FocusEvent.relatedTarget`. The node id of the
+    /// other half of the focus transition (the node losing focus on
+    /// `gained=true`, or the node gaining focus on `gained=false`).
+    /// `None` when the host cannot identify the counterpart (e.g. the
+    /// page just gained focus from a non-DOM source).
+    pub related_node_id_hint: Option<u64>,
+}
 
 /// Result of a focus mutation. The runtime turns this into a pair of
 /// `SemanticEvent::FocusLost` (for `previous`) and
