@@ -13,6 +13,7 @@
 
 pub mod action;
 pub mod action_surface;
+pub mod anim;
 pub mod binding;
 pub mod capability;
 pub mod document;
