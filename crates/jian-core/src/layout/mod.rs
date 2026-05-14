@@ -397,14 +397,29 @@ fn resolve_weight(w: Option<&jian_ops_schema::node::FontWeight>) -> u16 {
     use jian_ops_schema::node::text::FontWeight;
     match w {
         Some(FontWeight::Number(n)) => *n as u16,
-        Some(FontWeight::Keyword(s)) => match s.as_str() {
-            "bold" => 700,
-            "semibold" | "semi-bold" => 600,
-            "medium" => 500,
-            "light" => 300,
-            "thin" => 100,
-            _ => 400,
-        },
+        Some(FontWeight::Keyword(s)) => {
+            // Real-world `.op` files emit `"fontWeight":"700"` etc. as
+            // STRINGS (the canonical schema's untagged enum picks
+            // `Keyword(String)` when the value is a JSON string,
+            // even when its contents are numeric). Try numeric
+            // parse first so 100..900 round-trip, then fall back
+            // to lucide-style keywords.
+            if let Ok(n) = s.parse::<u16>() {
+                return n;
+            }
+            match s.as_str() {
+                "bold" => 700,
+                "semibold" | "semi-bold" | "demibold" => 600,
+                "medium" => 500,
+                "normal" | "regular" => 400,
+                "light" => 300,
+                "extralight" | "extra-light" | "ultralight" | "ultra-light" => 200,
+                "thin" | "hairline" => 100,
+                "black" | "heavy" => 900,
+                "extrabold" | "extra-bold" | "ultrabold" | "ultra-bold" => 800,
+                _ => 400,
+            }
+        }
         None => 400,
     }
 }
