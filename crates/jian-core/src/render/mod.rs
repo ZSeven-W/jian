@@ -6,12 +6,14 @@
 
 pub mod commands;
 pub mod paint;
+pub mod scene;
 
 pub use commands::{affine_to_array, RenderCommand};
 pub use paint::{
     BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, Paint, PathCommand,
     RadialGradient, ShadowSpec, StrokeOp, TextAlign, TextRun,
 };
+pub use scene::{collect_draws, collect_draws_with_state};
 
 use crate::geometry::{Affine2, Rect, Size};
 
