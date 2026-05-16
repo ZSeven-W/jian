@@ -9,7 +9,7 @@
 //! `derive_actions` operates on `serde_json::Value` views of each
 //! node so it can inspect `semantics` / `events` / `bindings` / `route`
 //! without enumerating all 11 PenNode variants — same pattern as
-//! `jian-host-desktop::scene::collect_draws`.
+//! `jian_core::render::collect_draws`.
 //!
 //! `short_hash` returns 4 lowercase hex chars seeded by both
 //! `build_salt` (cross-build stable) and the node id. Spec §3.4
