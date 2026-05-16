@@ -114,17 +114,12 @@ pub struct WheelEvent {
 
 /// Mirror of W3C `WheelEvent.deltaMode`. Step 1b shell-web sets this
 /// from the browser's deltaMode field; native winit emits `Pixel`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ScrollMode {
+    #[default]
     Pixel,
     Line,
     Page,
-}
-
-impl Default for ScrollMode {
-    fn default() -> Self {
-        Self::Pixel
-    }
 }
 
 impl WheelEvent {
