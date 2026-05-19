@@ -56,6 +56,43 @@ export type Capability = "storage" | "network" | "camera" | "microphone" | "loca
 
 export type CornerRadius = number | [number, number, number, number];
 
+/**
+ * One named colour from the design-md colour palette.
+ */
+export type DesignMdColor = { 
+/**
+ * Human label, e.g. "Primary".
+ */
+name: string, 
+/**
+ * `#RRGGBB` hex value.
+ */
+hex: string, 
+/**
+ * How the colour is used, e.g. "buttons and links".
+ */
+role: string, };
+
+/**
+ * A structured design-system brief attached to a [`PenDocument`].
+ *
+ * [`PenDocument`]: crate::document::PenDocument
+ */
+export type DesignMdSpec = { 
+/**
+ * Original markdown source — kept verbatim for round-trip fidelity.
+ */
+raw: string, projectName: string | null, visualTheme: string | null, colorPalette: Array<DesignMdColor> | null, typography: DesignMdTypography | null, componentStyles: string | null, layoutPrinciples: string | null, generationNotes: string | null, };
+
+/**
+ * Typography guidance from the design-md typography section.
+ */
+export type DesignMdTypography = { fontFamily: string | null, headings: string | null, body: string | null, 
+/**
+ * Free-form scale description — usually the whole section text.
+ */
+scale: string | null, };
+
 export type EllipseNode = { width: SizingBehavior | null, height: SizingBehavior | null, cornerRadius: number | null, innerRadius: number | null, startAngle: number | null, sweepAngle: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 /**
@@ -96,7 +133,18 @@ dragThreshold: number | null,
 /**
  * Override long-press duration in ms (default 500).
  */
-longPressDuration: number | null, };
+longPressDuration: number | null, 
+/**
+ * Author-explicit Tab-traversal opt-in.
+ *
+ * `Some(true)` — node enters the focus chain regardless of its
+ * semantic role.
+ * `Some(false)` — node is excluded even if its `semantics.role`
+ * would otherwise auto-include it (e.g. a decorative `Input`).
+ * `None` — falls back to the role heuristic (`Button` / `Link`
+ * / `Input` are auto-included; everything else is opt-in).
+ */
+focusable: boolean | null, };
 
 export type GradientStop = { offset: number, color: string, };
 
@@ -171,7 +219,12 @@ formatVersion: string | null,
 /**
  * App id (reverse-DNS). Required when `app` is set; otherwise optional.
  */
-id: string | null, app: AppConfig | null, routes: RoutesConfig | null, state: { [key in string]?: StateEntry } | null, lifecycle: AppLifecycleHooks | null, logicModules: Array<LogicModuleRef> | null, };
+id: string | null, app: AppConfig | null, routes: RoutesConfig | null, state: { [key in string]?: StateEntry } | null, lifecycle: AppLifecycleHooks | null, logicModules: Array<LogicModuleRef> | null, 
+/**
+ * Per-document design-system brief (the "design.md"). Optional —
+ * absent on documents that never authored one.
+ */
+designMd: DesignMdSpec | null, };
 
 export type PenEffect = { "type": "blur" } & BlurBody | { "type": "background_blur" } & BlurBody | { "type": "shadow" } & ShadowBody;
 

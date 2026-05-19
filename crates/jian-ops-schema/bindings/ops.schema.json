@@ -115,6 +115,17 @@
       "items": {
         "$ref": "#/definitions/LogicModuleRef"
       }
+    },
+    "designMd": {
+      "description": "Per-document design-system brief (the \"design.md\"). Optional — absent on documents that never authored one.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DesignMdSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "definitions": {
@@ -5227,6 +5238,122 @@
           "items": {
             "$ref": "#/definitions/Capability"
           }
+        }
+      }
+    },
+    "DesignMdSpec": {
+      "description": "A structured design-system brief attached to a [`PenDocument`].\n\n[`PenDocument`]: crate::document::PenDocument",
+      "type": "object",
+      "required": [
+        "raw"
+      ],
+      "properties": {
+        "raw": {
+          "description": "Original markdown source — kept verbatim for round-trip fidelity.",
+          "type": "string"
+        },
+        "projectName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visualTheme": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "colorPalette": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/DesignMdColor"
+          }
+        },
+        "typography": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DesignMdTypography"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "componentStyles": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "layoutPrinciples": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "generationNotes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "DesignMdColor": {
+      "description": "One named colour from the design-md colour palette.",
+      "type": "object",
+      "required": [
+        "hex",
+        "name",
+        "role"
+      ],
+      "properties": {
+        "name": {
+          "description": "Human label, e.g. \"Primary\".",
+          "type": "string"
+        },
+        "hex": {
+          "description": "`#RRGGBB` hex value.",
+          "type": "string"
+        },
+        "role": {
+          "description": "How the colour is used, e.g. \"buttons and links\".",
+          "type": "string"
+        }
+      }
+    },
+    "DesignMdTypography": {
+      "description": "Typography guidance from the design-md typography section.",
+      "type": "object",
+      "properties": {
+        "fontFamily": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headings": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scale": {
+          "description": "Free-form scale description — usually the whole section text.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     }

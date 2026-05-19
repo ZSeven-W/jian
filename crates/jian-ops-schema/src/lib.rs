@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod compat;
+pub mod design_md;
 pub mod document;
 pub mod error;
 pub mod events;
@@ -23,6 +24,7 @@ pub mod variable;
 pub mod version;
 
 pub use compat::load_str;
+pub use design_md::{DesignMdColor, DesignMdSpec, DesignMdTypography};
 pub use document::PenDocument;
 pub use error::{LoadResult, LoadWarning, OpsResult, OpsSchemaError};
 

@@ -52,6 +52,11 @@ pub struct PenDocument {
     pub lifecycle: Option<AppLifecycleHooks>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logic_modules: Option<Vec<LogicModuleRef>>,
+
+    /// Per-document design-system brief (the "design.md"). Optional —
+    /// absent on documents that never authored one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_md: Option<crate::design_md::DesignMdSpec>,
 }
 
 #[cfg(test)]
