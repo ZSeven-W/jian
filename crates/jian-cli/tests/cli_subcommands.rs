@@ -994,3 +994,43 @@ fn pack_without_aot_tolerates_duplicate_node_ids() {
         .assert()
         .success();
 }
+
+#[test]
+fn pack_strips_design_md_from_app_op() {
+    // `designMd` is editor-only metadata for the OpenPencil canvas
+    // chrome — a packaged Jian app must not carry it. After pack +
+    // unpack, the extracted `app.op` must have no `designMd` field.
+    const WITH_DESIGN_MD: &str = r##"{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "id": "x",
+  "app": { "name": "x", "version": "1", "id": "x" },
+  "children": [],
+  "designMd": {
+    "raw": "# Design System: Demo\n",
+    "projectName": "Demo",
+    "visualTheme": "Calm and minimal"
+  }
+}"##;
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "with-design-md.op", WITH_DESIGN_MD);
+    let packed = dir.path().join("out.op.pack");
+    jian_cmd()
+        .args(["pack", src.to_str().unwrap(), packed.to_str().unwrap()])
+        .assert()
+        .success();
+    let extracted = dir.path().join("extracted");
+    jian_cmd()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let out = fs::read_to_string(extracted.join("app.op")).unwrap();
+    assert!(
+        !out.contains("designMd"),
+        "packaged app.op still carries designMd: {out}"
+    );
+}

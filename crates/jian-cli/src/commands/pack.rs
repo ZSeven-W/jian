@@ -82,7 +82,7 @@ const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "webp", "gif", "svg"];
 pub fn run(args: PackArgs) -> Result<ExitCode> {
     let src = std::fs::read_to_string(&args.input)
         .with_context(|| format!("read {}", args.input.display()))?;
-    let loaded = jian_ops_schema::load_str(&src)
+    let mut loaded = jian_ops_schema::load_str(&src)
         .with_context(|| format!("parse {}", args.input.display()))?;
 
     let parent = args.input.parent().unwrap_or(Path::new("."));
@@ -157,6 +157,16 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
         aot_payload.as_ref().map(|p| p.layout_snap.viewport),
     );
 
+    // design.md is editor-only metadata — strip it from the packaged
+    // `app.op` so the runtime carries no design brief. When the field
+    // is absent we ship the raw source verbatim to preserve formatting.
+    let app_op_bytes: Vec<u8> = if loaded.value.design_md.take().is_some() {
+        serde_json::to_vec_pretty(&loaded.value)
+            .context("re-serialize app.op after stripping designMd")?
+    } else {
+        src.as_bytes().to_vec()
+    };
+
     let file =
         File::create(&args.output).with_context(|| format!("create {}", args.output.display()))?;
     let mut zw = zip::ZipWriter::new(file);
@@ -167,7 +177,7 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
     zw.write_all(serde_json::to_vec_pretty(&manifest)?.as_slice())?;
 
     zw.start_file("app.op", opts)?;
-    zw.write_all(src.as_bytes())?;
+    zw.write_all(&app_op_bytes)?;
 
     let mut written: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for asset in fonts.iter().chain(images.iter()) {
@@ -208,7 +218,7 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
     println!(
         "jian pack: wrote {} ({} bytes app.op, {} font(s), {} image(s){})",
         args.output.display(),
-        src.len(),
+        app_op_bytes.len(),
         fonts.len(),
         images.len(),
         aot_msg,
