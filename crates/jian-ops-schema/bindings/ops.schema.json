@@ -267,6 +267,12 @@
                 "$ref": "#/definitions/PenNode"
               }
             },
+            "imageSearchQuery": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "reusable": {
               "type": [
                 "boolean",

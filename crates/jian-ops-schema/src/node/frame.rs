@@ -16,6 +16,8 @@ pub struct FrameNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<super::PenNode>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_search_query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reusable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slot: Option<Vec<String>>,
