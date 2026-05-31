@@ -241,6 +241,7 @@ pub struct PenStroke {
 pub enum PenEffect {
     Blur(BlurBody),
     BackgroundBlur(BlurBody),
+    #[serde(alias = "drop-shadow")]
     Shadow(ShadowBody),
 }
 
@@ -326,6 +327,21 @@ mod tests {
         let s = serde_json::to_string(&f).unwrap();
         let f2: PenFill = serde_json::from_str(&s).unwrap();
         assert_eq!(f, f2);
+    }
+
+    #[test]
+    fn pen_effect_accepts_ts_drop_shadow_alias() {
+        let effect: PenEffect = serde_json::from_value(serde_json::json!({
+            "type": "drop-shadow",
+            "offsetX": 0,
+            "offsetY": 8,
+            "blur": 24,
+            "spread": 0,
+            "color": "#00000033"
+        }))
+        .unwrap();
+
+        assert!(matches!(effect, PenEffect::Shadow(_)));
     }
 
     #[test]
