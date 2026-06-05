@@ -13,7 +13,7 @@ import type { JsonValue } from "./serde_json/JsonValue";
  */
 export type Action = { [key in string]?: JsonValue };
 
-export type AlignItems = "start" | "center" | "end";
+export type AlignItems = "start" | "center" | "end" | "stretch";
 
 export type AppConfig = { name: string, version: string, id: string, entry: string | null, capabilities: Array<Capability> | null, theme: string | null, orientation: Orientation | null, backgroundColor: string | null, icon: string | null, 
 /**

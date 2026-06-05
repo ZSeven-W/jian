@@ -3,7 +3,6 @@
   "title": "PenDocument",
   "type": "object",
   "required": [
-    "children",
     "version"
   ],
   "properties": {
@@ -49,6 +48,8 @@
       }
     },
     "children": {
+      "description": "Default-on-deserialize so a multi-page document that carries only `pages` (no top-level `children`) still loads — the TS web app's whole-document sync (`document.post.ts`) accepts `{version, pages}` without a `children` array. Always serialized (even empty `[]`).",
+      "default": [],
       "type": "array",
       "items": {
         "$ref": "#/definitions/PenNode"
@@ -4056,11 +4057,22 @@
       ]
     },
     "AlignItems": {
-      "type": "string",
-      "enum": [
-        "start",
-        "center",
-        "end"
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "start",
+            "center",
+            "end"
+          ]
+        },
+        {
+          "description": "Cross-axis stretch. The TS element builders (tabs, segmented control, quote block) emit `alignItems: 'stretch'`, so the schema must accept and round-trip it. The layout engine renders it as `Start` (TS `normalizeAlignItems('stretch') -> 'start'`); the layout engine has no font-metrics stretch pass, matching that behavior.",
+          "type": "string",
+          "enum": [
+            "stretch"
+          ]
+        }
       ]
     },
     "CornerRadius": {

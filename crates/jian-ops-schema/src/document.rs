@@ -31,6 +31,11 @@ pub struct PenDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pages: Option<Vec<PenPage>>,
 
+    /// Default-on-deserialize so a multi-page document that carries only
+    /// `pages` (no top-level `children`) still loads — the TS web app's
+    /// whole-document sync (`document.post.ts`) accepts `{version, pages}`
+    /// without a `children` array. Always serialized (even empty `[]`).
+    #[serde(default)]
     pub children: Vec<PenNode>,
 
     // --- Jian v1 extensions (all optional, additive, not present in v0.x) ---
@@ -72,6 +77,21 @@ mod tests {
 
         let output = serde_json::to_string(&d).unwrap();
         assert_eq!(output, r#"{"version":"0.8.0","children":[]}"#);
+    }
+
+    #[test]
+    fn pages_only_document_loads_with_default_children() {
+        // The TS web app's whole-document sync accepts `{version, pages}` with
+        // no top-level `children`; it must deserialize (children defaults to []).
+        let input = r#"{"version":"1.0","pages":[{"id":"p1","name":"P","children":[]}]}"#;
+        let d: PenDocument = serde_json::from_str(input).unwrap();
+        assert_eq!(d.version, "1.0");
+        assert!(d.children.is_empty());
+        assert_eq!(d.pages.as_ref().map(|p| p.len()), Some(1));
+        // children always re-serializes (even when defaulted in).
+        assert!(serde_json::to_string(&d)
+            .unwrap()
+            .contains(r#""children":[]"#));
     }
 
     #[test]

@@ -78,7 +78,10 @@ pub fn resolve_align(a: Option<&OpsAlign>) -> AlignItems {
         Some(OpsAlign::Start) => AlignItems::FlexStart,
         Some(OpsAlign::Center) => AlignItems::Center,
         Some(OpsAlign::End) => AlignItems::FlexEnd,
-        _ => AlignItems::FlexStart,
+        // `stretch` renders as start: the position step has no font-metrics
+        // stretch pass, matching TS `normalizeAlignItems('stretch') -> 'start'`.
+        Some(OpsAlign::Stretch) => AlignItems::FlexStart,
+        None => AlignItems::FlexStart,
     }
 }
 
