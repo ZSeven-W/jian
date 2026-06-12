@@ -10,6 +10,9 @@ pub mod geometry;
 pub mod painter;
 pub mod tokens;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use geometry::{Color, Point2D, Rect};
 pub use painter::{ImageAdjustments, ImageDrawMode, Painter, TextLayout};
 pub use tokens::{Density, Tokens};
