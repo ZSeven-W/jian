@@ -59,7 +59,11 @@ impl TextArea<'_> {
             }
         }
 
-        if text.is_empty() {
+        let composition = self.state.composition().filter(|c| !c.text.is_empty());
+        let caret = safe_byte(text, self.state.caret());
+        let composition_line = composition.and(caret_line_index(&lines, caret));
+
+        if text.is_empty() && composition.is_none() {
             if !self.placeholder.is_empty() {
                 draw_text(
                     p,
@@ -76,19 +80,28 @@ impl TextArea<'_> {
                 .take(visible_count)
                 .enumerate()
             {
-                if line.text.is_empty() {
+                let line_i = visible_start + visible_i;
+                if line.text.is_empty() && composition_line != Some(line_i) {
                     continue;
                 }
-                draw_text(
-                    p,
-                    &line.text,
-                    Point2D::new(
-                        rect.origin.x + pad_x,
-                        rect.origin.y + PAD_Y + visible_i as f32 * line_h,
-                    ),
-                    font_size,
-                    t.foreground,
+                let origin = Point2D::new(
+                    rect.origin.x + pad_x,
+                    rect.origin.y + PAD_Y + visible_i as f32 * line_h,
                 );
+                if let Some(composition) = composition.filter(|_| composition_line == Some(line_i))
+                {
+                    draw_line_with_composition(
+                        p,
+                        line,
+                        origin,
+                        font_size,
+                        t.foreground,
+                        composition,
+                        caret,
+                    );
+                } else {
+                    draw_text(p, &line.text, origin, font_size, t.foreground);
+                }
             }
         }
 
@@ -96,31 +109,41 @@ impl TextArea<'_> {
             && self.state.highlight_range().is_none()
             && self.state.caret_visible(self.now_ms)
         {
-            let caret = safe_byte(text, self.state.caret());
-            if let Some(line_i) = caret_line_index(&lines, caret) {
-                if line_i >= visible_start && line_i < visible_start + visible_count {
-                    let line = &lines[line_i];
-                    let x =
-                        p.measure_text(&line.text[..caret.saturating_sub(line.start)], font_size);
-                    let visible_i = line_i - visible_start;
-                    p.fill_rect(
-                        Rect::xywh(
-                            rect.origin.x + pad_x + x,
-                            rect.origin.y + PAD_Y + visible_i as f32 * line_h,
-                            1.5,
-                            font_size + 3.0,
-                        ),
-                        t.foreground,
-                    );
+            if let Some(mut origin) = caret_origin(
+                p,
+                rect,
+                pad_x,
+                line_h,
+                font_size,
+                &lines,
+                visible_start,
+                visible_count,
+                caret,
+            ) {
+                if let Some(composition) = self.state.composition() {
+                    if !composition.text.is_empty() {
+                        let cursor = safe_byte(&composition.text, composition.cursor);
+                        origin.x += p.measure_text(&composition.text[..cursor], font_size);
+                    }
                 }
+                p.fill_rect(
+                    Rect::xywh(origin.x, origin.y, 1.5, font_size + 3.0),
+                    t.foreground,
+                );
             }
         }
 
         p.restore();
     }
 
-    pub fn byte_offset_at(&self, p: &mut dyn Painter, rect: Rect, point: Point2D) -> usize {
-        let font_size = self.resolved_font_size(&Tokens::default());
+    pub fn byte_offset_at(
+        &self,
+        p: &mut dyn Painter,
+        rect: Rect,
+        point: Point2D,
+        t: &Tokens,
+    ) -> usize {
+        let font_size = self.resolved_font_size(t);
         let pad_x = self.resolved_pad_x();
         let line_h = line_height(font_size);
         let content_w = (rect.size.x - 2.0 * pad_x).max(0.0);
@@ -229,6 +252,48 @@ fn draw_text(
     p.draw_text(&layout, origin);
 }
 
+fn draw_line_with_composition(
+    p: &mut dyn Painter,
+    line: &TextLine,
+    origin: Point2D,
+    font_size: f32,
+    color: crate::Color,
+    composition: &jian_core::text_input::Composition,
+    caret: usize,
+) {
+    let rel = caret.saturating_sub(line.start).min(line.text.len());
+    let rel = jian_core::text_input::prev_char_boundary(&line.text, rel);
+    let prefix = &line.text[..rel];
+    let suffix = &line.text[rel..];
+    let mut x = origin.x;
+
+    if !prefix.is_empty() {
+        draw_text(p, prefix, Point2D::new(x, origin.y), font_size, color);
+        x += p.measure_text(prefix, font_size);
+    }
+
+    draw_text(
+        p,
+        &composition.text,
+        Point2D::new(x, origin.y),
+        font_size,
+        color,
+    );
+    let composition_w = p.measure_text(&composition.text, font_size).max(1.0);
+    let underline_y = origin.y + font_size + 2.0;
+    p.stroke_line(
+        Point2D::new(x, underline_y),
+        Point2D::new(x + composition_w, underline_y),
+        color,
+        1.0,
+    );
+    x += composition_w;
+
+    if !suffix.is_empty() {
+        draw_text(p, suffix, Point2D::new(x, origin.y), font_size, color);
+    }
+}
+
 fn wrap_segment(
     p: &mut dyn Painter,
     segment: &str,
@@ -274,7 +339,6 @@ fn wrap_segment(
                     text: &token,
                     start: byte,
                     end: token_end,
-                    drop_when_wrapping: false,
                 },
                 segment_start,
                 font_size,
@@ -293,7 +357,6 @@ fn wrap_segment(
                     text: " ",
                     start: byte,
                     end: token_end,
-                    drop_when_wrapping: true,
                 },
                 segment_start,
                 font_size,
@@ -320,7 +383,6 @@ fn wrap_segment(
                     text: &word,
                     start,
                     end,
-                    drop_when_wrapping: false,
                 },
                 segment_start,
                 font_size,
@@ -337,7 +399,6 @@ struct Token<'a> {
     text: &'a str,
     start: usize,
     end: usize,
-    drop_when_wrapping: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -354,19 +415,67 @@ fn append_wrapped_token(
 ) {
     let mut probe = current.clone();
     probe.push_str(token.text);
-    if p.measure_text(&probe, font_size) > max_width && !current.is_empty() {
+    if p.measure_text(&probe, font_size) > max_width {
         push_current(current, *current_start, *current_end, segment_start, out);
-        if !token.drop_when_wrapping {
-            current.push_str(token.text);
-            *current_start = token.start;
-            *current_end = token.end;
-        }
+        append_token_to_empty_line(
+            p,
+            current,
+            current_start,
+            current_end,
+            token,
+            segment_start,
+            font_size,
+            max_width,
+            out,
+        );
     } else {
         if current.is_empty() {
             *current_start = token.start;
         }
         *current = probe;
         *current_end = token.end;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_token_to_empty_line(
+    p: &mut dyn Painter,
+    current: &mut String,
+    current_start: &mut usize,
+    current_end: &mut usize,
+    token: Token<'_>,
+    segment_start: usize,
+    font_size: f32,
+    max_width: f32,
+    out: &mut Vec<TextLine>,
+) {
+    if token.text.is_empty() {
+        return;
+    }
+    if max_width <= 0.0 || p.measure_text(token.text, font_size) <= max_width {
+        current.push_str(token.text);
+        *current_start = token.start;
+        *current_end = token.end;
+        return;
+    }
+
+    for (byte, ch) in token.text.char_indices() {
+        let token_byte = token.start + byte;
+        let token_end = token_byte + ch.len_utf8();
+        let mut probe = current.clone();
+        probe.push(ch);
+        if !current.is_empty() && p.measure_text(&probe, font_size) > max_width {
+            push_current(current, *current_start, *current_end, segment_start, out);
+            current.push(ch);
+            *current_start = token_byte;
+            *current_end = token_end;
+        } else {
+            if current.is_empty() {
+                *current_start = token_byte;
+            }
+            *current = probe;
+            *current_end = token_end;
+        }
     }
 }
 
@@ -394,6 +503,11 @@ fn selection_x_range(
     sel_end: usize,
     font_size: f32,
 ) -> Option<(f32, f32)> {
+    if line.start == line.end {
+        return (sel_start <= line.start && line.start < sel_end)
+            .then_some((0.0, font_size.max(1.0)));
+    }
+
     let start = sel_start.max(line.start);
     let end = sel_end.min(line.end);
     if start >= end {
@@ -424,10 +538,45 @@ fn byte_offset_in_line(p: &mut dyn Painter, line: &TextLine, x: f32, font_size: 
     line.end
 }
 
+#[allow(clippy::too_many_arguments)]
+fn caret_origin(
+    p: &mut dyn Painter,
+    rect: Rect,
+    pad_x: f32,
+    line_h: f32,
+    font_size: f32,
+    lines: &[TextLine],
+    visible_start: usize,
+    visible_count: usize,
+    caret: usize,
+) -> Option<Point2D> {
+    let line_i = caret_line_index(lines, caret)?;
+    if line_i < visible_start || line_i >= visible_start + visible_count {
+        return None;
+    }
+    let line = &lines[line_i];
+    let rel = caret.saturating_sub(line.start).min(line.text.len());
+    let rel = jian_core::text_input::prev_char_boundary(&line.text, rel);
+    let x = p.measure_text(&line.text[..rel], font_size);
+    let visible_i = line_i - visible_start;
+    Some(Point2D::new(
+        rect.origin.x + pad_x + x,
+        rect.origin.y + PAD_Y + visible_i as f32 * line_h,
+    ))
+}
+
 fn caret_line_index(lines: &[TextLine], caret: usize) -> Option<usize> {
-    lines
-        .iter()
-        .position(|line| caret >= line.start && caret <= line.end)
+    lines.iter().enumerate().position(|(i, line)| {
+        if line.start == line.end {
+            return caret == line.start;
+        }
+        let end_is_soft_wrap = lines.get(i + 1).is_some_and(|next| next.start == line.end);
+        if end_is_soft_wrap {
+            caret >= line.start && caret < line.end
+        } else {
+            caret >= line.start && caret <= line.end
+        }
+    })
 }
 
 fn safe_byte(text: &str, byte: usize) -> usize {
@@ -447,7 +596,7 @@ fn is_cjk(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::CapturePainter;
+    use crate::test_support::{CapturePainter, PaintOp};
 
     #[test]
     fn layout_preserves_blank_lines_and_byte_offsets() {
@@ -486,6 +635,51 @@ mod tests {
     }
 
     #[test]
+    fn long_unbroken_tokens_wrap_by_character_with_byte_offsets() {
+        let mut p = CapturePainter::default();
+        let lines = TextArea::layout_lines(&mut p, "abcdefghij", 10.0, 18.0);
+
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["abc", "def", "ghi", "j"]
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 3), (3, 6), (6, 9), (9, 10)]
+        );
+        assert!(lines
+            .iter()
+            .all(|line| p.measure_text(&line.text, 10.0) <= 18.0));
+    }
+
+    #[test]
+    fn wrapped_spaces_are_preserved_with_byte_offsets() {
+        let mut p = CapturePainter::default();
+        let lines = TextArea::layout_lines(&mut p, "   ", 10.0, 6.0);
+
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            vec![" ", " ", " "]
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| (line.start, line.end))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (1, 2), (2, 3)]
+        );
+    }
+
+    #[test]
     fn cross_line_selection_paints_one_rect_per_line() {
         let mut state = jian_core::text_input::TextInputState::with_text("ab\ncd");
         state.set_caret(1, 0);
@@ -505,6 +699,28 @@ mod tests {
         view.paint(&mut p, Rect::xywh(0.0, 0.0, 120.0, 80.0), &t);
 
         assert_eq!(p.fills_with(t.primary.with_alpha(0.35)), 2);
+    }
+
+    #[test]
+    fn blank_line_selection_paints_highlight() {
+        let mut state = jian_core::text_input::TextInputState::with_text("a\n\nb");
+        state.set_caret(2, 0);
+        state.drag_to(3, 0);
+        let view = TextArea {
+            state: &state,
+            placeholder: "",
+            focused: true,
+            font_size: 10.0,
+            now_ms: 0,
+            pad_x: 8.0,
+            max_visible_lines: 4,
+        };
+        let t = Tokens::dark();
+        let mut p = CapturePainter::default();
+
+        view.paint(&mut p, Rect::xywh(0.0, 0.0, 120.0, 80.0), &t);
+
+        assert_eq!(p.fills_with(t.primary.with_alpha(0.35)), 1);
     }
 
     #[test]
@@ -549,8 +765,83 @@ mod tests {
             &mut p,
             Rect::xywh(0.0, 0.0, 120.0, 80.0),
             Point2D::new(8.0 + 5.5 + 2.0, 20.0),
+            &Tokens::dark(),
         );
 
         assert_eq!(byte, 4);
+    }
+
+    #[test]
+    fn byte_offset_at_uses_supplied_density_for_wrapping() {
+        let state = jian_core::text_input::TextInputState::with_text("中文");
+        let view = TextArea {
+            state: &state,
+            placeholder: "",
+            focused: true,
+            font_size: 0.0,
+            now_ms: 0,
+            pad_x: 8.0,
+            max_visible_lines: 4,
+        };
+        let touch = Tokens {
+            density: crate::Density::Touch,
+            ..Tokens::dark()
+        };
+        let mut p = CapturePainter::default();
+
+        let byte = view.byte_offset_at(
+            &mut p,
+            Rect::xywh(0.0, 0.0, 44.0, 80.0),
+            Point2D::new(8.0, PAD_Y + line_height(touch.density.font_size()) + 1.0),
+            &touch,
+        );
+
+        assert_eq!(byte, "中".len());
+    }
+
+    #[test]
+    fn caret_line_prefers_later_line_at_soft_wrap_boundary() {
+        let mut p = CapturePainter::default();
+        let lines = TextArea::layout_lines(&mut p, "中文", 10.0, 10.0);
+
+        assert_eq!(caret_line_index(&lines, "中".len()), Some(1));
+    }
+
+    #[test]
+    fn ime_composition_splits_prefix_preedit_and_suffix() {
+        let mut state = jian_core::text_input::TextInputState::with_text("ab");
+        state.set_caret(1, 0);
+        state.set_composition("中", "中".len(), 0);
+        let view = TextArea {
+            state: &state,
+            placeholder: "",
+            focused: true,
+            font_size: 10.0,
+            now_ms: 0,
+            pad_x: 8.0,
+            max_visible_lines: 4,
+        };
+        let t = Tokens::dark();
+        let mut p = CapturePainter::default();
+
+        view.paint(&mut p, Rect::xywh(0.0, 0.0, 120.0, 80.0), &t);
+
+        let texts: Vec<_> = p
+            .texts()
+            .map(|(content, origin, _)| (content.to_owned(), origin.x))
+            .collect();
+        assert_eq!(
+            texts
+                .iter()
+                .map(|(content, _)| content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "中", "b"]
+        );
+        assert!(texts[0].1 < texts[1].1);
+        assert!(texts[1].1 < texts[2].1);
+        assert!(p
+            .ops
+            .iter()
+            .any(|op| matches!(op, PaintOp::StrokeLine(_, _, color, _) if *color == t.foreground)));
     }
 }

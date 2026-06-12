@@ -1,5 +1,6 @@
 use crate::{Color, Painter, Point2D, Rect, TextLayout};
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PaintOp {
     FillRect(Rect, Color),
@@ -19,6 +20,13 @@ pub(crate) enum PaintOp {
         size: f32,
         color: Color,
         width: f32,
+    },
+    FillSvgPath {
+        d: String,
+        top_left: Point2D,
+        size: f32,
+        viewbox: f32,
+        color: Color,
     },
     FillDropShadow(Rect, f32, f32, Color),
     FillOval(Rect, Color),
@@ -102,6 +110,16 @@ impl Painter for CapturePainter {
             size,
             color,
             width,
+        });
+    }
+
+    fn fill_svg_path(&mut self, d: &str, top_left: Point2D, size: f32, viewbox: f32, color: Color) {
+        self.ops.push(PaintOp::FillSvgPath {
+            d: d.to_owned(),
+            top_left,
+            size,
+            viewbox,
+            color,
         });
     }
 

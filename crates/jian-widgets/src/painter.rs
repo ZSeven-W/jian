@@ -139,7 +139,7 @@ pub trait Painter {
     }
 
     fn fill_svg_path_in_rect(&mut self, d: &str, rect: Rect, color: Color) {
-        self.fill_svg_path(d, rect.origin, 1.0, 1.0, color);
+        self.fill_svg_path(d, rect.origin, rect.size.x.max(rect.size.y), 1.0, color);
     }
 
     fn stroke_svg_path_in_rect(&mut self, d: &str, rect: Rect, color: Color, width: f32) {
@@ -318,5 +318,33 @@ pub trait Painter {
     ) -> f32 {
         let _ = italic;
         self.measure_text_weighted(text, font_size, weight)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{CapturePainter, PaintOp};
+
+    #[test]
+    fn fill_svg_path_in_rect_forwards_destination_extent_to_scalar_fallback() {
+        let mut p = CapturePainter::default();
+        let rect = Rect::xywh(2.0, 3.0, 12.0, 18.0);
+
+        p.fill_svg_path_in_rect("M0 0h1v1z", rect, Color::RED);
+
+        assert!(matches!(
+            p.ops.as_slice(),
+            [PaintOp::FillSvgPath {
+                top_left,
+                size,
+                viewbox,
+                color,
+                ..
+            }] if *top_left == rect.origin
+                && *size == rect.size.y
+                && *viewbox == 1.0
+                && *color == Color::RED
+        ));
     }
 }

@@ -41,7 +41,39 @@ impl TextInputView<'_> {
             );
         }
 
-        if text.is_empty() {
+        let composition = self.state.composition().filter(|c| !c.text.is_empty());
+
+        if let Some(composition) = composition {
+            let caret = self.safe_caret();
+            let prefix = &text[..caret];
+            let suffix = &text[caret..];
+            let mut x = base_x;
+            if !prefix.is_empty() {
+                self.draw_text(p, prefix, Point2D::new(x, text_y), font_size, t.foreground);
+                x += p.measure_text(prefix, font_size);
+            }
+
+            self.draw_text(
+                p,
+                &composition.text,
+                Point2D::new(x, text_y),
+                font_size,
+                t.foreground,
+            );
+            let composition_w = p.measure_text(&composition.text, font_size).max(1.0);
+            let underline_y = text_y + font_size + 2.0;
+            p.stroke_line(
+                Point2D::new(x, underline_y),
+                Point2D::new(x + composition_w, underline_y),
+                t.foreground,
+                1.0,
+            );
+            x += composition_w;
+
+            if !suffix.is_empty() {
+                self.draw_text(p, suffix, Point2D::new(x, text_y), font_size, t.foreground);
+            }
+        } else if text.is_empty() {
             if !self.placeholder.is_empty() {
                 self.draw_text(
                     p,
@@ -61,27 +93,11 @@ impl TextInputView<'_> {
             );
         }
 
-        if let Some(composition) = self.state.composition() {
-            if !composition.text.is_empty() {
-                let caret_x = base_x + p.measure_text(&text[..self.safe_caret()], font_size);
-                let origin = Point2D::new(caret_x, text_y);
-                self.draw_text(p, &composition.text, origin, font_size, t.foreground);
-                let width = p.measure_text(&composition.text, font_size).max(1.0);
-                let underline_y = text_y + font_size + 2.0;
-                p.stroke_line(
-                    Point2D::new(caret_x, underline_y),
-                    Point2D::new(caret_x + width, underline_y),
-                    t.foreground,
-                    1.0,
-                );
-            }
-        }
-
         if self.focused
             && self.state.highlight_range().is_none()
             && self.state.caret_visible(self.now_ms)
         {
-            let caret_x = base_x + p.measure_text(&text[..self.safe_caret()], font_size);
+            let caret_x = self.visual_caret_x(p, base_x, font_size);
             let caret_h = font_size + 3.0;
             p.fill_rect(
                 Rect::xywh(
@@ -97,9 +113,15 @@ impl TextInputView<'_> {
         p.restore();
     }
 
-    pub fn byte_offset_at(&self, p: &mut dyn Painter, rect: Rect, point: Point2D) -> usize {
+    pub fn byte_offset_at(
+        &self,
+        p: &mut dyn Painter,
+        rect: Rect,
+        point: Point2D,
+        t: &Tokens,
+    ) -> usize {
         let text = self.state.text();
-        let font_size = self.resolved_font_size(&Tokens::default());
+        let font_size = self.resolved_font_size(t);
         let pad_x = self.resolved_pad_x();
         let shift = self.horizontal_shift(p, rect, font_size, pad_x);
         let target_x = point.x - (rect.origin.x + pad_x - shift);
@@ -134,10 +156,25 @@ impl TextInputView<'_> {
     }
 
     fn horizontal_shift(&self, p: &mut dyn Painter, rect: Rect, font_size: f32, pad_x: f32) -> f32 {
-        let text = self.state.text();
-        let caret_px = p.measure_text(&text[..self.safe_caret()], font_size);
+        let caret_px = self.visual_caret_x(p, 0.0, font_size);
         let visible_w = (rect.size.x - 2.0 * pad_x).max(0.0);
         (caret_px - visible_w).max(0.0)
+    }
+
+    fn visual_caret_x(&self, p: &mut dyn Painter, base_x: f32, font_size: f32) -> f32 {
+        let text = self.state.text();
+        let caret = self.safe_caret();
+        let mut x = base_x + p.measure_text(&text[..caret], font_size);
+        if let Some(composition) = self.state.composition() {
+            if !composition.text.is_empty() {
+                let cursor = jian_core::text_input::prev_char_boundary(
+                    &composition.text,
+                    composition.cursor,
+                );
+                x += p.measure_text(&composition.text[..cursor], font_size);
+            }
+        }
+        x
     }
 
     fn safe_caret(&self) -> usize {
@@ -230,6 +267,39 @@ mod tests {
     }
 
     #[test]
+    fn ime_composition_splits_prefix_preedit_and_suffix() {
+        let mut state = jian_core::text_input::TextInputState::with_text("ab");
+        state.set_caret(1, 0);
+        state.set_composition("中", "中".len(), 0);
+        let view = TextInputView {
+            state: &state,
+            placeholder: "",
+            focused: true,
+            font_size: 10.0,
+            now_ms: 0,
+            pad_x: 8.0,
+        };
+        let t = Tokens::dark();
+        let mut p = CapturePainter::default();
+
+        view.paint(&mut p, Rect::xywh(0.0, 0.0, 120.0, 30.0), &t);
+
+        let texts: Vec<_> = p
+            .texts()
+            .map(|(content, origin, _)| (content.to_owned(), origin.x))
+            .collect();
+        assert_eq!(
+            texts
+                .iter()
+                .map(|(content, _)| content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "中", "b"]
+        );
+        assert!(texts[0].1 < texts[1].1);
+        assert!(texts[1].1 < texts[2].1);
+    }
+
+    #[test]
     fn byte_offset_at_uses_measured_character_midpoints() {
         let state = jian_core::text_input::TextInputState::with_text("abcd");
         let view = TextInputView {
@@ -244,8 +314,37 @@ mod tests {
         let point = Point2D::new(8.0 + 5.5 + 5.5 + 2.0, 10.0);
 
         assert_eq!(
-            view.byte_offset_at(&mut p, Rect::xywh(0.0, 0.0, 120.0, 30.0), point),
+            view.byte_offset_at(
+                &mut p,
+                Rect::xywh(0.0, 0.0, 120.0, 30.0),
+                point,
+                &Tokens::dark()
+            ),
             2
+        );
+    }
+
+    #[test]
+    fn byte_offset_at_uses_supplied_density_font_size() {
+        let state = jian_core::text_input::TextInputState::with_text("ab");
+        let view = TextInputView {
+            state: &state,
+            placeholder: "",
+            focused: true,
+            font_size: 0.0,
+            now_ms: 0,
+            pad_x: 8.0,
+        };
+        let touch = Tokens {
+            density: crate::Density::Touch,
+            ..Tokens::dark()
+        };
+        let mut p = CapturePainter::default();
+        let point = Point2D::new(8.0 + 11.0, 10.0);
+
+        assert_eq!(
+            view.byte_offset_at(&mut p, Rect::xywh(0.0, 0.0, 120.0, 30.0), point, &touch),
+            1
         );
     }
 }

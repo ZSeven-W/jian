@@ -83,10 +83,14 @@ impl Button<'_> {
     }
 
     fn colors(&self, t: &Tokens) -> (Option<Color>, Option<Color>, Color) {
-        let feedback = if self.pressed {
-            Some(t.button_hover.with_alpha(t.button_hover.a * 1.8))
-        } else if self.hovered {
-            Some(t.button_hover)
+        let feedback = if self.enabled {
+            if self.pressed {
+                Some(t.button_hover.with_alpha(t.button_hover.a * 1.8))
+            } else if self.hovered {
+                Some(t.button_hover)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -156,6 +160,26 @@ mod tests {
         assert_eq!(p.fills_with(t.primary.with_alpha(0.5)), 1);
         let (_, _, color) = p.texts().next().expect("button label should be painted");
         assert_eq!(color, t.primary_foreground.with_alpha(0.5).to_jian());
+    }
+
+    #[test]
+    fn disabled_ghost_suppresses_hover_feedback() {
+        let t = Tokens::dark();
+        let b = Button {
+            label: "Save",
+            icon_d: None,
+            variant: ButtonVariant::Ghost,
+            enabled: false,
+            hovered: true,
+            pressed: true,
+            font_size: 13.0,
+        };
+        let mut p = CapturePainter::default();
+
+        b.paint(&mut p, Rect::xywh(0.0, 0.0, 90.0, 30.0), &t);
+
+        assert_eq!(p.fills_with(t.button_hover), 0);
+        assert_eq!(p.fills_with(t.button_hover.with_alpha(0.5)), 0);
     }
 
     #[test]

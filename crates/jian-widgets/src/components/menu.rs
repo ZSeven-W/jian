@@ -33,13 +33,14 @@ impl Menu<'_> {
         let rect = Self::menu_rect(anchor, viewport, self.items.len(), t);
         let row_h = t.density.row_height();
         let font_size = t.density.font_size();
+        let visible = visible_row_capacity(self.items.len(), rect.size.y, row_h);
 
         p.fill_round_rect(rect, 6.0, t.popover);
         p.stroke_round_rect(rect, 6.0, t.border, 1.0);
         p.save();
         p.clip_rect(rect);
 
-        for (index, item) in self.items.iter().enumerate() {
+        for (index, item) in self.items.iter().take(visible).enumerate() {
             let row = Rect::xywh(
                 rect.origin.x,
                 rect.origin.y + index as f32 * row_h,
@@ -89,7 +90,7 @@ impl Menu<'_> {
 
     pub fn menu_rect(anchor: Point2D, viewport: Rect, items: usize, t: &Tokens) -> Rect {
         let width = MENU_WIDTH.min(viewport.size.x);
-        let height = items as f32 * t.density.row_height();
+        let height = (items as f32 * t.density.row_height()).min(viewport.size.y.max(0.0));
         let viewport_right = viewport.origin.x + viewport.size.x;
         let viewport_bottom = viewport.origin.y + viewport.size.y;
         let x = if anchor.x + width > viewport_right {
@@ -128,13 +129,21 @@ impl Menu<'_> {
         if row_h <= 0.0 {
             return MenuHit::Inside;
         }
+        let visible = visible_row_capacity(items, rect.size.y, row_h);
         let row = ((point.y - rect.origin.y) / row_h).floor().max(0.0) as usize;
-        if row < items {
+        if row < visible {
             MenuHit::Row(row)
         } else {
             MenuHit::Inside
         }
     }
+}
+
+fn visible_row_capacity(row_count: usize, menu_height: f32, row_h: f32) -> usize {
+    if row_count == 0 || row_h <= 0.0 || menu_height <= 0.0 {
+        return 0;
+    }
+    ((menu_height / row_h).ceil() as usize).min(row_count)
 }
 
 #[cfg(test)]
@@ -151,6 +160,50 @@ mod tests {
         assert!(rect.origin.x < 230.0);
         assert!(rect.origin.y < 150.0);
         assert_eq!(rect.size.y, 3.0 * t.density.row_height());
+    }
+
+    #[test]
+    fn menu_height_is_capped_to_viewport_and_paints_visible_rows() {
+        let t = Tokens::dark();
+        let viewport = Rect::xywh(0.0, 0.0, 240.0, t.density.row_height() * 2.0);
+        let labels: Vec<_> = (0..6).map(|i| format!("Item {i}")).collect();
+        let items: Vec<_> = labels
+            .iter()
+            .map(|label| MenuItem {
+                label,
+                icon_d: None,
+                danger: false,
+                disabled: false,
+                separator_above: false,
+            })
+            .collect();
+        let state = MenuState::default();
+        let menu = Menu {
+            state: &state,
+            items: &items,
+        };
+        let mut p = CapturePainter::default();
+
+        let rect = Menu::menu_rect(Point2D::new(20.0, 20.0), viewport, items.len(), &t);
+        menu.paint(&mut p, Point2D::new(20.0, 20.0), viewport, &t);
+
+        assert_eq!(rect.size.y, viewport.size.y);
+        assert!(rect.origin.y + rect.size.y <= viewport.origin.y + viewport.size.y);
+        let painted: Vec<_> = p
+            .texts()
+            .map(|(content, _, _)| content.to_owned())
+            .collect();
+        assert_eq!(painted, vec!["Item 0", "Item 1"]);
+        assert_eq!(
+            Menu::hit(
+                Point2D::new(20.0, 20.0),
+                viewport,
+                items.len(),
+                Point2D::new(rect.origin.x + 4.0, rect.origin.y + rect.size.y - 1.0),
+                &t,
+            ),
+            MenuHit::Row(1)
+        );
     }
 
     #[test]
