@@ -1,6 +1,7 @@
 //! Reusable immediate-mode components.
 
 pub mod button;
+pub mod dialog;
 pub mod menu;
 pub mod scroll_area;
 pub mod select;
