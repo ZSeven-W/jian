@@ -127,6 +127,10 @@ impl TextInputState {
     }
 
     pub fn select_all(&mut self) {
+        self.selection = Selection {
+            anchor: 0,
+            focus: self.text.len(),
+        };
         self.select_all = true;
     }
 
@@ -307,6 +311,20 @@ mod tests {
         s.select_all();
         s.backspace(0);
         assert_eq!(s.text(), "");
+    }
+
+    #[test]
+    fn select_all_then_plain_arrows_collapse_to_edges() {
+        let mut s = TextInputState::with_text("hello");
+        s.select_all();
+        s.move_left(false, 0);
+        assert_eq!(s.caret(), 0);
+        assert_eq!(s.highlight_range(), None);
+
+        s.select_all();
+        s.move_right(false, 0);
+        assert_eq!(s.caret(), "hello".len());
+        assert_eq!(s.highlight_range(), None);
     }
 
     #[test]
