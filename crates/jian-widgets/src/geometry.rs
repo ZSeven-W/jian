@@ -44,6 +44,21 @@ pub struct Color {
 }
 
 impl Color {
+    /// Construct an opaque color from RGB byte components.
+    pub const fn rgb_u8(r: u8, g: u8, b: u8) -> Self {
+        Self::rgba_u8(r, g, b, 1.0)
+    }
+
+    /// Construct a color from RGB byte components plus a 0.0..=1.0 alpha.
+    pub const fn rgba_u8(r: u8, g: u8, b: u8, a: f32) -> Self {
+        Self {
+            r: r as f32 / 255.0,
+            g: g as f32 / 255.0,
+            b: b as f32 / 255.0,
+            a,
+        }
+    }
+
     pub const RED: Self = Self {
         r: 1.0,
         g: 0.0,
@@ -117,6 +132,20 @@ mod tests {
     fn with_alpha_overrides_only_alpha() {
         let c = Color::RED.with_alpha(0.5);
         assert_eq!((c.r, c.g, c.b, c.a), (1.0, 0.0, 0.0, 0.5));
+    }
+
+    #[test]
+    fn byte_constructors_normalize_channels() {
+        assert_eq!(
+            Color::rgb_u8(255, 0, 128),
+            Color {
+                r: 1.0,
+                g: 0.0,
+                b: 128.0 / 255.0,
+                a: 1.0,
+            }
+        );
+        assert_eq!(Color::rgba_u8(0, 64, 255, 0.25).a, 0.25);
     }
 
     #[test]
