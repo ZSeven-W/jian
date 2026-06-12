@@ -27,6 +27,7 @@ pub mod logic;
 pub mod render;
 pub mod runtime;
 pub mod scene;
+pub mod scroll;
 pub mod signal;
 pub mod spatial;
 pub mod startup;
