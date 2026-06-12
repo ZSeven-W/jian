@@ -31,6 +31,7 @@ pub mod signal;
 pub mod spatial;
 pub mod startup;
 pub mod state;
+pub mod text_input;
 pub mod value;
 pub mod viewport;
 
