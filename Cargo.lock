@@ -1793,6 +1793,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glam"
+version = "0.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8babf46d4c1c9d92deac9f7be466f76dfc4482b6452fc5024b5e8daf6ffeb3ee"
+
+[[package]]
 name = "glib"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2485,6 +2491,14 @@ dependencies = [
  "raw-window-handle",
  "serde_json",
  "skia-safe",
+]
+
+[[package]]
+name = "jian-widgets"
+version = "0.0.1"
+dependencies = [
+ "glam",
+ "jian-core",
 ]
 
 [[package]]
