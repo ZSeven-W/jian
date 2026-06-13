@@ -8,6 +8,7 @@ pub(crate) enum PaintOp {
     Text {
         content: String,
         origin: Point2D,
+        run_origin: Point2D,
         color: jian_core::scene::Color,
     },
     ClipRect(Rect),
@@ -58,7 +59,15 @@ impl CapturePainter {
                 content,
                 origin,
                 color,
+                ..
             } => Some((content.as_str(), *origin, *color)),
+            _ => None,
+        })
+    }
+
+    pub(crate) fn text_run_origins(&self) -> impl Iterator<Item = Point2D> + '_ {
+        self.ops.iter().filter_map(|op| match op {
+            PaintOp::Text { run_origin, .. } => Some(*run_origin),
             _ => None,
         })
     }
@@ -81,6 +90,7 @@ impl Painter for CapturePainter {
             self.ops.push(PaintOp::Text {
                 content: run.content.clone(),
                 origin,
+                run_origin: Point2D::new(run.origin.x, run.origin.y),
                 color: run.color,
             });
         }

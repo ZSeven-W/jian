@@ -80,8 +80,13 @@ impl Menu<'_> {
                 text_x += 26.0;
             }
             let origin = Point2D::new(text_x, row.origin.y + (row_h - font_size) / 2.0);
-            let layout =
-                TextLayout::single_run(item.label, FONT_FAMILY, font_size, color.to_jian(), origin);
+            let layout = TextLayout::single_run(
+                item.label,
+                FONT_FAMILY,
+                font_size,
+                color.to_jian(),
+                Point2D::new(0.0, 0.0),
+            );
             p.draw_text(&layout, origin);
         }
 

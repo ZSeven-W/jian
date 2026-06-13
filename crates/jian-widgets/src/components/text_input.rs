@@ -150,8 +150,13 @@ impl TextInputView<'_> {
         font_size: f32,
         color: crate::Color,
     ) {
-        let layout =
-            TextLayout::single_run(content, FONT_FAMILY, font_size, color.to_jian(), origin);
+        let layout = TextLayout::single_run(
+            content,
+            FONT_FAMILY,
+            font_size,
+            color.to_jian(),
+            Point2D::new(0.0, 0.0),
+        );
         p.draw_text(&layout, origin);
     }
 

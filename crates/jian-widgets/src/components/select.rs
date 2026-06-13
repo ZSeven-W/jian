@@ -180,8 +180,13 @@ impl Select<'_> {
                 row_rect.origin.x + 10.0,
                 row_rect.origin.y + (row_h - font_size) / 2.0,
             );
-            let layout =
-                TextLayout::single_run(item.label, FONT_FAMILY, font_size, color.to_jian(), origin);
+            let layout = TextLayout::single_run(
+                item.label,
+                FONT_FAMILY,
+                font_size,
+                color.to_jian(),
+                Point2D::new(0.0, 0.0),
+            );
             p.draw_text(&layout, origin);
 
             if item.selected {

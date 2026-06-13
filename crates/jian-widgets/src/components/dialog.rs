@@ -38,7 +38,7 @@ impl Dialog<'_> {
             FONT_FAMILY,
             16.0,
             t.card_foreground.to_jian(),
-            title_origin,
+            Point2D::new(0.0, 0.0),
         )
         .with_font_weight(600);
         p.draw_text(&title, title_origin);

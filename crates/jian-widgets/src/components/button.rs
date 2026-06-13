@@ -72,7 +72,7 @@ impl Button<'_> {
                 FONT_FAMILY,
                 font_size,
                 text_color.to_jian(),
-                text_origin,
+                Point2D::new(0.0, 0.0),
             );
             p.draw_text(&layout, text_origin);
         }
