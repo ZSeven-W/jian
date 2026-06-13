@@ -11,7 +11,7 @@ pub struct MenuItem<'a> {
     pub separator_above: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct MenuState {
     pub hover: Option<usize>,
 }
