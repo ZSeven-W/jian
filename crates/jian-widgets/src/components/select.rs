@@ -4,7 +4,7 @@ pub const MAX_VISIBLE_ROWS: usize = 8;
 const FONT_FAMILY: &str = "Inter";
 const CHECK_D: &str = "M20 6 9 17l-5-5";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct SelectState {
     pub open: bool,
     pub hover: Option<usize>,
