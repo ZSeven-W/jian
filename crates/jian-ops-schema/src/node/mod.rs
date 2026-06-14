@@ -1,18 +1,27 @@
 pub mod base;
+pub mod checkbox;
 pub mod container;
-
 pub mod ellipse;
 pub mod frame;
 pub mod icon_font;
 pub mod image;
 pub mod line;
+pub mod number_input;
 pub mod path;
 pub mod polygon;
+pub mod progress;
+pub mod radio_group;
 pub mod ref_node;
+pub mod select;
+pub mod slider;
+pub mod switch;
+pub mod tabs;
 pub mod text;
+pub mod text_area;
 pub mod text_input;
 
 pub use base::{BoolOrExpression, NumberOrExpression, PenNodeBase};
+pub use checkbox::CheckboxNode;
 pub use container::{
     AlignItems, ContainerProps, CornerRadius, JustifyContent, LayoutMode, Padding,
 };
@@ -22,13 +31,21 @@ pub use frame::{FrameNode, GroupNode, RectangleNode};
 pub use icon_font::IconFontNode;
 pub use image::{ImageFitMode, ImageNode};
 pub use line::LineNode;
+pub use number_input::NumberInputNode;
 pub use path::{PathNode, PenPathAnchor, PenPathHandle, PenPathPointType};
 pub use polygon::PolygonNode;
+pub use progress::ProgressNode;
+pub use radio_group::RadioGroupNode;
 pub use ref_node::{DescendantOverrides, RefNode};
+pub use select::{SelectNode, SelectOption};
+pub use slider::SliderNode;
+pub use switch::SwitchNode;
+pub use tabs::TabsNode;
 pub use text::{
     FontStyleKind as TextFontStyle, FontWeight, TextAlign, TextAlignVertical, TextContent,
     TextGrowth, TextNode,
 };
+pub use text_area::TextAreaNode;
 pub use text_input::TextInputNode;
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +68,15 @@ pub enum PenNode {
     TextInput(TextInputNode),
     Image(ImageNode),
     IconFont(IconFontNode),
+    TextArea(TextAreaNode),
+    Select(SelectNode),
+    Switch(SwitchNode),
+    Checkbox(CheckboxNode),
+    Slider(SliderNode),
+    RadioGroup(RadioGroupNode),
+    NumberInput(NumberInputNode),
+    Progress(ProgressNode),
+    Tabs(TabsNode),
     Ref(RefNode),
 }
 
@@ -82,6 +108,15 @@ impl PenNode {
             PenNode::TextInput(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
             PenNode::Image(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
             PenNode::IconFont(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::TextArea(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Select(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Switch(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Checkbox(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Slider(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::RadioGroup(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::NumberInput(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Progress(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
+            PenNode::Tabs(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
             PenNode::Ref(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
         }
     }
@@ -149,6 +184,62 @@ mod tests {
             }
             other => panic!("expected TextInput, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn widget_nodes_deserialize_by_snake_case_tag() {
+        let n: PenNode =
+            serde_json::from_str(r#"{"type":"text_area","id":"a","maxVisibleLines":4}"#).unwrap();
+        assert!(matches!(n, PenNode::TextArea(_)));
+        let n: PenNode = serde_json::from_str(
+            r#"{"type":"select","id":"s","options":[{"value":"a","label":"A"}]}"#,
+        )
+        .unwrap();
+        let PenNode::Select(sel) = &n else { panic!() };
+        assert_eq!(sel.options.as_ref().unwrap()[0].value, "a");
+        let n: PenNode =
+            serde_json::from_str(r#"{"type":"switch","id":"w","checked":true}"#).unwrap();
+        assert!(matches!(n, PenNode::Switch(_)));
+        let n: PenNode = serde_json::from_str(r#"{"type":"checkbox","id":"c"}"#).unwrap();
+        assert!(matches!(n, PenNode::Checkbox(_)));
+        let n: PenNode = serde_json::from_str(
+            r#"{"type":"slider","id":"l","min":0,"max":100,"step":5,"value":40}"#,
+        )
+        .unwrap();
+        assert!(matches!(n, PenNode::Slider(_)));
+        let n: PenNode = serde_json::from_str(
+            r#"{"type":"radio_group","id":"rg","value":"a","options":[{"value":"a","label":"A"}]}"#,
+        )
+        .unwrap();
+        let PenNode::RadioGroup(rg) = &n else {
+            panic!()
+        };
+        assert_eq!(rg.options.as_ref().unwrap()[0].label, "A");
+        let n: PenNode = serde_json::from_str(
+            r#"{"type":"number_input","id":"ni","min":0,"max":10,"step":1,"value":3}"#,
+        )
+        .unwrap();
+        assert!(matches!(n, PenNode::NumberInput(_)));
+        let n: PenNode =
+            serde_json::from_str(r#"{"type":"progress","id":"pg","value":40,"max":100}"#).unwrap();
+        assert!(matches!(n, PenNode::Progress(_)));
+        let n: PenNode = serde_json::from_str(
+            r#"{"type":"tabs","id":"tb","value":"one","tabs":[{"value":"one","label":"One"}],
+                "children":[{"type":"frame","id":"panel1"}]}"#,
+        )
+        .unwrap();
+        let PenNode::Tabs(tb) = &n else { panic!() };
+        assert_eq!(tb.children.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn text_input_accepts_states_and_corner_radius() {
+        let n: PenNode = serde_json::from_str(
+            r#"{"type":"text_input","id":"i","cornerRadius":8,"states":{"focused":{"opacity":1.0}}}"#,
+        )
+        .unwrap();
+        let PenNode::TextInput(ti) = &n else { panic!() };
+        assert!(ti.states.is_some());
     }
 
     #[test]

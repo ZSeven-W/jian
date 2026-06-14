@@ -171,6 +171,15 @@ fn node_base(
         PenNode::Line(l) => &l.base,
         PenNode::Path(p) => &p.base,
         PenNode::Polygon(p) => &p.base,
+        PenNode::TextArea(t) => &t.base,
+        PenNode::Select(s) => &s.base,
+        PenNode::Switch(s) => &s.base,
+        PenNode::Checkbox(c) => &c.base,
+        PenNode::Slider(s) => &s.base,
+        PenNode::RadioGroup(r) => &r.base,
+        PenNode::NumberInput(n) => &n.base,
+        PenNode::Progress(p) => &p.base,
+        PenNode::Tabs(t) => &t.base,
         _ => return None,
     })
 }
@@ -184,6 +193,15 @@ fn leaf_size(
         PenNode::TextInput(t) => (t.width.as_ref(), t.height.as_ref()),
         PenNode::IconFont(i) => (i.width.as_ref(), i.height.as_ref()),
         PenNode::Image(i) => (i.width.as_ref(), i.height.as_ref()),
+        PenNode::TextArea(t) => (t.width.as_ref(), t.height.as_ref()),
+        PenNode::Select(s) => (s.width.as_ref(), s.height.as_ref()),
+        PenNode::Switch(s) => (s.width.as_ref(), s.height.as_ref()),
+        PenNode::Checkbox(c) => (c.width.as_ref(), c.height.as_ref()),
+        PenNode::Slider(s) => (s.width.as_ref(), s.height.as_ref()),
+        PenNode::RadioGroup(r) => (r.width.as_ref(), r.height.as_ref()),
+        PenNode::NumberInput(n) => (n.width.as_ref(), n.height.as_ref()),
+        PenNode::Progress(p) => (p.width.as_ref(), p.height.as_ref()),
+        PenNode::Tabs(t) => (t.width.as_ref(), t.height.as_ref()),
         _ => (None, None),
     }
 }

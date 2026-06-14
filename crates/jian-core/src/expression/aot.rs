@@ -311,6 +311,15 @@ fn node_expression_surface(
         PenNode::TextInput(n) => surface!(n),
         PenNode::Image(n) => surface!(n),
         PenNode::IconFont(n) => surface!(n),
+        PenNode::TextArea(n) => surface!(n),
+        PenNode::Select(n) => surface!(n),
+        PenNode::Switch(n) => surface!(n),
+        PenNode::Checkbox(n) => surface!(n),
+        PenNode::Slider(n) => surface!(n),
+        PenNode::RadioGroup(n) => surface!(n),
+        PenNode::NumberInput(n) => surface!(n),
+        PenNode::Progress(n) => surface!(n),
+        PenNode::Tabs(n) => surface!(n, with_children),
     }
 }
 

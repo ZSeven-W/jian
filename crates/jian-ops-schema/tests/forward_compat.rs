@@ -28,12 +28,13 @@ fn future_major_rejected() {
 }
 
 #[test]
-fn future_minor_accepted_with_warning_absent() {
-    // formatVersion "1.5" still has major=1, so it loads; no future-version warning
-    // since future *minors* are expected to be backward-compatible.
+fn future_minor_accepted_with_warning() {
+    // formatVersion "1.5" still has major=1, so it loads (not rejected),
+    // but a newer minor than this crate's current (1.1) may carry node
+    // types or fields we silently drop — so it must warn, not stay silent.
     let src = r#"{"formatVersion":"1.5","version":"1.5.0","children":[]}"#;
     let r = load_str(src).unwrap();
-    assert!(!r
+    assert!(r
         .warnings
         .iter()
         .any(|w| matches!(w, LoadWarning::FutureFormatVersion { .. })));

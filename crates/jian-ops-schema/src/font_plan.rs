@@ -195,6 +195,55 @@ fn scan_node(node: &PenNode, inherited_family: Option<&str>, plan: &mut FontPlan
                 plan.record_run(inherited_family, v);
             }
         }
+        PenNode::TextArea(ta) => {
+            if let Some(p) = &ta.placeholder {
+                plan.record_run(inherited_family, p);
+            }
+            if let Some(v) = &ta.value {
+                plan.record_run(inherited_family, v);
+            }
+        }
+        PenNode::Select(s) => {
+            if let Some(p) = &s.placeholder {
+                plan.record_run(inherited_family, p);
+            }
+            if let Some(opts) = &s.options {
+                for o in opts {
+                    plan.record_run(inherited_family, &o.label);
+                }
+            }
+        }
+        PenNode::RadioGroup(rg) => {
+            if let Some(opts) = &rg.options {
+                for o in opts {
+                    plan.record_run(inherited_family, &o.label);
+                }
+            }
+        }
+        PenNode::NumberInput(ni) => {
+            if let Some(p) = &ni.placeholder {
+                plan.record_run(inherited_family, p);
+            }
+        }
+        PenNode::Checkbox(cb) => {
+            if let Some(l) = &cb.label {
+                plan.record_run(inherited_family, l);
+            }
+        }
+        PenNode::Tabs(t) => {
+            // Tab-bar labels contribute glyphs; panels are scanned like
+            // any container's children.
+            if let Some(tabs) = &t.tabs {
+                for tab in tabs {
+                    plan.record_run(inherited_family, &tab.label);
+                }
+            }
+            if let Some(children) = &t.children {
+                for c in children {
+                    scan_node(c, inherited_family, plan);
+                }
+            }
+        }
         PenNode::Frame(f) => {
             if let Some(children) = &f.children {
                 for c in children {

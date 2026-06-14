@@ -233,10 +233,34 @@ fn is_focusable(doc: &RuntimeDocument, key: NodeKey) -> bool {
     if let Some(b) = gestures.and_then(|g| g.focusable) {
         return b;
     }
+    // Interactive widget node types are focusable by type — no
+    // `semantics.role` needed (the node type already carries the
+    // meaning). `progress` is display-only and excluded.
+    if is_interactive_widget(schema) {
+        return true;
+    }
     // Otherwise consult semantics.role for the interactive defaults.
     matches!(
         semantics.and_then(|s| s.role),
         Some(SemanticRole::Button | SemanticRole::Link | SemanticRole::Input)
+    )
+}
+
+/// Widget node variants that take keyboard focus (the whole family
+/// except display-only `progress`).
+fn is_interactive_widget(node: &jian_ops_schema::node::PenNode) -> bool {
+    use jian_ops_schema::node::PenNode;
+    matches!(
+        node,
+        PenNode::TextInput(_)
+            | PenNode::TextArea(_)
+            | PenNode::Select(_)
+            | PenNode::Switch(_)
+            | PenNode::Checkbox(_)
+            | PenNode::Slider(_)
+            | PenNode::RadioGroup(_)
+            | PenNode::NumberInput(_)
+            | PenNode::Tabs(_)
     )
 }
 
@@ -396,6 +420,38 @@ mod tests {
             .map(|k| crate::document::tree::node_schema_id(&rt_doc.tree.nodes[*k].schema))
             .collect();
         assert_eq!(ids, vec!["btn", "explicit", "inner-link"]);
+    }
+
+    #[test]
+    fn widget_node_types_are_focusable_by_type() {
+        use crate::document::loader;
+        use jian_ops_schema::document::PenDocument;
+        // No semantics/gestures on any of these — they enter the chain
+        // purely by node type. `progress` (display-only) stays out.
+        let doc: PenDocument = serde_json::from_str(
+            r#"{
+              "version":"1.1","formatVersion":"1.1",
+              "children":[
+                { "type":"frame","id":"root","children":[
+                  { "type":"text_input","id":"ti" },
+                  { "type":"switch","id":"sw" },
+                  { "type":"slider","id":"sl" },
+                  { "type":"tabs","id":"tb" },
+                  { "type":"progress","id":"pg" }
+                ]}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let state = std::rc::Rc::new(crate::state::StateGraph::new(std::rc::Rc::new(
+            crate::signal::scheduler::Scheduler::new(),
+        )));
+        let rt_doc = loader::build(doc, &state).unwrap();
+        let ids: Vec<&str> = collect_focus_chain(&rt_doc)
+            .iter()
+            .map(|k| crate::document::tree::node_schema_id(&rt_doc.tree.nodes[*k].schema))
+            .collect();
+        assert_eq!(ids, vec!["ti", "sw", "sl", "tb"]);
     }
 
     #[test]

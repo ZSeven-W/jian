@@ -7,6 +7,7 @@
 pub mod commands;
 pub mod paint;
 pub mod scene;
+pub mod widget_style;
 
 pub use commands::{affine_to_array, RenderCommand};
 pub use paint::{

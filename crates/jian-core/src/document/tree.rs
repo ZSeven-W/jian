@@ -91,6 +91,15 @@ pub fn node_schema_id(n: &PenNode) -> &str {
         PenNode::TextInput(x) => &x.base.id,
         PenNode::Image(x) => &x.base.id,
         PenNode::IconFont(x) => &x.base.id,
+        PenNode::TextArea(x) => &x.base.id,
+        PenNode::Select(x) => &x.base.id,
+        PenNode::Switch(x) => &x.base.id,
+        PenNode::Checkbox(x) => &x.base.id,
+        PenNode::Slider(x) => &x.base.id,
+        PenNode::RadioGroup(x) => &x.base.id,
+        PenNode::NumberInput(x) => &x.base.id,
+        PenNode::Progress(x) => &x.base.id,
+        PenNode::Tabs(x) => &x.base.id,
         PenNode::Ref(x) => &x.base.id,
     }
 }
@@ -101,6 +110,7 @@ fn take_children(n: &PenNode) -> Vec<PenNode> {
         PenNode::Frame(x) => x.children.clone().unwrap_or_default(),
         PenNode::Group(x) => x.children.clone().unwrap_or_default(),
         PenNode::Rectangle(x) => x.children.clone().unwrap_or_default(),
+        PenNode::Tabs(x) => x.children.clone().unwrap_or_default(),
         PenNode::Ref(x) => x.children.clone().unwrap_or_default(),
         _ => Vec::new(),
     }

@@ -54,6 +54,12 @@ export type BoolOrExpression = boolean | string;
 
 export type Capability = "storage" | "network" | "camera" | "microphone" | "location" | "notifications" | "clipboard" | "biometric" | "file_system" | "haptic";
 
+/**
+ * Checkbox with an optional adjacent `label`. `checked` two-way binds
+ * via `bindings.bind:value`.
+ */
+export type CheckboxNode = { width: SizingBehavior | null, height: SizingBehavior | null, checked: BoolOrExpression | null, label: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+
 export type CornerRadius = number | [number, number, number, number];
 
 /**
@@ -191,6 +197,17 @@ export type NavigationRoute = { "push": string } | { "replace": string } | { "po
 export type NodeLifecycleHooks = { onMount: Array<Action> | null, onUnmount: Array<Action> | null, };
 
 /**
+ * Numeric input with optional +/- steppers. Precise complement to
+ * `slider`; `value` two-way binds via `bindings.bind:value`. When
+ * omitted, `min`/`max`/`step` default to none/none/1 at runtime.
+ */
+export type NumberInputNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+/**
+ * Placeholder shown when `value` is empty.
+ */
+placeholder: string | null, value: NumberOrExpression | null, min: number | null, max: number | null, step: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+
+/**
  * Opacity can be a number or a `$variable` reference string.
  */
 export type NumberOrExpression = number | string;
@@ -211,7 +228,14 @@ version: string, name: string | null,
 /**
  * Wire shape: axis-name → ordered theme names. Frozen from v0.x.
  */
-themes: { [key in string]?: Array<string> } | null, variables: { [key in string]?: VariableDefinition } | null, pages: Array<PenPage> | null, children: Array<PenNode>, 
+themes: { [key in string]?: Array<string> } | null, variables: { [key in string]?: VariableDefinition } | null, pages: Array<PenPage> | null, 
+/**
+ * Default-on-deserialize so a multi-page document that carries only
+ * `pages` (no top-level `children`) still loads — the TS web app's
+ * whole-document sync (`document.post.ts`) accepts `{version, pages}`
+ * without a `children` array. Always serialized (even empty `[]`).
+ */
+children: Array<PenNode>, 
 /**
  * "1.0" when any v1 extension is present; undefined ⇒ legacy v0.x.
  */
@@ -234,7 +258,7 @@ export type PenFill = { "type": "solid" } & SolidFillBody | { "type": "linear_gr
  * Union of all concrete node types.
  * Tag is the JSON `"type"` field.
  */
-export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "text_input" } & TextInputNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "ref" } & RefNode;
+export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "text_input" } & TextInputNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "text_area" } & TextAreaNode | { "type": "select" } & SelectNode | { "type": "switch" } & SwitchNode | { "type": "checkbox" } & CheckboxNode | { "type": "slider" } & SliderNode | { "type": "radio_group" } & RadioGroupNode | { "type": "number_input" } & NumberInputNode | { "type": "progress" } & ProgressNode | { "type": "tabs" } & TabsNode | { "type": "ref" } & RefNode;
 
 export type PenPage = { id: string, name: string, children: Array<PenNode>, state: { [key in string]?: StateEntry } | null, lifecycle: PageLifecycleHooks | null, };
 
@@ -250,7 +274,25 @@ export type PolygonNode = { polygonCount: number, width: SizingBehavior | null, 
 
 export type PrimitiveType = "int" | "float" | "number" | "string" | "bool" | "array" | "object" | "date";
 
+/**
+ * Progress indicator. Display-only (not focusable/keyboard-driven):
+ * `value` is read from the state graph via `bindings.value`. `max`
+ * defaults to 100; `indeterminate` shows an animated unknown-progress
+ * state and ignores `value`.
+ */
+export type ProgressNode = { width: SizingBehavior | null, height: SizingBehavior | null, value: NumberOrExpression | null, max: number | null, indeterminate: boolean | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+
 export type RadialGradientBody = { cx: number | null, cy: number | null, radius: number | null, stops: Array<GradientStop>, explain: string | null, opacity: number | null, blendMode: BlendMode | null, };
+
+/**
+ * Single-choice radio group. Renders one radio per `option`; the
+ * selected option `value` two-way binds via `bindings.bind:value`.
+ */
+export type RadioGroupNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+/**
+ * Currently selected option `value`.
+ */
+value: string | null, options: Array<SelectOption> | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type RectangleNode = { children: Array<PenNode> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null, cornerRadius: CornerRadius | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, };
 
@@ -270,6 +312,25 @@ params: { [key in string]?: StateType } | null, };
 export type RoutesConfig = { entry: string, routes: { [key in string]?: RouteSpec }, transitions: { [key in string]?: Transition } | null, };
 
 export type ScrollBehavior = "auto" | "contain" | "none";
+
+/**
+ * Dropdown select. The runtime pops an option list; the selected
+ * option `value` two-way binds via `bindings.bind:value`.
+ */
+export type SelectNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+/**
+ * Shown when no option is selected.
+ */
+placeholder: string | null, 
+/**
+ * Currently selected option `value`.
+ */
+value: string | null, options: Array<SelectOption> | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+
+/**
+ * A single dropdown option: the persisted `value` and its display `label`.
+ */
+export type SelectOption = { value: string, label: string, };
 
 export type SemanticAction = { name: string, label: string, handler: Array<Action>, };
 
@@ -315,6 +376,12 @@ export type SizingBehavior = number | SizingKeyword | string;
 
 export type SizingKeyword = "fit_content" | "fill_container";
 
+/**
+ * Range slider. `value` two-way binds via `bindings.bind:value`;
+ * `min`/`max`/`step` default to 0/100/1 at runtime when omitted.
+ */
+export type SliderNode = { width: SizingBehavior | null, height: SizingBehavior | null, min: number | null, max: number | null, step: number | null, value: NumberOrExpression | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+
 export type SolidFillBody = { color: string, explain: string | null, opacity: number | null, blendMode: BlendMode | null, };
 
 export type SplashConfig = { background: string | null, image: string | null, text: string | null, minDurationMs: number | null, };
@@ -334,11 +401,56 @@ export type StrokeJoin = "miter" | "bevel" | "round";
 
 export type StrokeThickness = number | [number, number, number, number] | SidedThickness;
 
+export type StyleOverride = { fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, opacity: number | null, };
+
 export type StyledTextSegment = { text: string, fontFamily: string | null, fontSize: number | null, fontWeight: number | null, fontStyle: FontStyleKind | null, fill: string | null, underline: boolean | null, strikethrough: boolean | null, href: string | null, };
+
+/**
+ * On/off toggle. `checked` two-way binds via `bindings.bind:value`.
+ */
+export type SwitchNode = { width: SizingBehavior | null, height: SizingBehavior | null, checked: BoolOrExpression | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+
+/**
+ * Tabbed panel switcher. Unlike the leaf widgets this is a CONTAINER:
+ * `children[i]` is the panel for `tabs[i]`. The active tab `value`
+ * two-way binds via `bindings.bind:value`; only the active panel is
+ * painted at runtime.
+ */
+export type TabsNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+/**
+ * Tab bar entries; `value` keys the active tab, `label` is shown.
+ */
+tabs: Array<SelectOption> | null, 
+/**
+ * Currently active tab `value`.
+ */
+value: string | null, 
+/**
+ * Panel subtrees, one per tab (parallel to `tabs` by index).
+ */
+children: Array<PenNode> | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type TextAlign = "left" | "center" | "right" | "justify";
 
 export type TextAlignVertical = "top" | "middle" | "bottom";
+
+/**
+ * Multi-line writable text input. Like `text_input` but wraps and
+ * scrolls vertically; two-way binds via `bindings.bind:value`.
+ */
+export type TextAreaNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+/**
+ * Placeholder shown when `value` is empty.
+ */
+placeholder: string | null, 
+/**
+ * Initial value. Two-way binding lives on `bindings.bind:value`.
+ */
+value: string | null, 
+/**
+ * Visible-line window before the content scrolls (chat-style).
+ */
+maxVisibleLines: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type TextContent = string | Array<StyledTextSegment>;
 
@@ -362,7 +474,7 @@ placeholder: string | null,
  * which derive lifts into a `set_*` action and the runtime keeps
  * in sync with the state graph.
  */
-value: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+value: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type TextNode = { width: SizingBehavior | null, height: SizingBehavior | null, content: TextContent, fontFamily: string | null, fontSize: number | null, fontWeight: FontWeight | null, fontStyle: FontStyleKind | null, letterSpacing: number | null, lineHeight: number | null, textAlign: TextAlign | null, textAlignVertical: TextAlignVertical | null, textGrowth: TextGrowth | null, underline: boolean | null, strikethrough: boolean | null, fill: Array<PenFill> | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
@@ -377,3 +489,8 @@ export type VariableKind = "color" | "number" | "boolean" | "string";
 export type VariableScalar = boolean | number | string;
 
 export type VariableValue = VariableScalar | Array<ThemedValue>;
+
+/**
+ * Authored overrides for the four auto-derived interaction states.
+ */
+export type WidgetStates = { hover: StyleOverride | null, pressed: StyleOverride | null, focused: StyleOverride | null, disabled: StyleOverride | null, };

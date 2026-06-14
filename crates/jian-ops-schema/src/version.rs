@@ -1,7 +1,7 @@
 //! Format version negotiation per C1 (backward compat).
 
 /// Current format version this crate understands.
-pub const FORMAT_VERSION_CURRENT: &str = "1.0";
+pub const FORMAT_VERSION_CURRENT: &str = "1.1";
 
 /// Minimum format version this crate can still parse.
 pub const FORMAT_VERSION_MIN: &str = "0.0";

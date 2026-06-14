@@ -1,35 +1,31 @@
-use super::base::PenNodeBase;
+use super::base::{NumberOrExpression, PenNodeBase};
 use super::container::CornerRadius;
 use crate::sizing::SizingBehavior;
 use crate::state_override::WidgetStates;
 use crate::style::{PenEffect, PenFill, PenStroke};
 use serde::{Deserialize, Serialize};
 
-/// Single-line text input. Forms / counters need a writable input
-/// surface that two-way binds via `bindings.bind:value`. The walker
-/// renders a styled rectangle + caret placeholder; full IME and
-/// selection-painter wiring lands in the desktop host (Plan 8) once
-/// the gesture arena gains `Focus` recognizers.
+/// Progress indicator. Display-only (not focusable/keyboard-driven):
+/// `value` is read from the state graph via `bindings.value`. `max`
+/// defaults to 100; `indeterminate` shows an animated unknown-progress
+/// state and ignores `value`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
-pub struct TextInputNode {
+pub struct ProgressNode {
     #[serde(flatten)]
     pub base: PenNodeBase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<SizingBehavior>,
-    /// Placeholder shown when `value` is empty. Static text — author
-    /// `bindings.placeholder` if it needs to react to state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub placeholder: Option<String>,
-    /// Initial value. Two-way binding lives on `bindings.bind:value`,
-    /// which derive lifts into a `set_*` action and the runtime keeps
-    /// in sync with the state graph.
+    pub value: Option<NumberOrExpression>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
+    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indeterminate: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Vec<PenFill>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -47,7 +47,7 @@ pub fn collect_draws(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, root, None, &mut out, &mut visited);
+        walk(doc, layout, root, None, None, &mut out, &mut visited);
     }
     out
 }
@@ -66,16 +66,55 @@ pub fn collect_draws_with_state(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, root, Some(state), &mut out, &mut visited);
+        walk(doc, layout, root, Some(state), None, &mut out, &mut visited);
     }
     out
 }
 
+/// Extra context the walker needs to paint *live* interactive widgets
+/// (typed text, caret blink, selection, focus ring). `None` — the
+/// default for static thumbnails / the editor design surface — renders
+/// the same box with the schema's placeholder/value and no live caret.
+pub struct WidgetRenderCtx<'a> {
+    pub states: &'a crate::widget_state::WidgetStateStore,
+    pub theme: &'a crate::render::widget_style::WidgetTheme,
+    pub focused_id: Option<&'a str>,
+    pub now_ms: u64,
+}
+
+/// Like [`collect_draws_with_state`] but also paints live widget runtime
+/// state (caret / selection / typed text) from `ctx`. Used by the OP
+/// canvas preview mode and by `jian run`.
+pub fn collect_draws_with_widgets(
+    doc: &crate::document::RuntimeDocument,
+    layout: &crate::layout::LayoutEngine,
+    state: &crate::state::StateGraph,
+    ctx: &WidgetRenderCtx,
+) -> Vec<DrawOp> {
+    let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    let mut visited: std::collections::HashSet<crate::document::NodeKey> =
+        std::collections::HashSet::with_capacity(doc.tree.nodes.len());
+    for &root in &doc.tree.roots {
+        walk(
+            doc,
+            layout,
+            root,
+            Some(state),
+            Some(ctx),
+            &mut out,
+            &mut visited,
+        );
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
 fn walk(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,
     key: crate::document::NodeKey,
     state: Option<&crate::state::StateGraph>,
+    widgets: Option<&WidgetRenderCtx>,
     out: &mut Vec<DrawOp>,
     visited: &mut std::collections::HashSet<crate::document::NodeKey>,
 ) {
@@ -110,11 +149,35 @@ fn walk(
 
     if let (Some(r), Some(json)) = (r, &json) {
         let r = overrides.apply_to_rect(r);
-        emit_for_node(r, json, out);
+        // Live widget render: a focused/edited text widget with runtime
+        // state paints from that state (typed text + caret + selection)
+        // instead of the schema's static value. Falls back to the static
+        // emit when no live state exists for this node.
+        let handled = widgets
+            .filter(|_| {
+                matches!(
+                    json.get("type").and_then(|t| t.as_str()),
+                    Some("text_input" | "text_area" | "number_input")
+                )
+            })
+            .and_then(|ctx| {
+                let id = json.get("id")?.as_str()?;
+                match ctx.states.get(id)? {
+                    crate::widget_state::WidgetState::TextInput(st) => {
+                        emit_live_text_input(r, json, st, ctx, id, out);
+                        Some(())
+                    }
+                    _ => None,
+                }
+            })
+            .is_some();
+        if !handled {
+            emit_for_node(r, json, out);
+        }
     }
 
     for &child in &node.children {
-        walk(doc, layout, child, state, out, visited);
+        walk(doc, layout, child, state, widgets, out, visited);
     }
 }
 
@@ -561,6 +624,150 @@ fn emit_text_input(
     });
 }
 
+/// Live render of a text widget driven by its runtime [`TextInputState`]
+/// (typed text, blinking caret, selection) rather than the schema's
+/// static `value`. Used by preview mode via [`collect_draws_with_widgets`].
+/// Caret + selection only paint when the node is focused.
+fn emit_live_text_input(
+    r: crate::geometry::Rect,
+    json: &Value,
+    st: &crate::text_input::TextInputState,
+    ctx: &WidgetRenderCtx,
+    id: &str,
+    out: &mut Vec<DrawOp>,
+) {
+    let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
+    let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
+    let focused = ctx.focused_id == Some(id);
+
+    // --- authored background box ---
+    let fill = first_solid_color(json.get("fill"));
+    let base_stroke = stroke_op(json);
+    if fill.is_some() || base_stroke.is_some() {
+        let paint = Paint {
+            fill,
+            stroke: base_stroke,
+            opacity: node_opacity(json),
+        };
+        if radii != BorderRadii::zero() {
+            out.push(DrawOp::RoundedRect {
+                rect: rect_logical,
+                radii,
+                paint,
+            });
+        } else {
+            out.push(DrawOp::Rect {
+                rect: rect_logical,
+                paint,
+            });
+        }
+    }
+
+    let font_size = json
+        .get("fontSize")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(14.0) as f32;
+    let font_family = json
+        .get("fontFamily")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let font_weight = json
+        .get("fontWeight")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u16)
+        .unwrap_or(400);
+    let pad_x = 6.0_f32;
+    let text_top = r.min_y() + (r.size.height - font_size) / 2.0;
+    let char_w = font_size * 0.55;
+    // Crude monospace-ish x for a byte offset (mirrors the static
+    // caret approximation; real glyph metrics land with the painter).
+    let x_at = |byte: usize, s: &str| -> f32 {
+        let b = byte.min(s.len());
+        r.min_x() + pad_x + s[..b].chars().count() as f32 * char_w
+    };
+
+    let live = st.text();
+    // Inline the IME preedit at the caret for display.
+    let display: String = match st.composition() {
+        Some(c) if !c.text.is_empty() => {
+            let caret = st.caret().min(live.len());
+            let mut s = String::with_capacity(live.len() + c.text.len());
+            s.push_str(&live[..caret]);
+            s.push_str(&c.text);
+            s.push_str(&live[caret..]);
+            s
+        }
+        _ => live.to_owned(),
+    };
+    let placeholder = json
+        .get("placeholder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let (text, is_placeholder) = if display.is_empty() {
+        (placeholder.to_owned(), true)
+    } else {
+        (display, false)
+    };
+
+    // --- selection highlight (behind text) ---
+    if focused {
+        if let Some((a, b)) = st.highlight_range() {
+            let x0 = x_at(a, live);
+            let x1 = x_at(b, live);
+            if x1 > x0 {
+                out.push(DrawOp::Rect {
+                    rect: rect(x0, text_top, x1 - x0, font_size),
+                    paint: Paint {
+                        fill: Some(ctx.theme.selection),
+                        stroke: None,
+                        opacity: 1.0,
+                    },
+                });
+            }
+        }
+    }
+
+    // --- text run ---
+    if !text.is_empty() {
+        let color = if is_placeholder {
+            Color::rgba(0x66, 0x66, 0x66, 0xff)
+        } else {
+            Color::rgb(0x11, 0x11, 0x11)
+        };
+        out.push(DrawOp::Text(TextRun {
+            content: text,
+            font_family,
+            font_size,
+            font_weight,
+            color,
+            origin: point(r.min_x() + pad_x, text_top),
+            max_width: (r.size.width - pad_x * 2.0).max(0.0),
+            align: TextAlign::Start,
+            line_height: 0.0,
+        }));
+    }
+
+    // --- caret: focused, collapsed selection, blink-visible ---
+    if focused && st.highlight_range().is_none() && st.caret_visible(ctx.now_ms) {
+        let cx = match st.composition() {
+            Some(c) => {
+                let pre = c.cursor.min(c.text.len());
+                x_at(st.caret(), live) + c.text[..pre].chars().count() as f32 * char_w
+            }
+            None => x_at(st.caret(), live),
+        };
+        out.push(DrawOp::Rect {
+            rect: rect(cx, text_top, 1.0, font_size),
+            paint: Paint {
+                fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xff)),
+                stroke: None,
+                opacity: 1.0,
+            },
+        });
+    }
+}
+
 /// Resolve the node's effective opacity. `bindings.opacity` writes the
 /// value in via `apply_bindings`; the schema's static `opacity` field
 /// is the fallback. Defaults to 1.0 when neither is set or the value
@@ -924,5 +1131,70 @@ mod tests {
         let ops = collect_draws(rt.document.as_ref().unwrap(), &rt.layout);
         // Parent fill + child fill → 2 ops.
         assert_eq!(ops.len(), 2);
+    }
+
+    #[test]
+    fn live_text_input_renders_typed_text_and_blinking_caret() {
+        let mut rt = doc_with(
+            r##"{ "version":"1.1", "formatVersion":"1.1", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"text_input", "id":"e", "width":200, "height":40,
+                     "fill":[{ "type":"solid", "color":"#ffffff" }] }
+                 ]}"##,
+        );
+        rt.focus_next();
+        rt.dispatch_text_input("hi");
+        let theme = crate::render::widget_style::WidgetTheme::default();
+        let is_caret = |op: &DrawOp| matches!(op, DrawOp::Rect { rect, .. } if (rect.size.width - 1.0).abs() < 0.01);
+
+        // Focused + start of blink cycle → typed text + caret painted.
+        let ctx = WidgetRenderCtx {
+            states: &rt.widget_states,
+            theme: &theme,
+            focused_id: Some("e"),
+            now_ms: 0,
+        };
+        let ops =
+            collect_draws_with_widgets(rt.document.as_ref().unwrap(), &rt.layout, &rt.state, &ctx);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, DrawOp::Text(t) if t.content == "hi")),
+            "live typed text should render"
+        );
+        assert!(ops.iter().any(is_caret), "focused caret should render");
+
+        // Half a blink period later → caret hidden.
+        let ctx_off = WidgetRenderCtx { now_ms: 600, ..ctx };
+        let ops_off = collect_draws_with_widgets(
+            rt.document.as_ref().unwrap(),
+            &rt.layout,
+            &rt.state,
+            &ctx_off,
+        );
+        assert!(
+            !ops_off.iter().any(is_caret),
+            "caret should be hidden mid-blink-off"
+        );
+
+        // Unfocused → no caret, but text still shows.
+        let ctx_blur = WidgetRenderCtx {
+            focused_id: None,
+            now_ms: 0,
+            ..ctx
+        };
+        let ops_blur = collect_draws_with_widgets(
+            rt.document.as_ref().unwrap(),
+            &rt.layout,
+            &rt.state,
+            &ctx_blur,
+        );
+        assert!(
+            !ops_blur.iter().any(is_caret),
+            "unfocused caret must not render"
+        );
+        assert!(ops_blur
+            .iter()
+            .any(|op| matches!(op, DrawOp::Text(t) if t.content == "hi")));
     }
 }

@@ -2519,6 +2519,26 @@
                 "$ref": "#/definitions/PenEffect"
               }
             },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "state": {
               "type": [
                 "object",
@@ -3034,6 +3054,2436 @@
               "anyOf": [
                 {
                   "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Multi-line writable text input. Like `text_input` but wraps and scrolls vertically; two-way binds via `bindings.bind:value`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "text_area"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "placeholder": {
+              "description": "Placeholder shown when `value` is empty.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "value": {
+              "description": "Initial value. Two-way binding lives on `bindings.bind:value`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "maxVisibleLines": {
+              "description": "Visible-line window before the content scrolls (chat-style).",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Dropdown select. The runtime pops an option list; the selected option `value` two-way binds via `bindings.bind:value`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "select"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "placeholder": {
+              "description": "Shown when no option is selected.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "value": {
+              "description": "Currently selected option `value`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "options": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/SelectOption"
+              }
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "On/off toggle. `checked` two-way binds via `bindings.bind:value`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "switch"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "checked": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Checkbox with an optional adjacent `label`. `checked` two-way binds via `bindings.bind:value`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "checkbox"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "checked": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Range slider. `value` two-way binds via `bindings.bind:value`; `min`/`max`/`step` default to 0/100/1 at runtime when omitted.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "slider"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "min": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "max": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "step": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Single-choice radio group. Renders one radio per `option`; the selected option `value` two-way binds via `bindings.bind:value`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "radio_group"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "description": "Currently selected option `value`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "options": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/SelectOption"
+              }
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Numeric input with optional +/- steppers. Precise complement to `slider`; `value` two-way binds via `bindings.bind:value`. When omitted, `min`/`max`/`step` default to none/none/1 at runtime.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "number_input"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "placeholder": {
+              "description": "Placeholder shown when `value` is empty.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "min": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "max": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "step": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Progress indicator. Display-only (not focusable/keyboard-driven): `value` is read from the state graph via `bindings.value`. `max` defaults to 100; `indeterminate` shows an animated unknown-progress state and ignores `value`.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "progress"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "max": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "indeterminate": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "state": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/StateEntry"
+              }
+            },
+            "bindings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/EventHandlers"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lifecycle": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NodeLifecycleHooks"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "semantics": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SemanticsMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "gestures": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GestureOverrides"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "route": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NavigationRoute"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "x": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "y": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "rotation": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "opacity": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "enabled": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BoolOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipX": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "flipY": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "theme": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "Tabbed panel switcher. Unlike the leaf widgets this is a CONTAINER: `children[i]` is the panel for `tabs[i]`. The active tab `value` two-way binds via `bindings.bind:value`; only the active panel is painted at runtime.",
+          "type": "object",
+          "required": [
+            "id",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "tabs"
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/SizingBehavior"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tabs": {
+              "description": "Tab bar entries; `value` keys the active tab, `label` is shown.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/SelectOption"
+              }
+            },
+            "value": {
+              "description": "Currently active tab `value`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "children": {
+              "description": "Panel subtrees, one per tab (parallel to `tabs` by index).",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenNode"
+              }
+            },
+            "fill": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenFill"
+              }
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PenStroke"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effects": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/PenEffect"
+              }
+            },
+            "cornerRadius": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/CornerRadius"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "states": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/WidgetStates"
                 },
                 {
                   "type": "null"
@@ -4891,6 +7341,92 @@
         "fixed-width-height"
       ]
     },
+    "WidgetStates": {
+      "description": "Authored overrides for the four auto-derived interaction states.",
+      "type": "object",
+      "properties": {
+        "hover": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StyleOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pressed": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StyleOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "focused": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StyleOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabled": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/StyleOverride"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "StyleOverride": {
+      "type": "object",
+      "properties": {
+        "fill": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PenFill"
+          }
+        },
+        "stroke": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PenStroke"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effects": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/PenEffect"
+          }
+        },
+        "opacity": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
     "ImageFitMode": {
       "type": "string",
       "enum": [
@@ -4899,6 +7435,22 @@
         "crop",
         "tile"
       ]
+    },
+    "SelectOption": {
+      "description": "A single dropdown option: the persisted `value` and its display `label`.",
+      "type": "object",
+      "required": [
+        "label",
+        "value"
+      ],
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      }
     },
     "PageLifecycleHooks": {
       "type": "object",

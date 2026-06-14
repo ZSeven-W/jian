@@ -35,6 +35,7 @@ pub mod state;
 pub mod text_input;
 pub mod value;
 pub mod viewport;
+pub mod widget_state;
 
 pub use binding::{BindingEffect, DeferredBindingQueue};
 pub use error::{CoreError, CoreResult};

@@ -63,6 +63,14 @@ pub struct Runtime {
     /// runtime tree. See [`Runtime::dispatch_keyboard`] /
     /// [`Runtime::focus_next`] / [`Runtime::focus_request`].
     pub focus: FocusManager,
+    /// Per-node runtime state for interactive widget nodes (text input,
+    /// toggle, select, slider, radio, tabs). Seeded lazily from node
+    /// props; preserved across `replace_document` for surviving ids.
+    pub widget_states: crate::widget_state::WidgetStateStore,
+    /// Host-updated monotonic clock in milliseconds. Drives widget
+    /// caret-blink phase; hosts call [`Runtime::set_now_ms`] each frame
+    /// (the gesture pipeline keeps its own `Instant` via [`Runtime::tick`]).
+    pub now_ms: u64,
     pub actions: SharedRegistry,
     pub expr_cache: Rc<ExpressionCache>,
     /// Bindings whose evaluation is deferred past first-paint. Schema
@@ -107,6 +115,8 @@ impl Runtime {
 
             gestures: PointerRouter::new(),
             focus: FocusManager::new(),
+            widget_states: crate::widget_state::WidgetStateStore::default(),
+            now_ms: 0,
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
             deferred_bindings: DeferredBindingQueue::new(),
@@ -176,6 +186,8 @@ impl Runtime {
 
             gestures: PointerRouter::new(),
             focus,
+            widget_states: crate::widget_state::WidgetStateStore::default(),
+            now_ms: 0,
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
             deferred_bindings: DeferredBindingQueue::new(),
@@ -237,6 +249,12 @@ impl Runtime {
         let doc = loader::build_with(schema, &self.state, loader::SeedMode::PreserveExisting)?;
         let focus_chain = collect_focus_chain(&doc);
         self.document = Some(doc);
+        // Preserve widget runtime state for ids that still exist in the
+        // swapped-in tree; drop state for nodes that vanished.
+        if let Some(doc) = self.document.as_ref() {
+            self.widget_states
+                .retain_ids(&|id| doc.tree.get(id).is_some());
+        }
         // Hot-reload swaps the SlotMap underneath. SlotMap keys are
         // *not* unique across different SlotMaps — both the old and
         // new tree start their version counter at 1, so the first
@@ -478,10 +496,190 @@ impl Runtime {
             }
             return self.focus_next();
         }
+        // Route editing keys to the focused editable widget before the
+        // generic semantic dispatch. Printable text + paste arrive via
+        // `dispatch_text_input`; IME via `dispatch_ime`.
+        let now = self.now_ms;
+        let focused_id = self.focused_widget_id();
+        let mut consumed = false;
+        if let Some(st) = self.focused_text_state() {
+            use crate::gesture::pointer::Modifiers;
+            consumed = match key.as_str() {
+                "Backspace" => {
+                    st.backspace(now);
+                    true
+                }
+                "Delete" => {
+                    st.delete_forward(now);
+                    true
+                }
+                "ArrowLeft" => {
+                    st.move_left(modifiers.contains(Modifiers::SHIFT), now);
+                    true
+                }
+                "ArrowRight" => {
+                    st.move_right(modifiers.contains(Modifiers::SHIFT), now);
+                    true
+                }
+                "Home" => {
+                    st.move_home(modifiers.contains(Modifiers::SHIFT), now);
+                    true
+                }
+                "End" => {
+                    st.move_end(modifiers.contains(Modifiers::SHIFT), now);
+                    true
+                }
+                "a" | "A"
+                    if modifiers.contains(Modifiers::CMD)
+                        || modifiers.contains(Modifiers::CTRL) =>
+                {
+                    st.select_all();
+                    true
+                }
+                _ => false,
+            };
+        }
+        if consumed {
+            if let Some(id) = focused_id.as_deref() {
+                self.sync_widget_binding(id);
+            }
+            return Vec::new();
+        }
         let Some(target) = self.focus.current() else {
             return Vec::new();
         };
         self.dispatch_key(target, key, modifiers)
+    }
+
+    /// Update the host clock (ms). Drives widget caret-blink phase; the
+    /// gesture pipeline keeps a separate `Instant` via [`Runtime::tick`].
+    pub fn set_now_ms(&mut self, now_ms: u64) {
+        self.now_ms = now_ms;
+    }
+
+    /// `&mut TextInputState` for the currently-focused editable widget
+    /// (text_input / text_area / number_input), or `None` when nothing
+    /// editable is focused.
+    fn focused_text_state(&mut self) -> Option<&mut crate::text_input::TextInputState> {
+        let target = self.focus.current()?;
+        let node = self.document.as_ref()?.tree.nodes.get(target)?;
+        match self.widget_states.get_or_init(&node.schema)? {
+            crate::widget_state::WidgetState::TextInput(st) => Some(st),
+            _ => None,
+        }
+    }
+
+    /// Stable schema id of the currently-focused node, if any.
+    fn focused_widget_id(&self) -> Option<String> {
+        let key = self.focus.current()?;
+        let node = self.document.as_ref()?.tree.nodes.get(key)?;
+        Some(crate::document::tree::node_schema_id(&node.schema).to_owned())
+    }
+
+    /// Printable text from the host (keypress chars, paste). Routed to
+    /// the focused editable widget; returns `true` when consumed.
+    pub fn dispatch_text_input(&mut self, text: &str) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        let now = self.now_ms;
+        let id = self.focused_widget_id();
+        {
+            let Some(st) = self.focused_text_state() else {
+                return false;
+            };
+            st.insert_str(text, now);
+        }
+        if let Some(id) = id.as_deref() {
+            self.sync_widget_binding(id);
+        }
+        true
+    }
+
+    /// IME composition events (`gesture::ime::ImeEvent`). Routed to the
+    /// focused editable widget; returns `true` when consumed.
+    pub fn dispatch_ime(&mut self, ev: crate::gesture::ime::ImeEvent) -> bool {
+        use crate::gesture::ime::ImeKind;
+        let now = self.now_ms;
+        let id = self.focused_widget_id();
+        let committed;
+        {
+            let Some(st) = self.focused_text_state() else {
+                return false;
+            };
+            match ev.kind {
+                ImeKind::CompositionStart => {
+                    st.set_composition(ev.text, 0, now);
+                    committed = false;
+                }
+                ImeKind::CompositionUpdate { selection } => {
+                    let cursor = selection.map(|r| r.end).unwrap_or(ev.text.len());
+                    st.set_composition(ev.text, cursor, now);
+                    committed = false;
+                }
+                ImeKind::CompositionEnd => {
+                    // Replace any in-flight preedit with the final commit
+                    // string, then fold it into the text.
+                    let len = ev.text.len();
+                    st.set_composition(ev.text, len, now);
+                    st.commit_composition(now);
+                    committed = true;
+                }
+            }
+        }
+        // Only a committed composition changes the bound value; an
+        // in-flight preedit is overlay-only (paint reads `composition()`).
+        if committed {
+            if let Some(id) = id.as_deref() {
+                self.sync_widget_binding(id);
+            }
+        }
+        true
+    }
+
+    /// Push the focused/edited widget's current value into the state
+    /// graph via its `bindings["bind:value"]` target. No-op when the
+    /// node has no `bind:value`, or it targets anything but a writable
+    /// single-segment `$state.<key>` (multi-segment writes are not yet
+    /// supported by the runtime — see `action::actions::state::write_path`).
+    fn sync_widget_binding(&mut self, node_id: &str) {
+        use crate::widget_state::WidgetState;
+        let value = match self.widget_states.get_mut(node_id) {
+            Some(WidgetState::TextInput(st)) => serde_json::Value::String(st.text().to_owned()),
+            Some(WidgetState::Toggle { on }) => serde_json::Value::Bool(*on),
+            Some(WidgetState::Slider { value, .. }) => serde_json::json!(*value),
+            Some(WidgetState::Select { value, .. }) | Some(WidgetState::Radio { value, .. }) => {
+                value
+                    .clone()
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null)
+            }
+            Some(WidgetState::Tabs { active, .. }) => active
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+            None => return,
+        };
+        let Some(key) = self.widget_bind_key(node_id) else {
+            return;
+        };
+        self.state.app_set(&key, value);
+        self.scheduler.flush();
+    }
+
+    /// Resolve a widget's `bind:value` to a writable single-segment
+    /// `$state.<key>` app key. Returns `None` for absent / computed /
+    /// non-`$state` / multi-segment targets.
+    fn widget_bind_key(&self, node_id: &str) -> Option<String> {
+        let key = self.document.as_ref()?.tree.get(node_id)?;
+        let node = self.document.as_ref()?.tree.nodes.get(key)?;
+        let json = serde_json::to_value(&node.schema).ok()?;
+        let raw = json.get("bindings")?.get("bind:value")?.as_str()?;
+        let rest = raw.trim().strip_prefix("$state.")?;
+        if rest.is_empty() || rest.contains(['.', '[']) || rest.contains(char::is_whitespace) {
+            return None;
+        }
+        Some(rest.to_owned())
     }
 
     /// Move focus forward one step (`Tab`) and emit the corresponding
@@ -831,6 +1029,98 @@ fn rects_intersect(a: crate::geometry::Rect, b: crate::geometry::Rect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_input_keyboard_and_text_routing() {
+        use crate::gesture::pointer::Modifiers;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{"version":"1.1","formatVersion":"1.1","children":[
+                  {"type":"frame","id":"root","children":[
+                    {"type":"text_input","id":"a"},
+                    {"type":"text_input","id":"b"}]}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Focus the first input, type, then backspace one char.
+        rt.focus_next();
+        assert!(rt.dispatch_text_input("hi"));
+        rt.dispatch_keyboard("Backspace", Modifiers::empty());
+        assert_eq!(widget_text(&mut rt, "a"), "h");
+        // Tab to the second input; typing there leaves the first alone.
+        rt.focus_next();
+        assert!(rt.dispatch_text_input("x"));
+        assert_eq!(widget_text(&mut rt, "b"), "x");
+        assert_eq!(widget_text(&mut rt, "a"), "h");
+    }
+
+    fn widget_text(rt: &mut Runtime, id: &str) -> String {
+        match rt.widget_states.get_mut(id) {
+            Some(crate::widget_state::WidgetState::TextInput(st)) => st.text().to_owned(),
+            _ => panic!("expected text state for {id}"),
+        }
+    }
+
+    #[test]
+    fn bind_value_syncs_text_input_into_state_graph() {
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{"version":"1.1","formatVersion":"1.1",
+                  "state":{"email":{"type":"string","default":""}},
+                  "children":[
+                    {"type":"frame","id":"root","children":[
+                      {"type":"text_input","id":"e",
+                       "bindings":{"bind:value":"$state.email"}}]}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.focus_next();
+        assert!(rt.dispatch_text_input("a@b"));
+        let got = rt
+            .state
+            .app_get("email")
+            .and_then(|v| v.as_str().map(str::to_owned));
+        assert_eq!(got.as_deref(), Some("a@b"));
+        // Backspace updates the bound value too.
+        rt.dispatch_keyboard("Backspace", crate::gesture::pointer::Modifiers::empty());
+        let got = rt
+            .state
+            .app_get("email")
+            .and_then(|v| v.as_str().map(str::to_owned));
+        assert_eq!(got.as_deref(), Some("a@"));
+    }
+
+    #[test]
+    fn legacy_role_input_promotes_and_is_editable_via_runtime() {
+        use jian_ops_schema::compat::{load_str_with, LoadOptions};
+        // End-to-end: an old `frame role="input"` (with a bind:value) is
+        // promoted on load, focusable by type, accepts typed text, and
+        // syncs into the state graph — exercising Phase A promote +
+        // Phase B focus/routing/bind-sync in one path.
+        let legacy = r#"{"version":"1.1","formatVersion":"1.1",
+          "state":{"q":{"type":"string","default":""}},
+          "children":[
+            {"type":"frame","id":"root","children":[
+              {"type":"frame","id":"f","role":"input",
+               "bindings":{"bind:value":"$state.q"}}]}]}"#;
+        let loaded = load_str_with(
+            legacy,
+            LoadOptions {
+                promote_legacy_widgets: true,
+            },
+        )
+        .unwrap();
+        let mut rt = Runtime::new_from_document(loaded.value).unwrap();
+        rt.focus_next();
+        assert!(rt.dispatch_text_input("hey"));
+        let got = rt
+            .state
+            .app_get("q")
+            .and_then(|v| v.as_str().map(str::to_owned));
+        assert_eq!(got.as_deref(), Some("hey"));
+    }
 
     /// Two-finger pinch on a frame that declares `events.onScaleUpdate`
     /// drives `$state.zoom` via `$event.scale`. Locks in the full

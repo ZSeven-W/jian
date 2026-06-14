@@ -1,0 +1,430 @@
+//! Explicit-marker promotion of legacy frames to widget nodes.
+//!
+//! Decision record 2026-06-13 #1: ONLY explicit markers are honoured —
+//! `base.role` strings from the AI role vocabulary, or
+//! `semantics.role == Input`. Names and looks are never guessed.
+//!
+//! Three callers share this single implementation:
+//! 1. `compat::load_str_with(promote_legacy_widgets: true)` — in-memory,
+//!    used by runtime hosts; the file is not rewritten.
+//! 2. OpenPencil's "semantic upgrade" editor command — persists the
+//!    rewrite and reports every change.
+//! 3. The AI pipeline normalisation pass after `batch_design`.
+
+use crate::document::PenDocument;
+use crate::node::text::TextContent;
+use crate::node::{
+    CheckboxNode, FrameNode, PenNode, SelectNode, SliderNode, SwitchNode, TextAreaNode,
+    TextInputNode,
+};
+use crate::semantics::SemanticRole;
+use crate::style::PenFill;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidgetKind {
+    TextInput,
+    TextArea,
+    Select,
+    Switch,
+    Checkbox,
+    Slider,
+}
+
+impl WidgetKind {
+    pub fn tag(self) -> &'static str {
+        match self {
+            WidgetKind::TextInput => "text_input",
+            WidgetKind::TextArea => "text_area",
+            WidgetKind::Select => "select",
+            WidgetKind::Switch => "switch",
+            WidgetKind::Checkbox => "checkbox",
+            WidgetKind::Slider => "slider",
+        }
+    }
+}
+
+/// Explicit `base.role` strings honoured for promotion. Aliases come
+/// from the AI role vocabulary (role-definitions.md) — extend ONLY
+/// when that vocabulary grows, never with name heuristics.
+fn role_to_kind(role: &str) -> Option<WidgetKind> {
+    Some(match role {
+        "input" | "form-input" => WidgetKind::TextInput,
+        "textarea" | "text-area" => WidgetKind::TextArea,
+        "select" | "dropdown" => WidgetKind::Select,
+        "switch" | "toggle" => WidgetKind::Switch,
+        "checkbox" => WidgetKind::Checkbox,
+        "slider" => WidgetKind::Slider,
+        _ => return None,
+    })
+}
+
+/// Explicit-marker check: `base.role` first, then `semantics.role`.
+pub fn widget_kind_for(node: &PenNode) -> Option<WidgetKind> {
+    let PenNode::Frame(f) = node else { return None };
+    if let Some(role) = f.base.role.as_deref() {
+        if let Some(k) = role_to_kind(role) {
+            return Some(k);
+        }
+    }
+    if matches!(
+        f.semantics.as_ref().and_then(|s| s.role),
+        Some(SemanticRole::Input)
+    ) {
+        return Some(WidgetKind::TextInput);
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+pub struct PromoteNote {
+    pub node_id: String,
+    pub from_role: String,
+    pub to: &'static str,
+}
+
+/// Achromatic-ish mid-tone text is treated as a placeholder, anything
+/// else as the value. Only ever evaluated INSIDE explicitly marked
+/// frames; this is content classification, not widget detection.
+fn is_muted_hex(hex: &str) -> bool {
+    let h = hex.trim_start_matches('#');
+    // Byte-slicing below assumes ASCII; a non-ASCII color string (e.g.
+    // a `$variable` ref or garbage) must not panic on a char boundary.
+    if h.len() < 6 || !h.is_ascii() {
+        return false;
+    }
+    let (Ok(r), Ok(g), Ok(b)) = (
+        u8::from_str_radix(&h[0..2], 16),
+        u8::from_str_radix(&h[2..4], 16),
+        u8::from_str_radix(&h[4..6], 16),
+    ) else {
+        return false;
+    };
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    max - min <= 24 && (64..=200).contains(&max)
+}
+
+/// First `PenFill::Solid` colour string in a fill list, if any.
+fn first_solid_hex(fill: &Option<Vec<PenFill>>) -> Option<String> {
+    fill.as_ref()?.iter().find_map(|f| match f {
+        PenFill::Solid(body) => Some(body.color.clone()),
+        _ => None,
+    })
+}
+
+/// Flatten a text node's content (styled segments are concatenated).
+fn text_content_string(content: &TextContent) -> String {
+    match content {
+        TextContent::Plain(s) => s.clone(),
+        TextContent::Styled(segs) => segs.iter().map(|s| s.text.as_str()).collect(),
+    }
+}
+
+/// Split the frame's text children into `(placeholder, value)`: the
+/// first muted-fill text becomes the placeholder, the first other text
+/// becomes the value.
+fn split_text(frame: &FrameNode) -> (Option<String>, Option<String>) {
+    let mut placeholder = None;
+    let mut value = None;
+    for child in frame.children.iter().flatten() {
+        if let PenNode::Text(t) = child {
+            let content = text_content_string(&t.content);
+            let muted = first_solid_hex(&t.fill)
+                .map(|h| is_muted_hex(&h))
+                .unwrap_or(false);
+            if muted {
+                if placeholder.is_none() {
+                    placeholder = Some(content);
+                }
+            } else if value.is_none() {
+                value = Some(content);
+            }
+        }
+    }
+    (placeholder, value)
+}
+
+/// Build the widget node replacing `frame`. Style (fill/stroke/effects/
+/// corner_radius) and box sizing are carried over verbatim from the
+/// frame's container; the first text child becomes `placeholder` (muted
+/// fill) or `value` (anything else). Children are dropped — widget
+/// nodes are leaves.
+pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
+    let (placeholder, value) = split_text(frame);
+    let c = &frame.container;
+    let mut base = frame.base.clone();
+    base.role = None; // the node type now carries the meaning
+
+    match kind {
+        WidgetKind::TextInput => PenNode::TextInput(TextInputNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            placeholder,
+            value,
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::TextArea => PenNode::TextArea(TextAreaNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            placeholder,
+            value,
+            max_visible_lines: None,
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::Select => PenNode::Select(SelectNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            // Any visible text becomes the placeholder; legacy frames
+            // carry no option list, so authors fill it post-migration.
+            placeholder: placeholder.or(value),
+            value: None,
+            options: None,
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::Switch => PenNode::Switch(SwitchNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            checked: None,
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::Checkbox => PenNode::Checkbox(CheckboxNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            checked: None,
+            // The visible (non-muted) text is the checkbox label.
+            label: value.or(placeholder),
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::Slider => PenNode::Slider(SliderNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            min: None,
+            max: None,
+            step: None,
+            value: None,
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+    }
+}
+
+/// Mutable children of a container-style node (those that can hold a
+/// marked frame). Widget nodes are leaves and never recursed into.
+fn children_mut(node: &mut PenNode) -> Option<&mut Vec<PenNode>> {
+    match node {
+        PenNode::Frame(f) => f.children.as_mut(),
+        PenNode::Group(g) => g.children.as_mut(),
+        PenNode::Rectangle(r) => r.children.as_mut(),
+        PenNode::Tabs(t) => t.children.as_mut(),
+        PenNode::Ref(r) => r.children.as_mut(),
+        _ => None,
+    }
+}
+
+fn promote_in_slice(nodes: &mut [PenNode], notes: &mut Vec<PromoteNote>) {
+    for node in nodes.iter_mut() {
+        if let Some(kind) = widget_kind_for(node) {
+            let PenNode::Frame(frame) = node.clone() else {
+                unreachable!("widget_kind_for only returns Some for frames")
+            };
+            let from_role = frame
+                .base
+                .role
+                .clone()
+                .unwrap_or_else(|| "semantics.role=input".into());
+            let id = frame.base.id.clone();
+            *node = promote_frame(&frame, kind);
+            notes.push(PromoteNote {
+                node_id: id,
+                from_role,
+                to: kind.tag(),
+            });
+        } else if let Some(children) = children_mut(node) {
+            promote_in_slice(children, notes);
+        }
+    }
+}
+
+/// Walk every page/children tree, replacing explicitly marked frames.
+/// Returns one note per promotion (for warnings / migration reports).
+pub fn promote_document(doc: &mut PenDocument) -> Vec<PromoteNote> {
+    let mut notes = Vec::new();
+    promote_in_slice(&mut doc.children, &mut notes);
+    if let Some(pages) = doc.pages.as_mut() {
+        for page in pages.iter_mut() {
+            promote_in_slice(&mut page.children, &mut notes);
+        }
+    }
+    notes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc(json: &str) -> PenDocument {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn explicit_role_input_promotes_with_placeholder_split() {
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"f1","role":"input",
+           "fill":[{"type":"solid","color":"#1E1E1E"}],
+           "children":[{"type":"text","id":"t1","content":"Enter email",
+                        "fill":[{"type":"solid","color":"#9A9A9A"}]}]}]}"##);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].to, "text_input");
+        let PenNode::TextInput(ti) = &d.children[0] else {
+            panic!()
+        };
+        assert_eq!(ti.placeholder.as_deref(), Some("Enter email")); // muted grey
+        assert!(ti.value.is_none());
+        assert!(ti.base.role.is_none());
+        // Style carried over from the frame container.
+        assert!(ti.fill.is_some());
+    }
+
+    #[test]
+    fn unmarked_frame_is_untouched() {
+        let mut d = doc(r#"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"f1","name":"Input looking thing","children":[]}]}"#);
+        assert!(promote_document(&mut d).is_empty());
+        assert!(matches!(d.children[0], PenNode::Frame(_)));
+    }
+
+    #[test]
+    fn semantics_role_input_promotes() {
+        let mut d = doc(r#"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"f1","semantics":{"role":"input"},"children":[]}]}"#);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes[0].to, "text_input");
+    }
+
+    #[test]
+    fn nested_marked_frame_promotes() {
+        let mut d = doc(r#"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"outer","children":[
+            {"type":"frame","id":"inner","role":"switch","children":[]}]}]}"#);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes[0].node_id, "inner");
+        assert_eq!(notes[0].to, "switch");
+        let PenNode::Frame(outer) = &d.children[0] else {
+            panic!()
+        };
+        assert!(matches!(
+            outer.children.as_ref().unwrap()[0],
+            PenNode::Switch(_)
+        ));
+    }
+
+    #[test]
+    fn checkbox_label_from_visible_text() {
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"c1","role":"checkbox",
+           "children":[{"type":"text","id":"t","content":"Accept terms",
+                        "fill":[{"type":"solid","color":"#111111"}]}]}]}"##);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes[0].to, "checkbox");
+        let PenNode::Checkbox(cb) = &d.children[0] else {
+            panic!()
+        };
+        assert_eq!(cb.label.as_deref(), Some("Accept terms"));
+    }
+
+    #[test]
+    fn marked_frame_inside_tabs_panel_promotes() {
+        // Tabs is a container; promotion must recurse into its panels.
+        let mut d = doc(r#"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"tabs","id":"tb","value":"a",
+           "tabs":[{"value":"a","label":"A"}],
+           "children":[
+             {"type":"frame","id":"panel","children":[
+               {"type":"frame","id":"in","role":"input","children":[]}]}]}]}"#);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].node_id, "in");
+        assert_eq!(notes[0].to, "text_input");
+    }
+
+    #[test]
+    fn muted_hex_rejects_non_ascii_without_panicking() {
+        // A non-ASCII / non-hex fill string must not panic on a byte-
+        // boundary slice; it simply isn't treated as a muted placeholder.
+        assert!(!is_muted_hex("$变量"));
+        assert!(!is_muted_hex("#abc"));
+        assert!(is_muted_hex("#9A9A9A"));
+    }
+}
