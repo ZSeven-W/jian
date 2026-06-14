@@ -602,6 +602,48 @@ fn emit_text_input(
         Color::rgb(0x11, 0x11, 0x11)
     };
 
+    let pad_x = 6.0_f32;
+
+    // --- text_area: wrap the value and stack each line. ---
+    if json.get("type").and_then(|t| t.as_str()) == Some("text_area") {
+        let lines = wrap_for_box(text, r.size.width, font_size, pad_x);
+        let visible = clamp_visible_lines(json, &lines);
+        let line_height = font_size * 1.3;
+        let max_width = (r.size.width - pad_x * 2.0).max(0.0);
+        for (i, line) in visible.iter().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            out.push(DrawOp::Text(TextRun {
+                content: line.to_string(),
+                font_family: font_family.clone(),
+                font_size,
+                font_weight,
+                color: text_color,
+                origin: point(
+                    r.min_x() + pad_x,
+                    r.min_y() + pad_x + i as f32 * line_height,
+                ),
+                max_width,
+                align: TextAlign::Start,
+                line_height: 0.0,
+            }));
+        }
+        // Caret approximation: end of the last wrapped line.
+        let last = visible.last().map(String::as_str).unwrap_or("");
+        let caret_x = r.min_x() + pad_x + last.chars().count() as f32 * font_size * 0.55;
+        let caret_top = r.min_y() + pad_x + visible.len().saturating_sub(1) as f32 * line_height;
+        out.push(DrawOp::Rect {
+            rect: rect(caret_x, caret_top, 1.0, font_size),
+            paint: Paint {
+                fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xa0)),
+                stroke: None,
+                opacity: node_opacity(json),
+            },
+        });
+        return;
+    }
+
     if !text.is_empty() {
         out.push(DrawOp::Text(TextRun {
             content: text.to_owned(),
@@ -632,6 +674,33 @@ fn emit_text_input(
             opacity: node_opacity(json),
         },
     });
+}
+
+/// Column budget for wrapping multi-line text inside a box of `width`.
+/// Uses the same per-column glyph width the static caret uses
+/// (`font_size * 0.55` px per column) so wrap positions and caret x stay
+/// consistent. Returns the wrapped lines (always at least one).
+fn wrap_for_box(text: &str, width: f32, font_size: f32, pad_x: f32) -> Vec<String> {
+    let inner = (width - 2.0 * pad_x).max(0.0);
+    let col_px = (font_size * 0.55).max(1.0);
+    let max_cols = (inner / col_px).floor().max(1.0) as usize;
+    crate::text_wrap::wrap_lines(text, max_cols)
+}
+
+/// Apply a `maxVisibleLines` cap to wrapped lines. When present and the
+/// wrapped output is taller, we keep the LAST N lines so the caret line
+/// (which sits at the end of the value) stays visible. Returns an owned
+/// slice copy for simplicity (line counts here are small).
+fn clamp_visible_lines(json: &Value, lines: &[String]) -> Vec<String> {
+    let cap = json
+        .get("maxVisibleLines")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .filter(|&n| n > 0);
+    match cap {
+        Some(n) if lines.len() > n => lines[lines.len() - n..].to_vec(),
+        _ => lines.to_vec(),
+    }
 }
 
 /// Live render of a text widget driven by its runtime [`TextInputState`]
@@ -719,6 +788,55 @@ fn emit_live_text_input(
     } else {
         (display, false)
     };
+
+    // --- text_area: multi-line live render (wrap the display text). ---
+    // Precise per-line caret/selection geometry is deferred; an MVP caret
+    // is placed at the end of the last visible wrapped line so the typing
+    // position stays on screen.
+    if json.get("type").and_then(|t| t.as_str()) == Some("text_area") {
+        let lines = wrap_for_box(&text, r.size.width, font_size, pad_x);
+        let visible = clamp_visible_lines(json, &lines);
+        let line_height = font_size * 1.3;
+        let max_width = (r.size.width - pad_x * 2.0).max(0.0);
+        let color = if is_placeholder {
+            Color::rgba(0x66, 0x66, 0x66, 0xff)
+        } else {
+            Color::rgb(0x11, 0x11, 0x11)
+        };
+        for (i, line) in visible.iter().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            out.push(DrawOp::Text(TextRun {
+                content: line.to_string(),
+                font_family: font_family.clone(),
+                font_size,
+                font_weight,
+                color,
+                origin: point(
+                    r.min_x() + pad_x,
+                    r.min_y() + pad_x + i as f32 * line_height,
+                ),
+                max_width,
+                align: TextAlign::Start,
+                line_height: 0.0,
+            }));
+        }
+        if focused && st.highlight_range().is_none() && st.caret_visible(ctx.now_ms) {
+            let last = visible.last().map(String::as_str).unwrap_or("");
+            let cx = r.min_x() + pad_x + last.chars().count() as f32 * char_w;
+            let cy = r.min_y() + pad_x + visible.len().saturating_sub(1) as f32 * line_height;
+            out.push(DrawOp::Rect {
+                rect: rect(cx, cy, 1.0, font_size),
+                paint: Paint {
+                    fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xff)),
+                    stroke: None,
+                    opacity: 1.0,
+                },
+            });
+        }
+        return;
+    }
 
     // --- selection highlight (behind text) ---
     if focused {
@@ -1540,6 +1658,92 @@ mod tests {
         assert!(
             rounded >= 6,
             "expected composite rounded-rect widget parts, got {rounded}"
+        );
+    }
+
+    #[test]
+    fn text_area_static_value_wraps_into_multiple_lines() {
+        // A long single-line value in a narrow box must wrap to several
+        // Text ops (one per wrapped line), unlike single-line text_input.
+        let rt = doc_with(
+            r##"{ "version":"1.1", "formatVersion":"1.1", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"text_area", "id":"ta", "width":120, "height":120,
+                     "fontSize":14,
+                     "value":"the quick brown fox jumps over the lazy dog",
+                     "fill":[{ "type":"solid", "color":"#ffffff" }] }
+                 ]}"##,
+        );
+        let ops = collect_draws(rt.document.as_ref().unwrap(), &rt.layout);
+        let text_ops = ops
+            .iter()
+            .filter(|op| matches!(op, DrawOp::Text(_)))
+            .count();
+        assert!(
+            text_ops >= 2,
+            "text_area should wrap into multiple Text ops, got {text_ops}"
+        );
+    }
+
+    #[test]
+    fn text_area_honors_max_visible_lines_cap() {
+        // Explicit `\n` newlines produce 4 lines; maxVisibleLines:2 keeps
+        // only the last 2 (caret line stays visible).
+        let rt = doc_with(
+            r##"{ "version":"1.1", "formatVersion":"1.1", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"text_area", "id":"ta", "width":400, "height":120,
+                     "fontSize":14, "maxVisibleLines":2,
+                     "value":"alpha\nbravo\ncharlie\ndelta",
+                     "fill":[{ "type":"solid", "color":"#ffffff" }] }
+                 ]}"##,
+        );
+        let ops = collect_draws(rt.document.as_ref().unwrap(), &rt.layout);
+        let texts: Vec<&str> = ops
+            .iter()
+            .filter_map(|op| match op {
+                DrawOp::Text(t) => Some(t.content.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts.len(), 2, "cap to last 2 lines, got {texts:?}");
+        assert!(texts.contains(&"charlie") && texts.contains(&"delta"));
+        assert!(!texts.contains(&"alpha"));
+    }
+
+    #[test]
+    fn live_text_area_wraps_typed_text_into_multiple_lines() {
+        // Live preview path: typed text longer than the box wraps to many
+        // Text ops with a single end-of-last-line caret.
+        let mut rt = doc_with(
+            r##"{ "version":"1.1", "formatVersion":"1.1", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"text_area", "id":"ta", "width":120, "height":120,
+                     "fontSize":14,
+                     "fill":[{ "type":"solid", "color":"#ffffff" }] }
+                 ]}"##,
+        );
+        rt.focus_next();
+        rt.dispatch_text_input("the quick brown fox jumps over the lazy dog");
+        let theme = crate::render::widget_style::WidgetTheme::default();
+        let ctx = WidgetRenderCtx {
+            states: &rt.widget_states,
+            theme: &theme,
+            focused_id: Some("ta"),
+            now_ms: 0,
+        };
+        let ops =
+            collect_draws_with_widgets(rt.document.as_ref().unwrap(), &rt.layout, &rt.state, &ctx);
+        let text_ops = ops
+            .iter()
+            .filter(|op| matches!(op, DrawOp::Text(_)))
+            .count();
+        assert!(
+            text_ops >= 2,
+            "live text_area should wrap into multiple Text ops, got {text_ops}"
         );
     }
 }

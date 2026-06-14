@@ -129,6 +129,18 @@ impl WidgetStateStore {
         self.map.get_mut(id)
     }
 
+    /// Iterate `(id, state)` pairs — used to locate the slider currently
+    /// being dragged without re-resolving every node from the document.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &WidgetState)> {
+        self.map.iter().map(|(id, st)| (id.as_str(), st))
+    }
+
+    /// Mutable iterator over the states — used to clear transient flags
+    /// (e.g. a slider's `dragging`) on pointer up.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut WidgetState> {
+        self.map.values_mut()
+    }
+
     /// Drop state for nodes that no longer exist (document swap).
     pub fn retain_ids(&mut self, live: &dyn Fn(&str) -> bool) {
         self.map.retain(|id, _| live(id));
