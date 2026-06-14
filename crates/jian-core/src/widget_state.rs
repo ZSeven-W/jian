@@ -106,7 +106,19 @@ impl WidgetStateStore {
             ),
             _ => return None,
         };
-        Some(self.map.entry(id.clone()).or_insert(init))
+        use std::collections::hash_map::Entry;
+        match self.map.entry(id.clone()) {
+            Entry::Occupied(mut o) => {
+                // A document swap can reuse an id for a different node
+                // type; re-seed when the stored variant no longer matches
+                // so we never hand back the wrong-variant state.
+                if std::mem::discriminant(o.get()) != std::mem::discriminant(&init) {
+                    *o.get_mut() = init;
+                }
+                Some(o.into_mut())
+            }
+            Entry::Vacant(v) => Some(v.insert(init)),
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<&WidgetState> {
@@ -223,6 +235,16 @@ mod tests {
         assert!(store.get_or_init(&pg).is_none());
         let frame = node(r#"{"type":"frame","id":"f"}"#);
         assert!(store.get_or_init(&frame).is_none());
+    }
+
+    #[test]
+    fn get_or_init_reseeds_when_node_type_changes_at_same_id() {
+        let mut store = WidgetStateStore::default();
+        store.get_or_init(&node(r#"{"type":"text_input","id":"x","value":"hi"}"#));
+        // Same id reused as a switch after a doc swap: state must re-seed
+        // to the new variant, not hand back stale TextInput state.
+        let st = store.get_or_init(&node(r#"{"type":"switch","id":"x","checked":true}"#));
+        assert!(matches!(st, Some(WidgetState::Toggle { on: true })));
     }
 
     #[test]

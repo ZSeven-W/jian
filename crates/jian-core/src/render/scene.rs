@@ -452,10 +452,20 @@ fn emit_for_node(r: crate::geometry::Rect, json: &Value, out: &mut Vec<DrawOp>) 
         return;
     }
 
-    // --- Text-input: styled rectangle + value-or-placeholder text + caret.
-    if json.get("type").and_then(|t| t.as_str()) == Some("text_input") {
-        emit_text_input(rect_logical, r, json, out);
-        return;
+    // --- Text-family inputs: styled rectangle + value/placeholder + caret.
+    if let Some(k) = json.get("type").and_then(|t| t.as_str()) {
+        if matches!(k, "text_input" | "text_area" | "number_input") {
+            emit_text_input(rect_logical, r, json, out);
+            return;
+        }
+        // --- Non-text family widgets paint composite visuals from props.
+        if matches!(
+            k,
+            "switch" | "checkbox" | "slider" | "progress" | "select" | "radio_group"
+        ) {
+            emit_widget_visual(k, rect_logical, r, json, out);
+            return;
+        }
     }
 
     // --- Text first: draw_rect isn't the right primitive for text.
@@ -752,7 +762,11 @@ fn emit_live_text_input(
     if focused && st.highlight_range().is_none() && st.caret_visible(ctx.now_ms) {
         let cx = match st.composition() {
             Some(c) => {
-                let pre = c.cursor.min(c.text.len());
+                // The host-supplied composition cursor is a byte offset
+                // that may not be UTF-8 boundary-aligned; clamp it down to
+                // the nearest boundary before slicing (else `c.text[..pre]`
+                // panics on a multi-byte preedit).
+                let pre = crate::text_input::prev_char_boundary(&c.text, c.cursor);
                 x_at(st.caret(), live) + c.text[..pre].chars().count() as f32 * char_w
             }
             None => x_at(st.caret(), live),
@@ -766,6 +780,301 @@ fn emit_live_text_input(
             },
         });
     }
+}
+
+/// Static composite visuals for the non-text family widgets, driven by
+/// the schema props (`checked` / `value` / `min` / `max`). In preview
+/// the walker's live branch can override these from runtime state; this
+/// is the design-surface / static-frame rendering. No oval primitive
+/// exists, so circular knobs are rounded rects with radius = size/2.
+fn emit_widget_visual(
+    kind: &str,
+    rect_logical: crate::geometry::Rect,
+    r: crate::geometry::Rect,
+    json: &Value,
+    out: &mut Vec<DrawOp>,
+) {
+    let accent = first_solid_color(json.get("fill")).unwrap_or(Color::rgb(0x3b, 0x82, 0xf6));
+    let track_off = Color::rgb(0xd1, 0xd5, 0xdb);
+    let knob = Color::rgb(0xff, 0xff, 0xff);
+    let opacity = node_opacity(json);
+    let (x, y, w, h) = (r.min_x(), r.min_y(), r.size.width, r.size.height);
+    let solid = |c: Color| Paint {
+        fill: Some(c),
+        stroke: None,
+        opacity,
+    };
+
+    match kind {
+        "switch" => {
+            let on = json_bool(json, "checked");
+            out.push(DrawOp::RoundedRect {
+                rect: rect_logical,
+                radii: BorderRadii::uniform(h / 2.0),
+                paint: solid(if on { accent } else { track_off }),
+            });
+            let d = (h - 4.0).max(2.0);
+            let kx = if on { x + w - d - 2.0 } else { x + 2.0 };
+            out.push(DrawOp::RoundedRect {
+                rect: rect(kx, y + 2.0, d, d),
+                radii: BorderRadii::uniform(d / 2.0),
+                paint: Paint {
+                    fill: Some(knob),
+                    stroke: None,
+                    opacity: 1.0,
+                },
+            });
+        }
+        "checkbox" => {
+            let on = json_bool(json, "checked");
+            let radii = corner_radii(json).unwrap_or_else(|| BorderRadii::uniform(4.0));
+            let box_stroke = stroke_op(json).unwrap_or(StrokeOp {
+                color: track_off,
+                width: 1.5,
+            });
+            out.push(DrawOp::RoundedRect {
+                rect: rect_logical,
+                radii,
+                paint: Paint {
+                    fill: if on { Some(accent) } else { None },
+                    stroke: Some(box_stroke),
+                    opacity,
+                },
+            });
+            if on {
+                out.push(DrawOp::Path {
+                    commands: vec![
+                        PathCommand::MoveTo(point(x + w * 0.24, y + h * 0.52)),
+                        PathCommand::LineTo(point(x + w * 0.42, y + h * 0.70)),
+                        PathCommand::LineTo(point(x + w * 0.76, y + h * 0.30)),
+                    ],
+                    paint: Paint {
+                        fill: None,
+                        stroke: Some(StrokeOp {
+                            color: knob,
+                            width: 2.0,
+                        }),
+                        opacity: 1.0,
+                    },
+                });
+            }
+        }
+        "slider" => {
+            let (min, max, _step) = slider_props(json);
+            let v = json_number(json, "value").unwrap_or(min);
+            let frac = if max > min {
+                ((v - min) / (max - min)).clamp(0.0, 1.0) as f32
+            } else {
+                0.0
+            };
+            let track_h = 4.0_f32;
+            let cy = y + h / 2.0;
+            out.push(DrawOp::RoundedRect {
+                rect: rect(x, cy - track_h / 2.0, w, track_h),
+                radii: BorderRadii::uniform(track_h / 2.0),
+                paint: solid(track_off),
+            });
+            if frac > 0.0 {
+                out.push(DrawOp::RoundedRect {
+                    rect: rect(x, cy - track_h / 2.0, w * frac, track_h),
+                    radii: BorderRadii::uniform(track_h / 2.0),
+                    paint: Paint {
+                        fill: Some(accent),
+                        stroke: None,
+                        opacity: 1.0,
+                    },
+                });
+            }
+            let d = h.clamp(10.0, 16.0);
+            let kx = (x + w * frac - d / 2.0).clamp(x, x + w - d);
+            out.push(DrawOp::RoundedRect {
+                rect: rect(kx, cy - d / 2.0, d, d),
+                radii: BorderRadii::uniform(d / 2.0),
+                paint: Paint {
+                    fill: Some(knob),
+                    stroke: Some(StrokeOp {
+                        color: track_off,
+                        width: 1.0,
+                    }),
+                    opacity: 1.0,
+                },
+            });
+        }
+        "progress" => {
+            let max = json_number(json, "max").unwrap_or(100.0);
+            let v = json_number(json, "value").unwrap_or(0.0);
+            let frac = if max > 0.0 {
+                (v / max).clamp(0.0, 1.0) as f32
+            } else {
+                0.0
+            };
+            let radii = BorderRadii::uniform(h / 2.0);
+            out.push(DrawOp::RoundedRect {
+                rect: rect_logical,
+                radii,
+                paint: solid(track_off),
+            });
+            if frac > 0.0 {
+                out.push(DrawOp::RoundedRect {
+                    rect: rect(x, y, w * frac, h),
+                    radii,
+                    paint: Paint {
+                        fill: Some(accent),
+                        stroke: None,
+                        opacity: 1.0,
+                    },
+                });
+            }
+        }
+        "select" => {
+            let radii = corner_radii(json).unwrap_or_else(|| BorderRadii::uniform(6.0));
+            let box_stroke = stroke_op(json).unwrap_or(StrokeOp {
+                color: track_off,
+                width: 1.0,
+            });
+            out.push(DrawOp::RoundedRect {
+                rect: rect_logical,
+                radii,
+                paint: Paint {
+                    fill: first_solid_color(json.get("fill")),
+                    stroke: Some(box_stroke),
+                    opacity,
+                },
+            });
+            let selected = json.get("value").and_then(|v| v.as_str());
+            let label = selected
+                .and_then(|v| select_label_for(json, v))
+                .or_else(|| {
+                    json.get("placeholder")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned)
+                });
+            if let Some(text) = label.filter(|s| !s.is_empty()) {
+                let fs = 14.0_f32;
+                out.push(DrawOp::Text(TextRun {
+                    content: text,
+                    font_family: String::new(),
+                    font_size: fs,
+                    font_weight: 400,
+                    color: if selected.is_some() {
+                        Color::rgb(0x11, 0x11, 0x11)
+                    } else {
+                        Color::rgba(0x66, 0x66, 0x66, 0xff)
+                    },
+                    origin: point(x + 8.0, y + (h - fs) / 2.0),
+                    max_width: (w - 36.0).max(0.0),
+                    align: TextAlign::Start,
+                    line_height: 0.0,
+                }));
+            }
+            // Down chevron on the trailing edge.
+            let cw = 9.0_f32;
+            let cx = x + w - 20.0;
+            let cyc = y + h / 2.0;
+            out.push(DrawOp::Path {
+                commands: vec![
+                    PathCommand::MoveTo(point(cx, cyc - cw * 0.22)),
+                    PathCommand::LineTo(point(cx + cw / 2.0, cyc + cw * 0.33)),
+                    PathCommand::LineTo(point(cx + cw, cyc - cw * 0.22)),
+                ],
+                paint: Paint {
+                    fill: None,
+                    stroke: Some(StrokeOp {
+                        color: Color::rgb(0x66, 0x66, 0x66),
+                        width: 1.5,
+                    }),
+                    opacity: 1.0,
+                },
+            });
+        }
+        "radio_group" => {
+            let selected = json.get("value").and_then(|v| v.as_str());
+            if let Some(opts) = json.get("options").and_then(|o| o.as_array()) {
+                let n = opts.len().max(1);
+                let row_h = (h / n as f32).clamp(0.0, 28.0);
+                let d = 14.0_f32;
+                let fs = 14.0_f32;
+                for (i, opt) in opts.iter().enumerate() {
+                    let ov = opt.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                    let ol = opt.get("label").and_then(|v| v.as_str()).unwrap_or(ov);
+                    let on = selected == Some(ov);
+                    let ry = y + i as f32 * row_h + (row_h - d) / 2.0;
+                    out.push(DrawOp::RoundedRect {
+                        rect: rect(x + 2.0, ry, d, d),
+                        radii: BorderRadii::uniform(d / 2.0),
+                        paint: Paint {
+                            fill: if on { Some(accent) } else { None },
+                            stroke: Some(StrokeOp {
+                                color: track_off,
+                                width: 1.5,
+                            }),
+                            opacity,
+                        },
+                    });
+                    if on {
+                        let inner = d * 0.4;
+                        out.push(DrawOp::RoundedRect {
+                            rect: rect(
+                                x + 2.0 + (d - inner) / 2.0,
+                                ry + (d - inner) / 2.0,
+                                inner,
+                                inner,
+                            ),
+                            radii: BorderRadii::uniform(inner / 2.0),
+                            paint: Paint {
+                                fill: Some(knob),
+                                stroke: None,
+                                opacity: 1.0,
+                            },
+                        });
+                    }
+                    out.push(DrawOp::Text(TextRun {
+                        content: ol.to_owned(),
+                        font_family: String::new(),
+                        font_size: fs,
+                        font_weight: 400,
+                        color: Color::rgb(0x11, 0x11, 0x11),
+                        origin: point(x + 2.0 + d + 8.0, ry + (d - fs) / 2.0),
+                        max_width: (w - d - 14.0).max(0.0),
+                        align: TextAlign::Start,
+                        line_height: 0.0,
+                    }));
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Look up a select option's display label by its `value`.
+fn select_label_for(json: &Value, value: &str) -> Option<String> {
+    json.get("options")?.as_array()?.iter().find_map(|o| {
+        (o.get("value").and_then(|v| v.as_str()) == Some(value)).then(|| {
+            o.get("label")
+                .and_then(|v| v.as_str())
+                .unwrap_or(value)
+                .to_owned()
+        })
+    })
+}
+
+/// Literal boolean prop (expression strings read as `false`).
+fn json_bool(json: &Value, key: &str) -> bool {
+    matches!(json.get(key), Some(Value::Bool(true)))
+}
+
+/// Literal numeric prop (expression strings read as `None`).
+fn json_number(json: &Value, key: &str) -> Option<f64> {
+    json.get(key).and_then(|v| v.as_f64())
+}
+
+/// `(min, max, step)` from a slider's schema props (defaults 0/100/1).
+fn slider_props(json: &Value) -> (f64, f64, f64) {
+    (
+        json_number(json, "min").unwrap_or(0.0),
+        json_number(json, "max").unwrap_or(100.0),
+        json_number(json, "step").unwrap_or(1.0),
+    )
 }
 
 /// Resolve the node's effective opacity. `bindings.opacity` writes the
@@ -1196,5 +1505,41 @@ mod tests {
         assert!(ops_blur
             .iter()
             .any(|op| matches!(op, DrawOp::Text(t) if t.content == "hi")));
+    }
+
+    #[test]
+    fn family_widget_static_visuals_render() {
+        let rt = doc_with(
+            r##"{ "version":"1.1", "formatVersion":"1.1", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"frame", "id":"root", "width":400, "height":300,
+                     "layout":"vertical",
+                     "children": [
+                       { "type":"switch",   "id":"sw", "width":44,  "height":24, "checked":true },
+                       { "type":"checkbox", "id":"cb", "width":18,  "height":18, "checked":true },
+                       { "type":"slider",   "id":"sl", "width":200, "height":20,
+                         "min":0, "max":10, "value":5 },
+                       { "type":"progress", "id":"pg", "width":200, "height":8,
+                         "value":40, "max":100 }
+                     ]}
+                 ]}"##,
+        );
+        let ops = collect_draws(rt.document.as_ref().unwrap(), &rt.layout);
+        // Checked checkbox draws its tick as a Path.
+        assert!(
+            ops.iter().any(|op| matches!(op, DrawOp::Path { .. })),
+            "checkbox tick should be a Path op"
+        );
+        // switch (track+knob) + checkbox box + slider (track+fill+knob) +
+        // progress (track+fill) → many rounded-rect parts.
+        let rounded = ops
+            .iter()
+            .filter(|op| matches!(op, DrawOp::RoundedRect { .. }))
+            .count();
+        assert!(
+            rounded >= 6,
+            "expected composite rounded-rect widget parts, got {rounded}"
+        );
     }
 }

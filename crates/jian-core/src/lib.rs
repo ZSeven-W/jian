@@ -33,6 +33,7 @@ pub mod spatial;
 pub mod startup;
 pub mod state;
 pub mod text_input;
+pub mod text_wrap;
 pub mod value;
 pub mod viewport;
 pub mod widget_state;

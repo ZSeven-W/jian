@@ -235,7 +235,12 @@ fn is_focusable(doc: &RuntimeDocument, key: NodeKey) -> bool {
     }
     // Interactive widget node types are focusable by type — no
     // `semantics.role` needed (the node type already carries the
-    // meaning). `progress` is display-only and excluded.
+    // meaning). `progress` is display-only and excluded. Authors who
+    // want a widget out of the Tab ring set `gestures.focusable: false`
+    // (handled above). NOTE: dynamic `semantics.disabled` /
+    // `bindings.disabled` is NOT yet honoured here — the focus chain is
+    // built without a `StateGraph`, so disabled-expression evaluation is
+    // a deliberate follow-up (tracked in the widgets plan).
     if is_interactive_widget(schema) {
         return true;
     }

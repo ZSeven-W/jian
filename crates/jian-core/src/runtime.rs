@@ -539,6 +539,14 @@ impl Runtime {
                 _ => false,
             };
         }
+        // Non-text widgets: Space/Enter toggles switch+checkbox; arrows
+        // step a slider. (Select/Radio/Tabs keyboard navigation lands
+        // with their popup/list behaviour in Phase C.)
+        if !consumed {
+            if let Some(id) = focused_id.as_deref() {
+                consumed = self.route_widget_action_key(id, key.as_str());
+            }
+        }
         if consumed {
             if let Some(id) = focused_id.as_deref() {
                 self.sync_widget_binding(id);
@@ -549,6 +557,100 @@ impl Runtime {
             return Vec::new();
         };
         self.dispatch_key(target, key, modifiers)
+    }
+
+    /// Keyboard behaviour for non-text widgets (toggle flip, slider
+    /// step). Returns `true` when the key changed widget state. The
+    /// caller syncs `bind:value` afterwards.
+    fn route_widget_action_key(&mut self, id: &str, key: &str) -> bool {
+        use crate::widget_state::WidgetState;
+        // Node-derived inputs read before the mutable widget-state borrow.
+        let (min, max, step) = self.slider_bounds(id);
+        let options = self.widget_option_values(id);
+        match self.widget_states.get_mut(id) {
+            Some(WidgetState::Toggle { on }) => match key {
+                "Enter" | " " | "Space" | "Spacebar" => {
+                    *on = !*on;
+                    true
+                }
+                _ => false,
+            },
+            Some(WidgetState::Slider { value, .. }) => {
+                let new = match key {
+                    "ArrowRight" | "ArrowUp" => (*value + step).min(max),
+                    "ArrowLeft" | "ArrowDown" => (*value - step).max(min),
+                    "Home" => min,
+                    "End" => max,
+                    _ => return false,
+                };
+                *value = new;
+                true
+            }
+            // Select + radio: arrows cycle the selected option.
+            Some(WidgetState::Select { value, .. }) | Some(WidgetState::Radio { value, .. }) => {
+                match step_option(&options, value.as_deref(), key) {
+                    Some(next) => {
+                        *value = Some(next);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            // Tabs: arrows cycle the active tab.
+            Some(WidgetState::Tabs { active, .. }) => {
+                match step_option(&options, active.as_deref(), key) {
+                    Some(next) => {
+                        *active = Some(next);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Ordered `value`s of a node's `options` (select / radio) or `tabs`
+    /// (tabs) list — for keyboard cycling. Empty when absent.
+    fn widget_option_values(&self, id: &str) -> Vec<String> {
+        let Some(node) = self
+            .document
+            .as_ref()
+            .and_then(|d| d.tree.get(id).and_then(|k| d.tree.nodes.get(k)))
+        else {
+            return Vec::new();
+        };
+        let Ok(json) = serde_json::to_value(&node.schema) else {
+            return Vec::new();
+        };
+        json.get("options")
+            .or_else(|| json.get("tabs"))
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|o| o.get("value").and_then(|v| v.as_str()).map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// `(min, max, step)` for a slider node, defaulting to `0 / 100 / 1`.
+    fn slider_bounds(&self, id: &str) -> (f64, f64, f64) {
+        use jian_ops_schema::node::PenNode;
+        let node = self
+            .document
+            .as_ref()
+            .and_then(|d| d.tree.get(id).map(|k| (d, k)))
+            .and_then(|(d, k)| d.tree.nodes.get(k));
+        if let Some(PenNode::Slider(s)) = node.map(|n| &n.schema) {
+            (
+                s.min.unwrap_or(0.0),
+                s.max.unwrap_or(100.0),
+                s.step.unwrap_or(1.0),
+            )
+        } else {
+            (0.0, 100.0, 1.0)
+        }
     }
 
     /// Update the host clock (ms). Drives widget caret-blink phase; the
@@ -644,7 +746,18 @@ impl Runtime {
     /// supported by the runtime — see `action::actions::state::write_path`).
     fn sync_widget_binding(&mut self, node_id: &str) {
         use crate::widget_state::WidgetState;
+        // `number_input` shares `TextInput` edit state but binds a numeric
+        // value — write a JSON number (empty/invalid → null), not a string.
+        let numeric = self.widget_is_number_input(node_id);
         let value = match self.widget_states.get_mut(node_id) {
+            Some(WidgetState::TextInput(st)) if numeric => st
+                .text()
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
             Some(WidgetState::TextInput(st)) => serde_json::Value::String(st.text().to_owned()),
             Some(WidgetState::Toggle { on }) => serde_json::Value::Bool(*on),
             Some(WidgetState::Slider { value, .. }) => serde_json::json!(*value),
@@ -680,6 +793,17 @@ impl Runtime {
             return None;
         }
         Some(rest.to_owned())
+    }
+
+    /// True when `node_id` is a `number_input` node (which binds a
+    /// numeric value despite sharing `TextInput` edit state).
+    fn widget_is_number_input(&self, node_id: &str) -> bool {
+        self.document
+            .as_ref()
+            .and_then(|d| d.tree.get(node_id).map(|k| (d, k)))
+            .and_then(|(d, k)| d.tree.nodes.get(k))
+            .map(|n| matches!(n.schema, jian_ops_schema::node::PenNode::NumberInput(_)))
+            .unwrap_or(false)
     }
 
     /// Move focus forward one step (`Tab`) and emit the corresponding
@@ -984,6 +1108,27 @@ fn event_payload(event: &SemanticEvent) -> Option<serde_json::Value> {
     }
 }
 
+/// Cycle through an ordered option list by one step in the arrow
+/// direction, wrapping at the ends. `None` for non-arrow keys or an
+/// empty list. Starting from no selection, Down/Right picks the first
+/// option and Up/Left the last.
+fn step_option(options: &[String], current: Option<&str>, key: &str) -> Option<String> {
+    if options.is_empty() {
+        return None;
+    }
+    let delta: i32 = match key {
+        "ArrowDown" | "ArrowRight" => 1,
+        "ArrowUp" | "ArrowLeft" => -1,
+        _ => return None,
+    };
+    let next = match current.and_then(|c| options.iter().position(|o| o == c)) {
+        Some(i) => (i as i32 + delta).rem_euclid(options.len() as i32) as usize,
+        None if delta > 0 => 0,
+        None => options.len() - 1,
+    };
+    Some(options[next].clone())
+}
+
 /// Does the node's schema carry a non-empty `events.<key>` ActionList?
 /// Round-trips through serde_json::Value so the same code handles all
 /// 11 PenNode variants without per-variant matches — same trick the
@@ -1090,6 +1235,91 @@ mod tests {
             .app_get("email")
             .and_then(|v| v.as_str().map(str::to_owned));
         assert_eq!(got.as_deref(), Some("a@"));
+    }
+
+    #[test]
+    fn number_input_bind_value_syncs_as_json_number() {
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{"version":"1.1","formatVersion":"1.1",
+                  "state":{"n":{"type":"float","default":0}},
+                  "children":[
+                    {"type":"frame","id":"root","children":[
+                      {"type":"number_input","id":"ni",
+                       "bindings":{"bind:value":"$state.n"}}]}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.focus_next();
+        assert!(rt.dispatch_text_input("42"));
+        // Bound as a number, not the string "42".
+        assert_eq!(rt.state.app_get("n").and_then(|v| v.as_f64()), Some(42.0));
+    }
+
+    #[test]
+    fn switch_and_slider_keyboard_sync_to_state_graph() {
+        use crate::gesture::pointer::Modifiers;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{"version":"1.1","formatVersion":"1.1",
+                  "state":{"on":{"type":"bool","default":false},
+                           "vol":{"type":"float","default":0}},
+                  "children":[
+                    {"type":"frame","id":"root","children":[
+                      {"type":"switch","id":"sw","bindings":{"bind:value":"$state.on"}},
+                      {"type":"slider","id":"sl","min":0,"max":10,"step":2,
+                       "bindings":{"bind:value":"$state.vol"}}]}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        // Switch: Space flips it on.
+        rt.focus_next();
+        rt.dispatch_keyboard(" ", Modifiers::empty());
+        assert_eq!(rt.state.app_get("on").and_then(|v| v.as_bool()), Some(true));
+        // Slider: two ArrowRight steps of 2 → 4.
+        rt.focus_next();
+        rt.dispatch_keyboard("ArrowRight", Modifiers::empty());
+        rt.dispatch_keyboard("ArrowRight", Modifiers::empty());
+        assert_eq!(rt.state.app_get("vol").and_then(|v| v.as_f64()), Some(4.0));
+    }
+
+    #[test]
+    fn select_arrow_keys_cycle_options_into_state_graph() {
+        use crate::gesture::pointer::Modifiers;
+        let mut rt = Runtime::new_from_document(
+            serde_json::from_str::<PenDocument>(
+                r#"{"version":"1.1","formatVersion":"1.1",
+                  "state":{"choice":{"type":"string","default":""}},
+                  "children":[
+                    {"type":"frame","id":"root","children":[
+                      {"type":"select","id":"se","value":"a",
+                       "options":[{"value":"a","label":"A"},{"value":"b","label":"B"},
+                                  {"value":"c","label":"C"}],
+                       "bindings":{"bind:value":"$state.choice"}}]}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        rt.focus_next();
+        rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // a → b
+        rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // b → c
+        assert_eq!(
+            rt.state
+                .app_get("choice")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .as_deref(),
+            Some("c")
+        );
+        rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // c → a (wrap)
+        assert_eq!(
+            rt.state
+                .app_get("choice")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .as_deref(),
+            Some("a")
+        );
     }
 
     #[test]
