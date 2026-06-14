@@ -2439,6 +2439,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "jian-gallery"
+version = "0.0.1"
+dependencies = [
+ "jian-core",
+ "jian-ops-schema",
+ "jian-skia",
+ "jian-widgets",
+ "serde_json",
+ "skia-safe",
+ "softbuffer",
+ "winit",
+]
+
+[[package]]
 name = "jian-host-desktop"
 version = "0.0.1"
 dependencies = [

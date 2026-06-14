@@ -1,0 +1,26 @@
+[package]
+name         = "jian-gallery"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "Interactive gallery for jian-widgets across desktop and mobile targets"
+
+[features]
+default = ["desktop"]
+desktop = ["dep:softbuffer", "dep:winit"]
+metal   = ["jian-skia/metal", "skia-safe/metal"]
+gl      = ["jian-skia/gl", "skia-safe/gl"]
+d3d     = ["jian-skia/d3d", "skia-safe/d3d"]
+
+[dependencies]
+jian-core       = { path = "../jian-core" }
+jian-ops-schema = { path = "../jian-ops-schema" }
+jian-skia       = { path = "../jian-skia" }
+jian-widgets    = { path = "../jian-widgets" }
+serde_json      = { workspace = true }
+skia-safe       = "0.97.0"
+softbuffer      = { version = "0.4", optional = true }
+winit           = { version = "0.30", optional = true }
