@@ -24,6 +24,12 @@ pub struct TextAreaNode {
     /// Initial value. Two-way binding lives on `bindings.bind:value`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Lucide glyph drawn at the left content edge. See `TextInputNode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_icon: Option<String>,
+    /// Lucide glyph drawn at the right content edge. See `TextInputNode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_icon: Option<String>,
     /// Visible-line window before the content scrolls (chat-style).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_visible_lines: Option<u32>,

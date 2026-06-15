@@ -2491,6 +2491,20 @@
                 "null"
               ]
             },
+            "leadingIcon": {
+              "description": "Lucide glyph drawn at the left content edge (e.g. `mail`, `lock`). The painter insets the text/caret past it so the whole box stays one interactive node. `None` = no leading icon.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trailingIcon": {
+              "description": "Lucide glyph drawn at the right content edge (e.g. `eye` for a password reveal). Decorative in Phase 1 (no toggle behaviour).",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "fill": {
               "type": [
                 "array",
@@ -3268,6 +3282,20 @@
             },
             "value": {
               "description": "Initial value. Two-way binding lives on `bindings.bind:value`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "leadingIcon": {
+              "description": "Lucide glyph drawn at the left content edge. See `TextInputNode`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trailingIcon": {
+              "description": "Lucide glyph drawn at the right content edge. See `TextInputNode`.",
               "type": [
                 "string",
                 "null"
@@ -4875,6 +4903,20 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "leadingIcon": {
+              "description": "Lucide glyph drawn at the left content edge. See `TextInputNode`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trailingIcon": {
+              "description": "Lucide glyph drawn at the right content edge. See `TextInputNode`.",
+              "type": [
+                "string",
+                "null"
               ]
             },
             "min": {

@@ -24,6 +24,12 @@ pub struct NumberInputNode {
     pub placeholder: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<NumberOrExpression>,
+    /// Lucide glyph drawn at the left content edge. See `TextInputNode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_icon: Option<String>,
+    /// Lucide glyph drawn at the right content edge. See `TextInputNode`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

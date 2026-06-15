@@ -30,6 +30,15 @@ pub struct TextInputNode {
     /// in sync with the state graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    /// Lucide glyph drawn at the left content edge (e.g. `mail`, `lock`).
+    /// The painter insets the text/caret past it so the whole box stays
+    /// one interactive node. `None` = no leading icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leading_icon: Option<String>,
+    /// Lucide glyph drawn at the right content edge (e.g. `eye` for a
+    /// password reveal). Decorative in Phase 1 (no toggle behaviour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trailing_icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<Vec<PenFill>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

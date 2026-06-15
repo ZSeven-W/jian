@@ -60,6 +60,14 @@ export type Capability = "storage" | "network" | "camera" | "microphone" | "loca
  */
 export type CheckboxNode = { width: SizingBehavior | null, height: SizingBehavior | null, checked: BoolOrExpression | null, label: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
+/**
+ * Container props — shared by Frame/Group/Rectangle.
+ * `children` is NOT included here because PenNode children are recursively
+ * defined in node/mod.rs to avoid circular module dependency. Each concrete
+ * node type that has children declares it explicitly via `children: Option<Vec<PenNode>>`.
+ */
+export type ContainerProps = { width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null, cornerRadius: CornerRadius | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, };
+
 export type CornerRadius = number | [number, number, number, number];
 
 /**
@@ -205,7 +213,15 @@ export type NumberInputNode = { width: SizingBehavior | null, height: SizingBeha
 /**
  * Placeholder shown when `value` is empty.
  */
-placeholder: string | null, value: NumberOrExpression | null, min: number | null, max: number | null, step: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+placeholder: string | null, value: NumberOrExpression | null, 
+/**
+ * Lucide glyph drawn at the left content edge. See `TextInputNode`.
+ */
+leadingIcon: string | null, 
+/**
+ * Lucide glyph drawn at the right content edge. See `TextInputNode`.
+ */
+trailingIcon: string | null, min: number | null, max: number | null, step: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 /**
  * Opacity can be a number or a `$variable` reference string.
@@ -259,6 +275,12 @@ export type PenFill = { "type": "solid" } & SolidFillBody | { "type": "linear_gr
  * Tag is the JSON `"type"` field.
  */
 export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "text_input" } & TextInputNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "text_area" } & TextAreaNode | { "type": "select" } & SelectNode | { "type": "switch" } & SwitchNode | { "type": "checkbox" } & CheckboxNode | { "type": "slider" } & SliderNode | { "type": "radio_group" } & RadioGroupNode | { "type": "number_input" } & NumberInputNode | { "type": "progress" } & ProgressNode | { "type": "tabs" } & TabsNode | { "type": "ref" } & RefNode;
+
+/**
+ * Shared fields across all node types.
+ * Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.
+ */
+export type PenNodeBase = { id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type PenPage = { id: string, name: string, children: Array<PenNode>, state: { [key in string]?: StateEntry } | null, lifecycle: PageLifecycleHooks | null, };
 
@@ -448,6 +470,14 @@ placeholder: string | null,
  */
 value: string | null, 
 /**
+ * Lucide glyph drawn at the left content edge. See `TextInputNode`.
+ */
+leadingIcon: string | null, 
+/**
+ * Lucide glyph drawn at the right content edge. See `TextInputNode`.
+ */
+trailingIcon: string | null, 
+/**
  * Visible-line window before the content scrolls (chat-style).
  */
 maxVisibleLines: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
@@ -474,7 +504,18 @@ placeholder: string | null,
  * which derive lifts into a `set_*` action and the runtime keeps
  * in sync with the state graph.
  */
-value: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
+value: string | null, 
+/**
+ * Lucide glyph drawn at the left content edge (e.g. `mail`, `lock`).
+ * The painter insets the text/caret past it so the whole box stays
+ * one interactive node. `None` = no leading icon.
+ */
+leadingIcon: string | null, 
+/**
+ * Lucide glyph drawn at the right content edge (e.g. `eye` for a
+ * password reveal). Decorative in Phase 1 (no toggle behaviour).
+ */
+trailingIcon: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type TextNode = { width: SizingBehavior | null, height: SizingBehavior | null, content: TextContent, fontFamily: string | null, fontSize: number | null, fontWeight: FontWeight | null, fontStyle: FontStyleKind | null, letterSpacing: number | null, lineHeight: number | null, textAlign: TextAlign | null, textAlignVertical: TextAlignVertical | null, textGrowth: TextGrowth | null, underline: boolean | null, strikethrough: boolean | null, fill: Array<PenFill> | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 

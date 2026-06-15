@@ -144,13 +144,30 @@ fn split_text(frame: &FrameNode) -> (Option<String>, Option<String>) {
     (placeholder, value)
 }
 
+/// Pull leading + trailing lucide glyph names from a frame's `icon_font`
+/// children: the FIRST icon_font (by child order) is the leading icon, a
+/// SECOND icon_font (if any) is the trailing icon (e.g. a password-reveal
+/// eye). A bare frame yields `(None, None)`. Lets a `role=input` field
+/// keep its icons after collapsing to a single `text_input` node.
+fn split_icons(frame: &FrameNode) -> (Option<String>, Option<String>) {
+    let mut names = frame.children.iter().flatten().filter_map(|c| match c {
+        PenNode::IconFont(i) => Some(i.icon_font_name.clone()),
+        _ => None,
+    });
+    let leading = names.next();
+    let trailing = names.next();
+    (leading, trailing)
+}
+
 /// Build the widget node replacing `frame`. Style (fill/stroke/effects/
 /// corner_radius) and box sizing are carried over verbatim from the
 /// frame's container; the first text child becomes `placeholder` (muted
-/// fill) or `value` (anything else). Children are dropped — widget
-/// nodes are leaves.
+/// fill) or `value` (anything else), and `icon_font` children become the
+/// `text_input` leading/trailing icons. Remaining children are dropped —
+/// widget nodes are leaves.
 pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
     let (placeholder, value) = split_text(frame);
+    let (leading_icon, trailing_icon) = split_icons(frame);
     let c = &frame.container;
     let mut base = frame.base.clone();
     base.role = None; // the node type now carries the meaning
@@ -162,6 +179,8 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             height: c.height.clone(),
             placeholder,
             value,
+            leading_icon,
+            trailing_icon,
             fill: c.fill.clone(),
             stroke: c.stroke.clone(),
             effects: c.effects.clone(),
@@ -181,6 +200,8 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             height: c.height.clone(),
             placeholder,
             value,
+            leading_icon,
+            trailing_icon,
             max_visible_lines: None,
             fill: c.fill.clone(),
             stroke: c.stroke.clone(),
@@ -355,6 +376,48 @@ mod tests {
         assert!(ti.base.role.is_none());
         // Style carried over from the frame container.
         assert!(ti.fill.is_some());
+    }
+
+    #[test]
+    fn promote_input_frame_carries_icons_and_placeholder() {
+        // role=input field: leading mail icon + muted placeholder + trailing eye.
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"emailField","role":"input","width":300,"height":48,
+           "cornerRadius":12,"fill":[{"type":"solid","color":"#f3f4f6"}],"children":[
+             {"type":"icon_font","id":"i1","iconFontName":"mail","width":20,"height":20},
+             {"type":"text","id":"t1","content":"you@example.com",
+              "fill":[{"type":"solid","color":"#9ca3af"}]},
+             {"type":"icon_font","id":"i2","iconFontName":"eye","width":20,"height":20}
+           ]}]}"##);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes[0].to, "text_input");
+        let PenNode::TextInput(t) = &d.children[0] else {
+            panic!("did not become text_input")
+        };
+        assert_eq!(t.leading_icon.as_deref(), Some("mail"));
+        assert_eq!(t.trailing_icon.as_deref(), Some("eye"));
+        assert_eq!(t.placeholder.as_deref(), Some("you@example.com"));
+        assert_eq!(t.base.id, "emailField"); // id preserved
+    }
+
+    #[test]
+    fn text_input_round_trips_leading_and_trailing_icon() {
+        let node: PenNode = serde_json::from_str(
+            r#"{"type":"text_input","id":"f","leadingIcon":"mail","trailingIcon":"eye","placeholder":"you@example.com"}"#,
+        )
+        .expect("parse");
+        let PenNode::TextInput(t) = &node else {
+            panic!("not a text_input")
+        };
+        assert_eq!(t.leading_icon.as_deref(), Some("mail"));
+        assert_eq!(t.trailing_icon.as_deref(), Some("eye"));
+        // Absent icon fields must NOT serialize (skip_serializing_if).
+        let bare: PenNode = serde_json::from_str(r#"{"type":"text_input","id":"g"}"#).unwrap();
+        let out = serde_json::to_string(&bare).unwrap();
+        assert!(
+            !out.contains("leadingIcon"),
+            "absent icon must be omitted: {out}"
+        );
     }
 
     #[test]
