@@ -91,12 +91,37 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
         _ => 0.0,
     };
     let gap_lp: LengthPercentage = length(gap_val);
+    // A fixed (Number) container must not be flex-shrunk below its size —
+    // same rule as leaf nodes. TS sums fixed sizes and shares only the
+    // remainder among fill_container, so a 44x44 icon-button background or
+    // a round pin background keeps its square/circle instead of taffy's
+    // default flex_shrink:1 squeezing it into a thin oval/rectangle.
+    let fixed = matches!(c.width.as_ref(), Some(SizingBehavior::Number(_)))
+        && matches!(c.height.as_ref(), Some(SizingBehavior::Number(_)));
+    // A fill_container axis must be allowed to shrink below its content's
+    // min-size, so a fixed sibling (flex_shrink=0) gets its space. TS gives
+    // fill the *remaining* space (text wraps), not its longest-line
+    // min-content; taffy's default `min_size: auto` would clamp a fill text
+    // column at min-content and push the fixed image out of the card.
+    let fill_w = matches!(
+        c.width.as_ref(),
+        Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
+    );
+    let fill_h = matches!(
+        c.height.as_ref(),
+        Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
+    );
     Style {
         display: Display::Flex,
         size: Size {
             width: resolve_sizing(c.width.as_ref()),
             height: resolve_sizing(c.height.as_ref()),
         },
+        min_size: Size {
+            width: if fill_w { length(0.0) } else { auto() },
+            height: if fill_h { length(0.0) } else { auto() },
+        },
+        flex_shrink: if fixed { 0.0 } else { 1.0 },
         padding: resolve_padding(c.padding.as_ref()),
         flex_direction: resolve_flex_direction(c.layout.as_ref()),
         justify_content: Some(resolve_justify(c.justify_content.as_ref())),
@@ -124,11 +149,21 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
         PenNode::Rectangle(r) => container_to_style(&r.container),
         _ => {
             let (w, h) = leaf_size(n);
+            // A fixed (Number) leaf must not be flex-shrunk below its size:
+            // TS sums fixed sizes and shares only the remainder among
+            // fill_container, whereas taffy's default `flex_shrink = 1`
+            // compresses a fixed 132x132 image / 44x44 icon in a tight row
+            // (square → rectangle). Pin shrink off only when BOTH axes are
+            // fixed Number — a width=fill,height=Number tile must still
+            // flex-share its row, so squares keep their size (matches TS).
+            let fixed = matches!(w, Some(SizingBehavior::Number(_)))
+                && matches!(h, Some(SizingBehavior::Number(_)));
             Style {
                 size: Size {
                     width: resolve_sizing(w),
                     height: resolve_sizing(h),
                 },
+                flex_shrink: if fixed { 0.0 } else { 1.0 },
                 ..Default::default()
             }
         }
