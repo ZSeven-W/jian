@@ -178,7 +178,7 @@ impl Select<'_> {
             };
             let origin = Point2D::new(
                 row_rect.origin.x + 10.0,
-                row_rect.origin.y + (row_h - font_size) / 2.0,
+                centered_text_baseline_y(row_rect, font_size),
             );
             let layout = TextLayout::single_run(
                 item.label,
@@ -277,6 +277,10 @@ fn resolved_row_height(row_height: f32) -> f32 {
     } else {
         crate::Density::Desktop.row_height()
     }
+}
+
+fn centered_text_baseline_y(rect: Rect, font_size: f32) -> f32 {
+    rect.origin.y + rect.size.y / 2.0 + font_size * 0.35
 }
 
 fn clamped_first_row(
@@ -452,6 +456,39 @@ mod tests {
             .map(|(content, _, _)| content.to_owned())
             .collect();
         assert_eq!(labels.first().map(String::as_str), Some("Item 1"));
+    }
+
+    #[test]
+    fn paint_places_first_row_text_baseline_inside_popup_clip() {
+        let t = Tokens::dark();
+        let anchor = Rect::xywh(20.0, 20.0, 100.0, 20.0);
+        let viewport = Rect::xywh(0.0, 0.0, 300.0, 400.0);
+        let state = SelectState {
+            open: true,
+            ..SelectState::default()
+        };
+        let items = [SelectItem {
+            label: "English",
+            selected: false,
+            disabled: false,
+        }];
+        let select = Select {
+            state: &state,
+            items: &items,
+        };
+        let mut p = crate::test_support::CapturePainter::default();
+        let popup = Select::popup_rect(anchor, viewport, items.len(), &t);
+
+        select.paint(&mut p, anchor, viewport, &t);
+
+        let (_, first_origin, _) = p.texts().next().expect("first row text");
+        assert!(
+            first_origin.y >= popup.origin.y + t.density.font_size(),
+            "first-row text baseline should leave enough ascent inside the popup clip: baseline={}, popup_top={}, font_size={}",
+            first_origin.y,
+            popup.origin.y,
+            t.density.font_size()
+        );
     }
 
     #[test]
