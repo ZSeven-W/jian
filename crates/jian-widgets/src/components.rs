@@ -1,5 +1,6 @@
 //! Reusable immediate-mode components.
 
+pub mod badge;
 pub mod button;
 pub mod dialog;
 pub mod menu;
