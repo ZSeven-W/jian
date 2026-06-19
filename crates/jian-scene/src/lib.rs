@@ -4,5 +4,6 @@
 //! from a document; it is the form the `RenderBackend` painters consume. Moved
 //! out of OpenPencil's `op-editor-ui` so it can be shared cross-product.
 pub mod layout_scene;
-// path_geometry + layout_scene_hit are added in later tasks.
+pub mod path_geometry;
+// layout_scene_hit is added in the next task.
 pub use layout_scene::{SceneTextAlign, SceneTextVerticalAlign};
