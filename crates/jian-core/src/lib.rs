@@ -16,6 +16,7 @@ pub mod action_surface;
 pub mod anim;
 pub mod binding;
 pub mod capability;
+pub mod cursor;
 pub mod document;
 pub mod effect;
 pub mod error;
@@ -39,6 +40,7 @@ pub mod viewport;
 pub mod widget_state;
 
 pub use binding::{BindingEffect, DeferredBindingQueue};
+pub use cursor::CursorHint;
 pub use error::{CoreError, CoreResult};
 pub use runtime::Runtime;
 
