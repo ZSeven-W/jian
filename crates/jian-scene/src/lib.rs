@@ -5,5 +5,5 @@
 //! out of OpenPencil's `op-editor-ui` so it can be shared cross-product.
 pub mod layout_scene;
 pub mod path_geometry;
-// layout_scene_hit is added in the next task.
+pub mod layout_scene_hit;
 pub use layout_scene::{SceneTextAlign, SceneTextVerticalAlign};
