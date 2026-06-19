@@ -49,9 +49,20 @@ pub struct Tokens {
     pub accent: Color,
     pub accent_foreground: Color,
     pub destructive: Color,
+    /// Text on a `destructive` surface (shadcn `--destructive-foreground`).
+    pub destructive_foreground: Color,
+    /// Secondary neutral surface + its foreground (shadcn `--secondary`).
+    pub secondary: Color,
+    pub secondary_foreground: Color,
+    /// Form-field border (shadcn `--input`) — input box + switch off-track.
+    pub input: Color,
+    /// Focus-visible ring color (shadcn `--ring`).
+    pub ring: Color,
     pub button_hover: Color,
     pub row_selected: Color,
     pub row_selected_primary: Color,
+    /// Default corner radius (shadcn `--radius`), in px.
+    pub radius: f32,
     pub density: Density,
 }
 
@@ -73,9 +84,15 @@ impl Tokens {
             accent: Color::rgb_u8(0x26, 0x26, 0x26),
             accent_foreground: Color::rgb_u8(0xfa, 0xfa, 0xfa),
             destructive: Color::rgb_u8(0xef, 0x44, 0x44),
+            destructive_foreground: Color::rgb_u8(0xfa, 0xfa, 0xfa),
+            secondary: Color::rgb_u8(0x26, 0x26, 0x26),
+            secondary_foreground: Color::rgb_u8(0xfa, 0xfa, 0xfa),
+            input: Color::rgb_u8(0x2a, 0x2a, 0x2a),
+            ring: Color::rgb_u8(0x3b, 0x82, 0xf6),
             button_hover: Color::rgba_u8(0xff, 0xff, 0xff, 0.06),
             row_selected: Color::rgb_u8(0x26, 0x26, 0x26),
             row_selected_primary: Color::rgba_u8(0x3b, 0x82, 0xf6, 0.18),
+            radius: 6.0,
             density: Density::Desktop,
         }
     }
@@ -97,9 +114,15 @@ impl Tokens {
             accent: Color::rgb_u8(0xf5, 0xf5, 0xf5),
             accent_foreground: Color::rgb_u8(0x0a, 0x0a, 0x0a),
             destructive: Color::rgb_u8(0xef, 0x44, 0x44),
+            destructive_foreground: Color::rgb_u8(0xfa, 0xfa, 0xfa),
+            secondary: Color::rgb_u8(0xf5, 0xf5, 0xf5),
+            secondary_foreground: Color::rgb_u8(0x0a, 0x0a, 0x0a),
+            input: Color::rgb_u8(0xe5, 0xe5, 0xe5),
+            ring: Color::rgb_u8(0x3b, 0x82, 0xf6),
             button_hover: Color::rgba_u8(0x00, 0x00, 0x00, 0.06),
             row_selected: Color::rgb_u8(0xe5, 0xe5, 0xe5),
             row_selected_primary: Color::rgba_u8(0x3b, 0x82, 0xf6, 0.15),
+            radius: 6.0,
             density: Density::Desktop,
         }
     }
