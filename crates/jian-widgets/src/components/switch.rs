@@ -10,7 +10,7 @@ pub struct Switch {
 
 impl Switch {
     pub fn paint(&self, p: &mut dyn Painter, rect: Rect, t: &Tokens) {
-        let mut track = if self.on { t.primary } else { t.muted };
+        let mut track = if self.on { t.primary } else { t.input };
         if self.pressed {
             track = track.with_alpha((track.a * 0.85).max(0.0));
         }
@@ -101,7 +101,7 @@ mod tests {
 
         s.paint(&mut p, Rect::xywh(0.0, 0.0, 40.0, 22.0), &t);
 
-        assert_eq!(p.fills_with(t.muted.with_alpha(0.5)), 1);
+        assert_eq!(p.fills_with(t.input.with_alpha(0.5)), 1);
     }
 
     #[test]
