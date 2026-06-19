@@ -215,6 +215,38 @@ impl LayoutScene {
         };
         page.translate_nodes(ids, dx, dy)
     }
+
+    /// Repaint matched render nodes' resolved fill in-place without a
+    /// layout rebuild. Live colour-picker drags update the canonical
+    /// `EditorState` fill first, but a solid-colour change touches no
+    /// layout, so the scene stays in sync by patching the resolved fill
+    /// until release-time reconciliation. `color`'s alpha is scaled by
+    /// each node's baked cumulative opacity to match scene-build. Returns
+    /// whether any node matched.
+    pub fn set_node_fill(&mut self, ids: &[String], color: Color) -> bool {
+        if ids.is_empty() {
+            return false;
+        }
+        let Some(page) = self.pages.get_mut(self.active_page_index) else {
+            return false;
+        };
+        set_matching_node_fill(&mut page.children, ids, color)
+    }
+
+    /// Repaint matched render nodes' stroke colour in-place (see
+    /// [`Self::set_node_fill`]). Only patches nodes that already carry a
+    /// resolved stroke — adding a brand-new stroke needs the full rebuild
+    /// (its width is not known here), so those nodes do not count as
+    /// patched and the caller falls back to a layout pass.
+    pub fn set_node_stroke_color(&mut self, ids: &[String], color: Color) -> bool {
+        if ids.is_empty() {
+            return false;
+        }
+        let Some(page) = self.pages.get_mut(self.active_page_index) else {
+            return false;
+        };
+        set_matching_node_stroke(&mut page.children, ids, color)
+    }
 }
 
 impl ScenePage {
@@ -247,6 +279,51 @@ fn translate_matching_nodes(nodes: &mut [SceneNode], ids: &[String], dx: f32, dy
         }
     }
     changed
+}
+
+fn set_matching_node_fill(nodes: &mut [SceneNode], ids: &[String], color: Color) -> bool {
+    let mut changed = false;
+    for node in nodes {
+        if ids.iter().any(|id| id == &node.id) {
+            node.fill = Some(bake_node_alpha(color, node.opacity));
+            changed = true;
+        } else if set_matching_node_fill(&mut node.children, ids, color) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn set_matching_node_stroke(nodes: &mut [SceneNode], ids: &[String], color: Color) -> bool {
+    let mut changed = false;
+    for node in nodes {
+        if ids.iter().any(|id| id == &node.id) {
+            // Only an existing resolved stroke can be repainted in place;
+            // a fresh stroke would need a width the scene patch lacks, so
+            // that case is left for the caller's rebuild fallback.
+            if let Some(stroke) = node.stroke.as_mut() {
+                stroke.color = bake_node_alpha(color, node.opacity);
+                changed = true;
+            }
+        } else if set_matching_node_stroke(&mut node.children, ids, color) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Scale `color`'s alpha by a node's baked cumulative opacity so an
+/// in-place paint patch matches what scene-build would have produced
+/// (scene-build bakes opacity into fill / stroke alpha). Opaque fast-path
+/// when the node is fully opaque.
+fn bake_node_alpha(color: Color, opacity: f32) -> Color {
+    if opacity >= 1.0 {
+        return color;
+    }
+    Color {
+        a: color.a * opacity.clamp(0.0, 1.0),
+        ..color
+    }
 }
 
 /// One resolved page — an artboard / page id + name + the top-level

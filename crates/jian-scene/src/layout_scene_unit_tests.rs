@@ -142,6 +142,108 @@ fn translate_nodes_moves_path_absolute_geometry() {
 }
 
 #[test]
+fn set_node_fill_patches_matching_node_and_reports_match() {
+    let child = SceneNode::leaf("child", NodeKind::Rect);
+    let mut parent = SceneNode::leaf("parent", NodeKind::Group);
+    parent.children = vec![child];
+    let mut scene = LayoutScene {
+        pages: vec![ScenePage {
+            id: "p".into(),
+            name: "P".into(),
+            children: vec![parent],
+        }],
+        active_page_index: 0,
+    };
+
+    let red = Color {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    };
+    // Patches a nested node (opacity 1.0 → no alpha scaling).
+    assert!(scene.set_node_fill(&["child".into()], red));
+    let child = scene.active_page().and_then(|p| p.find("child")).unwrap();
+    assert_eq!(child.fill, Some(red));
+    // A non-matching id reports no match (caller then rebuilds).
+    assert!(!scene.set_node_fill(&["missing".into()], red));
+}
+
+#[test]
+fn set_node_fill_bakes_node_opacity_into_alpha() {
+    let mut node = SceneNode::leaf("n", NodeKind::Rect);
+    node.opacity = 0.5;
+    let mut scene = LayoutScene {
+        pages: vec![ScenePage {
+            id: "p".into(),
+            name: "P".into(),
+            children: vec![node],
+        }],
+        active_page_index: 0,
+    };
+
+    let opaque = Color {
+        r: 0.2,
+        g: 0.4,
+        b: 0.6,
+        a: 1.0,
+    };
+    assert!(scene.set_node_fill(&["n".into()], opaque));
+    let fill = scene
+        .active_page()
+        .and_then(|p| p.find("n"))
+        .unwrap()
+        .fill
+        .unwrap();
+    // Alpha scaled by the node's cumulative opacity; rgb unchanged.
+    assert_eq!(fill.a, 0.5);
+    assert_eq!((fill.r, fill.g, fill.b), (0.2, 0.4, 0.6));
+}
+
+#[test]
+fn set_node_stroke_color_only_patches_an_existing_stroke() {
+    let bare = SceneNode::leaf("bare", NodeKind::Rect);
+    let mut styled = SceneNode::leaf("styled", NodeKind::Rect);
+    styled.stroke = Some(SceneStroke {
+        color: Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        },
+        width: 2.0,
+    });
+    let mut scene = LayoutScene {
+        pages: vec![ScenePage {
+            id: "p".into(),
+            name: "P".into(),
+            children: vec![bare, styled],
+        }],
+        active_page_index: 0,
+    };
+
+    let blue = Color {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+        a: 1.0,
+    };
+    // No stroke → width unknown → not patchable, caller must rebuild.
+    assert!(!scene.set_node_stroke_color(&["bare".into()], blue));
+    // Existing stroke → colour repainted, width preserved.
+    assert!(scene.set_node_stroke_color(&["styled".into()], blue));
+    let stroke = scene
+        .active_page()
+        .and_then(|p| p.find("styled"))
+        .unwrap()
+        .stroke
+        .as_ref()
+        .unwrap();
+    assert_eq!(stroke.color, blue);
+    assert_eq!(stroke.width, 2.0);
+}
+
+#[test]
 fn leaf_node_clears_paint_fields() {
     let n = SceneNode::leaf("n1", NodeKind::Rect);
     assert_eq!(n.bounds, Rect::ZERO);
