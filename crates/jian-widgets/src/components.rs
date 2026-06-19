@@ -2,6 +2,7 @@
 
 pub mod badge;
 pub mod button;
+pub mod card;
 pub mod checkbox;
 pub mod dialog;
 pub mod menu;
