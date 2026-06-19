@@ -12,6 +12,10 @@ pub enum ButtonVariant {
     Primary,
     Outline,
     Destructive,
+    /// Muted neutral fill (shadcn `secondary`) — secondary actions.
+    Secondary,
+    /// Text-only, primary-colored, no fill/stroke (shadcn `link`).
+    Link,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -100,6 +104,8 @@ impl Button<'_> {
             ButtonVariant::Primary => (Some(t.primary), None, t.primary_foreground),
             ButtonVariant::Outline => (feedback, Some(t.border), t.foreground),
             ButtonVariant::Destructive => (Some(t.destructive), None, t.primary_foreground),
+            ButtonVariant::Secondary => (Some(t.secondary), None, t.secondary_foreground),
+            ButtonVariant::Link => (None, None, t.primary),
         };
 
         if self.enabled {
@@ -216,5 +222,49 @@ mod tests {
         let rect = Rect::xywh(10.0, 20.0, 80.0, 30.0);
         assert!(Button::hit(rect, Point2D::new(90.0, 50.0)));
         assert!(!Button::hit(rect, Point2D::new(91.0, 50.0)));
+    }
+
+    #[test]
+    fn secondary_paints_secondary_fill_and_foreground() {
+        let t = Tokens::dark();
+        let b = Button {
+            label: "Cancel",
+            icon_d: None,
+            variant: ButtonVariant::Secondary,
+            enabled: true,
+            hovered: false,
+            pressed: false,
+            font_size: 13.0,
+        };
+        let mut p = CapturePainter::default();
+
+        b.paint(&mut p, Rect::xywh(0.0, 0.0, 80.0, 30.0), &t);
+
+        assert_eq!(p.fills_with(t.secondary), 1);
+        let (_, _, color) = p.texts().next().expect("label should be painted");
+        assert_eq!(color, t.secondary_foreground.to_jian());
+    }
+
+    #[test]
+    fn link_paints_no_fill_with_primary_text() {
+        let t = Tokens::dark();
+        let b = Button {
+            label: "Learn more",
+            icon_d: None,
+            variant: ButtonVariant::Link,
+            enabled: true,
+            hovered: true,
+            pressed: false,
+            font_size: 13.0,
+        };
+        let mut p = CapturePainter::default();
+
+        b.paint(&mut p, Rect::xywh(0.0, 0.0, 100.0, 30.0), &t);
+
+        // Link has no fill even when hovered (no feedback wash).
+        assert_eq!(p.fills_with(t.secondary), 0);
+        assert_eq!(p.fills_with(t.button_hover), 0);
+        let (_, _, color) = p.texts().next().expect("label should be painted");
+        assert_eq!(color, t.primary.to_jian());
     }
 }
