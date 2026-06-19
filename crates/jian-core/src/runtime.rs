@@ -32,7 +32,6 @@ use crate::gesture::{
     collect_focus_chain, dispatch_event, FocusManager, PointerEvent, PointerRouter, SemanticEvent,
 };
 use crate::layout::LayoutEngine;
-use crate::scene::SceneGraph;
 use crate::signal::scheduler::Scheduler;
 use crate::spatial::{NodeBBox, SpatialIndex};
 use crate::state::StateGraph;
@@ -55,7 +54,6 @@ pub struct Runtime {
     pub layout: LayoutEngine,
     pub spatial: SpatialIndex,
     pub viewport: Viewport,
-    pub scene: SceneGraph,
 
     // --- Gesture + Action wiring (Plan 5 T15) ---
     pub gestures: PointerRouter,
@@ -111,7 +109,6 @@ impl Runtime {
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
-            scene: SceneGraph::new(),
 
             gestures: PointerRouter::new(),
             focus: FocusManager::new(),
@@ -182,7 +179,6 @@ impl Runtime {
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
-            scene: SceneGraph::new(),
 
             gestures: PointerRouter::new(),
             focus,

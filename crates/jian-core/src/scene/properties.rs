@@ -4,8 +4,6 @@
 //! numeric sizes). Complex paints (gradients, images) are passed through
 //! as-is to the RenderBackend trait, which knows how to render them.
 
-use jian_ops_schema::style::{PenEffect, PenFill, PenStroke};
-
 /// Opaque 32-bit color in RGBA order. Use [`Color::from_hex`] to parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Color(pub u32);
@@ -64,15 +62,6 @@ impl Color {
         };
         Some(Color::rgba(r, g, b, a))
     }
-}
-
-/// Resolved wrapper. For now the runtime keeps the schema types by value;
-/// future optimisation: pre-compute per-draw-call GPU-ready structures.
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedVisual {
-    pub fills: Vec<PenFill>,
-    pub stroke: Option<PenStroke>,
-    pub effects: Vec<PenEffect>,
 }
 
 #[cfg(test)]
