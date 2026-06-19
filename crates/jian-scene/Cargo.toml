@@ -1,0 +1,14 @@
+[package]
+name = "jian-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# Compile the find-visit instrumentation (otherwise #[cfg(test)]-only) so a
+# downstream crate's tests (op-editor-ui dev-deps) can call the helpers.
+test-support = []
+
+[dependencies]
+jian-widgets = { path = "../jian-widgets" }

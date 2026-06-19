@@ -2494,6 +2494,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "jian-scene"
+version = "0.0.1"
+dependencies = [
+ "jian-widgets",
+]
+
+[[package]]
 name = "jian-skia"
 version = "0.0.1"
 dependencies = [
