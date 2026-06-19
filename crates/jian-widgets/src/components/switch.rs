@@ -1,4 +1,4 @@
-use crate::{Painter, Rect, Tokens};
+use crate::{Painter, Point2D, Rect, Tokens};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Switch {
@@ -53,6 +53,14 @@ impl Switch {
             rect.size.y + extra_y * 2.0,
         )
     }
+
+    /// Whether `point` falls within the switch's density-expanded hit target.
+    /// Mirrors the `hit` convention of `Button` / `Menu` / `Select` so hosts
+    /// dispatch uniformly instead of special-casing `hit_rect`; folds in the
+    /// touch-target expansion that `hit_rect` computes.
+    pub fn hit(rect: Rect, point: Point2D, t: &Tokens) -> bool {
+        Self::hit_rect(rect, t).contains(point)
+    }
 }
 
 #[cfg(test)]
@@ -106,5 +114,16 @@ mod tests {
         assert!(hit.size.y >= 44.0);
         assert!(hit.origin.x < 10.0);
         assert!(hit.origin.y < 10.0);
+    }
+
+    #[test]
+    fn hit_uses_density_expanded_target() {
+        let mut t = Tokens::dark();
+        t.density = crate::Density::Touch;
+        let rect = Rect::xywh(10.0, 10.0, 36.0, 20.0);
+        // Just above the visual rect but inside the expanded touch target.
+        assert!(Switch::hit(rect, Point2D::new(28.0, 6.0), &t));
+        // Far outside misses.
+        assert!(!Switch::hit(rect, Point2D::new(200.0, 200.0), &t));
     }
 }
