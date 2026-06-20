@@ -38,6 +38,9 @@ pub enum ColorPickerHit {
     Close,
     /// The hex bar at the bottom — focuses it for keyboard editing.
     HexInput,
+    /// One of the R / G / B numeric boxes (0 = R, 1 = G, 2 = B) — focuses it
+    /// for keyboard editing.
+    RgbInput(u8),
     Inside,
 }
 
@@ -57,7 +60,11 @@ pub struct ColorPicker<'a> {
     /// owns the keystrokes / validation / blink), and the focus ring thickens.
     /// When `None` the bar shows the computed `#RRGGBB` of the colour.
     pub hex_input: Option<&'a jian_core::text_input::TextInputState>,
-    /// Clock for the hex field's caret blink while editing.
+    /// When `Some((channel, state))`, that R/G/B box (0=R, 1=G, 2=B) is being
+    /// edited and renders through `TextInputView`; the other boxes show their
+    /// computed 0..255 value.
+    pub rgb_input: Option<(u8, &'a jian_core::text_input::TextInputState)>,
+    /// Clock for the hex / RGB field's caret blink while editing.
     pub now_ms: u64,
 }
 
@@ -108,27 +115,55 @@ impl ColorPicker<'_> {
             (cur.g * 255.0).round() as u8,
             (cur.b * 255.0).round() as u8,
         );
-        let rgb_y = sv_rect(panel).origin.y + SV_HEIGHT + ROW_GAP + 36.0 + ROW_GAP;
         for (i, (label, value)) in [("R", r), ("G", g), ("B", b)].iter().enumerate() {
-            let bx = panel.origin.x + PAD + (i as f32) * (RGB_BOX_W + 8.0);
-            let box_rect = Rect::xywh(bx, rgb_y, RGB_BOX_W, RGB_BOX_H);
-            p.stroke_round_rect(box_rect, 6.0, t.border, 1.0);
-            let val_str = value.to_string();
-            let text_w = p.measure_text(&val_str, 14.0);
-            let text = TextLayout::single_run(
-                &val_str,
-                FONT_FAMILY,
-                14.0,
-                t.foreground.to_jian(),
-                Point2D::new(0.0, 0.0),
+            let box_rect = rgb_box_rect(panel, i);
+            let bx = box_rect.origin.x;
+            let editing = self.rgb_input.filter(|(ch, _)| *ch as usize == i);
+            p.stroke_round_rect(
+                box_rect,
+                6.0,
+                if editing.is_some() {
+                    t.primary
+                } else {
+                    t.border
+                },
+                if editing.is_some() { 1.5 } else { 1.0 },
             );
-            p.draw_text(
-                &text,
-                Point2D::new(
-                    bx + (RGB_BOX_W - text_w) / 2.0,
-                    crate::centered_text_baseline_y(box_rect, 14.0),
-                ),
-            );
+            if let Some((_, state)) = editing {
+                // Centre the edit buffer like the static value (recomputed each
+                // frame as the digit count changes).
+                let tw = p.measure_text_family(state.text(), 14.0, FONT_FAMILY);
+                let pad = ((RGB_BOX_W - tw) / 2.0).max(4.0);
+                let baseline_delta = crate::centered_text_baseline_y(box_rect, 14.0)
+                    - (box_rect.origin.y + (box_rect.size.y - 14.0) / 2.0);
+                TextInputView {
+                    state,
+                    placeholder: "",
+                    focused: true,
+                    font_size: 14.0,
+                    now_ms: self.now_ms,
+                    pad_x: pad,
+                    baseline_delta_y: baseline_delta,
+                }
+                .paint(p, box_rect, t);
+            } else {
+                let val_str = value.to_string();
+                let text_w = p.measure_text_family(&val_str, 14.0, FONT_FAMILY);
+                let text = TextLayout::single_run(
+                    &val_str,
+                    FONT_FAMILY,
+                    14.0,
+                    t.foreground.to_jian(),
+                    Point2D::new(0.0, 0.0),
+                );
+                p.draw_text(
+                    &text,
+                    Point2D::new(
+                        bx + (RGB_BOX_W - text_w) / 2.0,
+                        crate::centered_text_baseline_y(box_rect, 14.0),
+                    ),
+                );
+            }
             let lab_w = p.measure_text(label, 12.0);
             let lab = TextLayout::single_run(
                 label,
@@ -141,7 +176,10 @@ impl ColorPicker<'_> {
             // baseline is an explicit offset rather than centered_text_baseline_y.
             p.draw_text(
                 &lab,
-                Point2D::new(bx + (RGB_BOX_W - lab_w) / 2.0, rgb_y + RGB_BOX_H + 14.0),
+                Point2D::new(
+                    bx + (RGB_BOX_W - lab_w) / 2.0,
+                    box_rect.origin.y + RGB_BOX_H + 14.0,
+                ),
             );
         }
 
@@ -239,6 +277,11 @@ impl ColorPicker<'_> {
         if hex_bar_rect(panel).contains(point) {
             return Some(ColorPickerHit::HexInput);
         }
+        for i in 0..3 {
+            if rgb_box_rect(panel, i).contains(point) {
+                return Some(ColorPickerHit::RgbInput(i as u8));
+            }
+        }
         Some(ColorPickerHit::Inside)
     }
 
@@ -268,6 +311,12 @@ fn sv_rect(panel: Rect) -> Rect {
         PICKER_WIDTH - PAD * 2.0,
         SV_HEIGHT,
     )
+}
+
+fn rgb_box_rect(panel: Rect, i: usize) -> Rect {
+    let rgb_y = sv_rect(panel).origin.y + SV_HEIGHT + ROW_GAP + 36.0 + ROW_GAP;
+    let bx = panel.origin.x + PAD + (i as f32) * (RGB_BOX_W + 8.0);
+    Rect::xywh(bx, rgb_y, RGB_BOX_W, RGB_BOX_H)
 }
 
 fn hex_bar_rect(panel: Rect) -> Rect {
@@ -443,6 +492,7 @@ mod tests {
             eyedropper_icon: &["M2 2l4 4"],
             close_icon: &["M18 6 6 18", "m6 6 12 12"],
             hex_input: None,
+            rgb_input: None,
             now_ms: 0,
         }
     }
