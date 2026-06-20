@@ -235,6 +235,7 @@ impl GalleryApp {
             now_ms,
             pad_x: 10.0,
             baseline_delta_y: 0.0,
+            mask: None,
         }
         .paint(p, layout.text_input, &self.tokens);
 

@@ -144,6 +144,7 @@ impl ColorPicker<'_> {
                     now_ms: self.now_ms,
                     pad_x: pad,
                     baseline_delta_y: baseline_delta,
+                    mask: None,
                 }
                 .paint(p, box_rect, t);
             } else {
@@ -216,6 +217,7 @@ impl ColorPicker<'_> {
                 now_ms: self.now_ms,
                 pad_x: 8.0,
                 baseline_delta_y: baseline_delta,
+                mask: None,
             }
             .paint(p, text_rect, t);
         } else {

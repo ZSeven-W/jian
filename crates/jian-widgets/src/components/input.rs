@@ -62,6 +62,7 @@ impl Input<'_> {
             now_ms: self.now_ms,
             pad_x,
             baseline_delta_y: 0.0,
+            mask: None,
         }
         .paint(p, rect, t);
     }
