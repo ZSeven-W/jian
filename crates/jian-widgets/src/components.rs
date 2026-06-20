@@ -9,6 +9,7 @@ pub mod color_picker;
 pub mod dialog;
 pub mod icon_button;
 pub mod input;
+pub mod markdown;
 pub mod menu;
 pub mod popover;
 pub mod progress;
