@@ -435,47 +435,17 @@ fn paint_hue_handle(p: &mut dyn Painter, hue: Rect, current_hue: f32, t: &Tokens
     p.stroke_oval(ring, Color::WHITE, 2.0);
 }
 
-/// HSV → RGB, h 0..360, s/v 0..1, alpha 1.
+/// HSV → RGB `Color` (alpha 1) — thin adapter over the canonical tuple maths
+/// in [`jian_core::color`] so painting has a `Color` while the algorithm lives
+/// in exactly one place.
 pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color {
-    let h = h.rem_euclid(360.0);
-    let c = v * s;
-    let hh = h / 60.0;
-    let x = c * (1.0 - (hh.rem_euclid(2.0) - 1.0).abs());
-    let (r1, g1, b1) = match hh as u32 {
-        0 => (c, x, 0.0),
-        1 => (x, c, 0.0),
-        2 => (0.0, c, x),
-        3 => (0.0, x, c),
-        4 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-    let m = v - c;
-    Color {
-        r: r1 + m,
-        g: g1 + m,
-        b: b1 + m,
-        a: 1.0,
-    }
+    let (r, g, b) = jian_core::color::hsv_to_rgb(h, s, v);
+    Color { r, g, b, a: 1.0 }
 }
 
-/// RGB (0..1) → HSV (h 0..360, s 0..1, v 0..1).
+/// RGB `Color` → HSV — `Color`-typed adapter over [`jian_core::color::rgb_to_hsv`].
 pub fn rgb_to_hsv(c: Color) -> (f32, f32, f32) {
-    let (r, g, b) = (c.r, c.g, c.b);
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let v = max;
-    let delta = max - min;
-    let s = if max <= 0.0 { 0.0 } else { delta / max };
-    let h = if delta == 0.0 {
-        0.0
-    } else if max == r {
-        60.0 * (((g - b) / delta) % 6.0)
-    } else if max == g {
-        60.0 * (((b - r) / delta) + 2.0)
-    } else {
-        60.0 * (((r - g) / delta) + 4.0)
-    };
-    (if h < 0.0 { h + 360.0 } else { h }, s, v)
+    jian_core::color::rgb_to_hsv((c.r, c.g, c.b))
 }
 
 #[cfg(test)]

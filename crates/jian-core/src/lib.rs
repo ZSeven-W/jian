@@ -16,6 +16,7 @@ pub mod action_surface;
 pub mod anim;
 pub mod binding;
 pub mod capability;
+pub mod color;
 pub mod cursor;
 pub mod document;
 pub mod effect;
