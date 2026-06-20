@@ -99,23 +99,27 @@ impl Tabs<'_> {
     }
 
     /// Pure-geometry layout for a CONTENT-WIDTH strip: one rect per tab, each
-    /// sized by the caller-supplied (deterministic) `widths`, laid left→right
-    /// with `gap`, the whole row shifted by `-scroll`. The caller owns the width
-    /// function so the SAME rects drive paint (`paint_content`) and hit
+    /// sized by the caller-supplied (deterministic) `widths`, laid left→right,
+    /// the whole row shifted by `-scroll`. `advances[i]` is the horizontal step
+    /// from tab `i`'s origin to tab `i+1`'s — a uniform-gap strip passes
+    /// `width[i] + gap`; a control with per-tab spacing (e.g. an inline-rename
+    /// tab) passes its own advance so paint and hit can't drift. Missing
+    /// advances fall back to the tab's own width. The caller owns the width +
+    /// advance functions so the SAME rects drive paint (`paint_content`) and hit
     /// (`content_at`) without a `Painter` in the hit path — the standard
     /// immediate-mode escape from "hit-test needs to measure text".
     pub fn content_rects(
         origin: Point2D,
         widths: &[f32],
+        advances: &[f32],
         height: f32,
-        gap: f32,
         scroll: f32,
     ) -> Vec<Rect> {
         let mut x = origin.x - scroll;
         let mut out = Vec::with_capacity(widths.len());
-        for &w in widths {
+        for (i, &w) in widths.iter().enumerate() {
             out.push(Rect::xywh(x, origin.y, w, height));
-            x += w + gap;
+            x += advances.get(i).copied().unwrap_or(w);
         }
         out
     }
@@ -243,8 +247,13 @@ mod tests {
 
     #[test]
     fn content_rects_lays_out_variable_widths_minus_scroll() {
-        let rects =
-            Tabs::content_rects(Point2D::new(10.0, 0.0), &[40.0, 60.0, 30.0], 24.0, 6.0, 5.0);
+        let rects = Tabs::content_rects(
+            Point2D::new(10.0, 0.0),
+            &[40.0, 60.0, 30.0],
+            &[46.0, 66.0, 36.0],
+            24.0,
+            5.0,
+        );
         assert_eq!(rects.len(), 3);
         // First tab starts at origin.x - scroll = 5.0; each advances by width+gap.
         assert!((rects[0].origin.x - 5.0).abs() < 0.01 && (rects[0].size.x - 40.0).abs() < 0.01);
@@ -254,7 +263,13 @@ mod tests {
 
     #[test]
     fn content_at_maps_point_to_variable_tab() {
-        let rects = Tabs::content_rects(Point2D::new(0.0, 0.0), &[40.0, 60.0], 24.0, 6.0, 0.0);
+        let rects = Tabs::content_rects(
+            Point2D::new(0.0, 0.0),
+            &[40.0, 60.0],
+            &[46.0, 66.0],
+            24.0,
+            0.0,
+        );
         assert_eq!(Tabs::content_at(&rects, Point2D::new(20.0, 12.0)), Some(0));
         assert_eq!(Tabs::content_at(&rects, Point2D::new(70.0, 12.0)), Some(1));
         assert_eq!(Tabs::content_at(&rects, Point2D::new(200.0, 12.0)), None);
@@ -265,8 +280,13 @@ mod tests {
         let t = Tokens::dark();
         let mut p = CapturePainter::default();
         let labels = ["React", "Vue", "Svelte"];
-        let rects =
-            Tabs::content_rects(Point2D::new(0.0, 0.0), &[50.0, 40.0, 56.0], 24.0, 6.0, 0.0);
+        let rects = Tabs::content_rects(
+            Point2D::new(0.0, 0.0),
+            &[50.0, 40.0, 56.0],
+            &[56.0, 46.0, 62.0],
+            24.0,
+            0.0,
+        );
         tabs(&labels, 1, None).paint_content(
             &mut p,
             &rects,
@@ -290,7 +310,13 @@ mod tests {
         let t = Tokens::dark();
         let mut p = CapturePainter::default();
         let labels = ["Light", "Dark"];
-        let rects = Tabs::content_rects(Point2D::new(0.0, 0.0), &[44.0, 40.0], 28.0, 4.0, 0.0);
+        let rects = Tabs::content_rects(
+            Point2D::new(0.0, 0.0),
+            &[44.0, 40.0],
+            &[48.0, 44.0],
+            28.0,
+            0.0,
+        );
         tabs(&labels, 0, None).paint_content(
             &mut p,
             &rects,
