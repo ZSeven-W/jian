@@ -19,7 +19,10 @@ impl TextInputView<'_> {
         let text = self.state.text();
         let shift = self.horizontal_shift(p, rect, font_size, pad_x);
         let base_x = rect.origin.x + pad_x - shift;
-        let text_y = rect.origin.y + (rect.size.y - font_size) / 2.0;
+        // `text_top` anchors the box-relative chrome (selection highlight);
+        // `baseline` is where draw_text actually places glyphs (baseline-relative).
+        let text_top = rect.origin.y + (rect.size.y - font_size) / 2.0;
+        let baseline = crate::centered_text_baseline_y(rect, font_size);
 
         p.save();
         p.clip_rect(rect);
@@ -32,7 +35,7 @@ impl TextInputView<'_> {
             p.fill_round_rect(
                 Rect::xywh(
                     base_x + x0,
-                    text_y - 2.0,
+                    text_top - 2.0,
                     (x1 - x0).max(1.0),
                     font_size + 4.0,
                 ),
@@ -49,19 +52,25 @@ impl TextInputView<'_> {
             let suffix = &text[caret..];
             let mut x = base_x;
             if !prefix.is_empty() {
-                self.draw_text(p, prefix, Point2D::new(x, text_y), font_size, t.foreground);
+                self.draw_text(
+                    p,
+                    prefix,
+                    Point2D::new(x, baseline),
+                    font_size,
+                    t.foreground,
+                );
                 x += p.measure_text(prefix, font_size);
             }
 
             self.draw_text(
                 p,
                 &composition.text,
-                Point2D::new(x, text_y),
+                Point2D::new(x, baseline),
                 font_size,
                 t.foreground,
             );
             let composition_w = p.measure_text(&composition.text, font_size).max(1.0);
-            let underline_y = text_y + font_size + 2.0;
+            let underline_y = baseline + 2.0;
             p.stroke_line(
                 Point2D::new(x, underline_y),
                 Point2D::new(x + composition_w, underline_y),
@@ -71,14 +80,20 @@ impl TextInputView<'_> {
             x += composition_w;
 
             if !suffix.is_empty() {
-                self.draw_text(p, suffix, Point2D::new(x, text_y), font_size, t.foreground);
+                self.draw_text(
+                    p,
+                    suffix,
+                    Point2D::new(x, baseline),
+                    font_size,
+                    t.foreground,
+                );
             }
         } else if text.is_empty() {
             if !self.placeholder.is_empty() {
                 self.draw_text(
                     p,
                     self.placeholder,
-                    Point2D::new(base_x, text_y),
+                    Point2D::new(base_x, baseline),
                     font_size,
                     t.muted_foreground,
                 );
@@ -87,7 +102,7 @@ impl TextInputView<'_> {
             self.draw_text(
                 p,
                 text,
-                Point2D::new(base_x, text_y),
+                Point2D::new(base_x, baseline),
                 font_size,
                 t.foreground,
             );

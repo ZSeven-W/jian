@@ -29,7 +29,7 @@ impl AccordionHeader<'_> {
         }
 
         // Title text, vertically centred and left-padded.
-        let text_y = rect.origin.y + (rect.size.y - FONT_SIZE) / 2.0;
+        let text_y = crate::centered_text_baseline_y(rect, FONT_SIZE);
         let layout = TextLayout::single_run(
             self.title,
             "Inter",

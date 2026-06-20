@@ -98,7 +98,7 @@ impl Button<'_> {
         }
 
         if has_label {
-            let text_origin = Point2D::new(x, rect.origin.y + (rect.size.y - font_size) / 2.0);
+            let text_origin = Point2D::new(x, crate::centered_text_baseline_y(rect, font_size));
             let layout = TextLayout::single_run(
                 self.label,
                 FONT_FAMILY,

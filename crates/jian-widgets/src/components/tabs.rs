@@ -74,7 +74,7 @@ impl Tabs<'_> {
             let text_w = p.measure_text(label, FONT_SIZE);
             let origin = Point2D::new(
                 cell.origin.x + (cell.size.x - text_w) / 2.0,
-                cell.origin.y + (cell.size.y - FONT_SIZE) / 2.0,
+                crate::centered_text_baseline_y(cell, FONT_SIZE),
             );
             let layout = TextLayout::single_run(
                 label,
@@ -163,8 +163,10 @@ impl Tabs<'_> {
             };
             if let Some(label) = self.labels.get(i) {
                 if !label.is_empty() {
-                    let origin =
-                        Point2D::new(r.origin.x + leading_pad, r.origin.y + (r.size.y - fs) / 2.0);
+                    let origin = Point2D::new(
+                        r.origin.x + leading_pad,
+                        crate::centered_text_baseline_y(*r, fs),
+                    );
                     let layout = TextLayout::single_run(
                         label,
                         FONT_FAMILY,

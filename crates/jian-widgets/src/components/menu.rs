@@ -79,7 +79,7 @@ impl Menu<'_> {
                 );
                 text_x += 26.0;
             }
-            let origin = Point2D::new(text_x, row.origin.y + (row_h - font_size) / 2.0);
+            let origin = Point2D::new(text_x, crate::centered_text_baseline_y(row, font_size));
             let layout = TextLayout::single_run(
                 item.label,
                 FONT_FAMILY,

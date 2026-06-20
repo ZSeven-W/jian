@@ -94,7 +94,7 @@ impl ToggleGroup<'_> {
             }
             if !label.is_empty() {
                 let origin =
-                    Point2D::new(content_x, cell.origin.y + (rect.size.y - font_size) / 2.0);
+                    Point2D::new(content_x, crate::centered_text_baseline_y(cell, font_size));
                 let layout = TextLayout::single_run(
                     label,
                     FONT_FAMILY,

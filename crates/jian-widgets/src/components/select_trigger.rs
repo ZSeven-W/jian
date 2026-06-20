@@ -85,7 +85,7 @@ impl SelectTrigger<'_> {
             );
             p.save();
             p.clip_rect(clip);
-            let origin = Point2D::new(text_x, rect.origin.y + (rect.size.y - font_size) / 2.0);
+            let origin = Point2D::new(text_x, crate::centered_text_baseline_y(rect, font_size));
             let layout = TextLayout::single_run(
                 text,
                 FONT_FAMILY,

@@ -21,8 +21,10 @@ impl Tooltip<'_> {
         p.stroke_round_rect(rect, RADIUS, t.border, 1.0);
 
         if !self.label.is_empty() {
-            let cy = rect.origin.y + rect.size.y / 2.0;
-            let origin = Point2D::new(rect.origin.x + PAD_X, cy - FONT_SIZE / 2.0);
+            let origin = Point2D::new(
+                rect.origin.x + PAD_X,
+                crate::centered_text_baseline_y(rect, FONT_SIZE),
+            );
             let layout = TextLayout::single_run(
                 self.label,
                 FONT_FAMILY,

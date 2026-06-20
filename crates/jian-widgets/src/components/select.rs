@@ -180,7 +180,7 @@ impl Select<'_> {
             // column (TS `pl-8`), so selected + unselected rows align.
             let origin = Point2D::new(
                 row_rect.origin.x + 26.0,
-                centered_text_baseline_y(row_rect, font_size),
+                crate::centered_text_baseline_y(row_rect, font_size),
             );
             let layout = TextLayout::single_run(
                 item.label,
@@ -277,10 +277,6 @@ fn resolved_row_height(row_height: f32) -> f32 {
     } else {
         crate::Density::Desktop.row_height()
     }
-}
-
-fn centered_text_baseline_y(rect: Rect, font_size: f32) -> f32 {
-    rect.origin.y + rect.size.y / 2.0 + font_size * 0.35
 }
 
 fn clamped_first_row(

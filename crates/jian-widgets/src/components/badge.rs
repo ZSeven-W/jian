@@ -65,7 +65,7 @@ impl Badge<'_> {
             x += icon_size + ICON_LABEL_GAP;
         }
         if !self.label.is_empty() {
-            let origin = Point2D::new(x, cy - font_size / 2.0);
+            let origin = Point2D::new(x, crate::centered_text_baseline_y(rect, font_size));
             let layout = TextLayout::single_run(
                 self.label,
                 FONT_FAMILY,

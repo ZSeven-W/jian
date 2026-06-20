@@ -68,7 +68,9 @@ impl TextArea<'_> {
                 draw_text(
                     p,
                     self.placeholder,
-                    Point2D::new(rect.origin.x + pad_x, rect.origin.y + PAD_Y),
+                    // draw_text positions by BASELINE; first line baseline =
+                    // top pad + one em (≈ centered in the line box).
+                    Point2D::new(rect.origin.x + pad_x, rect.origin.y + PAD_Y + font_size),
                     font_size,
                     t.muted_foreground,
                 );
@@ -86,7 +88,9 @@ impl TextArea<'_> {
                 }
                 let origin = Point2D::new(
                     rect.origin.x + pad_x,
-                    rect.origin.y + PAD_Y + visible_i as f32 * line_h,
+                    // draw_text positions by BASELINE — drop the glyphs one em
+                    // below each line's top so they sit in the line box.
+                    rect.origin.y + PAD_Y + visible_i as f32 * line_h + font_size,
                 );
                 if let Some(composition) = composition.filter(|_| composition_line == Some(line_i))
                 {
@@ -286,7 +290,7 @@ fn draw_line_with_composition(
         color,
     );
     let composition_w = p.measure_text(&composition.text, font_size).max(1.0);
-    let underline_y = origin.y + font_size + 2.0;
+    let underline_y = origin.y + 2.0;
     p.stroke_line(
         Point2D::new(x, underline_y),
         Point2D::new(x + composition_w, underline_y),
