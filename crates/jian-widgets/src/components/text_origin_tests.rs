@@ -93,6 +93,7 @@ fn components_pass_text_position_as_draw_origin_only() {
         font_size: 12.0,
         now_ms: 0,
         pad_x: 8.0,
+        baseline_delta_y: 0.0,
     }
     .paint(&mut p, Rect::xywh(20.0, 80.0, 140.0, 28.0), &t);
 

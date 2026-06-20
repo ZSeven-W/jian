@@ -8,6 +8,7 @@
 //! The SV box is software-painted as a grid of `fill_rect` cells (the `Painter`
 //! has no 2D gradient), then framed — cheap and faithful at this size.
 
+use crate::components::text_input::TextInputView;
 use crate::{Color, Painter, Point2D, Rect, TextLayout, Tokens};
 
 pub const PICKER_WIDTH: f32 = 240.0;
@@ -51,11 +52,13 @@ pub struct ColorPicker<'a> {
     pub eyedropper_icon: &'a [&'a str],
     /// lucide icon path(s) for the close (×) chip.
     pub close_icon: &'a [&'a str],
-    /// When `true`, the hex bar shows `hex_draft` + a caret + a focus ring
-    /// (editing); otherwise it shows the computed `#RRGGBB` of the colour.
-    pub hex_focused: bool,
-    /// The live hex draft shown while `hex_focused`.
-    pub hex_draft: &'a str,
+    /// When `Some`, the hex bar is being edited: its text + caret render
+    /// through the unified [`TextInputView`] driven by this state (the host
+    /// owns the keystrokes / validation / blink), and the focus ring thickens.
+    /// When `None` the bar shows the computed `#RRGGBB` of the colour.
+    pub hex_input: Option<&'a jian_core::text_input::TextInputState>,
+    /// Clock for the hex field's caret blink while editing.
+    pub now_ms: u64,
 }
 
 impl ColorPicker<'_> {
@@ -142,40 +145,56 @@ impl ColorPicker<'_> {
             );
         }
 
-        // Hex bar — shows the computed hex, or the editable draft + caret while
-        // focused (focus ring thickens).
+        // Hex bar — bg + mini swatch + ring (thicker while editing). The
+        // editable text + caret render through the unified `TextInputView`;
+        // when idle we paint the computed `#RRGGBB` directly at the baseline.
         let hex = hex_bar_rect(panel);
         p.fill_round_rect(hex, 6.0, t.muted);
         p.stroke_round_rect(
             hex,
             6.0,
             t.primary,
-            if self.hex_focused { 1.5 } else { 1.0 },
+            if self.hex_input.is_some() { 1.5 } else { 1.0 },
         );
         let mini = Rect::xywh(hex.origin.x + 6.0, hex.origin.y + 6.0, 16.0, 16.0);
         p.fill_round_rect(mini, 3.0, cur);
         p.stroke_round_rect(mini, 3.0, t.border, 1.0);
-        let computed = format!("#{:02x}{:02x}{:02x}", r, g, b);
-        let hex_str: &str = if self.hex_focused {
-            self.hex_draft
-        } else {
-            &computed
-        };
-        let text_x = hex.origin.x + 32.0;
-        let baseline = crate::centered_text_baseline_y(hex, 13.0);
-        let hex_layout = TextLayout::single_run(
-            hex_str,
-            FONT_FAMILY,
-            13.0,
-            t.foreground.to_jian(),
-            Point2D::new(0.0, 0.0),
+        // Text region sits right of the mini swatch (pad_x 8 lands the run at
+        // hex.x + 32, matching the legacy computed-hex position).
+        let text_rect = Rect::xywh(
+            hex.origin.x + 24.0,
+            hex.origin.y,
+            (hex.size.x - 24.0 - 6.0).max(0.0),
+            hex.size.y,
         );
-        p.draw_text(&hex_layout, Point2D::new(text_x, baseline));
-        if self.hex_focused {
-            let caret_x = text_x + p.measure_text(hex_str, 13.0) + 1.0;
-            p.fill_rect(
-                Rect::xywh(caret_x, hex.origin.y + (HEX_HEIGHT - 16.0) / 2.0, 1.5, 16.0),
-                t.foreground,
+        if let Some(state) = self.hex_input {
+            let baseline_delta = crate::centered_text_baseline_y(hex, 13.0)
+                - (hex.origin.y + (hex.size.y - 13.0) / 2.0);
+            TextInputView {
+                state,
+                placeholder: "",
+                focused: true,
+                font_size: 13.0,
+                now_ms: self.now_ms,
+                pad_x: 8.0,
+                baseline_delta_y: baseline_delta,
+            }
+            .paint(p, text_rect, t);
+        } else {
+            let computed = format!("#{:02x}{:02x}{:02x}", r, g, b);
+            let hex_layout = TextLayout::single_run(
+                &computed,
+                FONT_FAMILY,
+                13.0,
+                t.foreground.to_jian(),
+                Point2D::new(0.0, 0.0),
+            );
+            p.draw_text(
+                &hex_layout,
+                Point2D::new(
+                    text_rect.origin.x + 8.0,
+                    crate::centered_text_baseline_y(hex, 13.0),
+                ),
             );
         }
 
@@ -423,8 +442,8 @@ mod tests {
             title: "Fill",
             eyedropper_icon: &["M2 2l4 4"],
             close_icon: &["M18 6 6 18", "m6 6 12 12"],
-            hex_focused: false,
-            hex_draft: "",
+            hex_input: None,
+            now_ms: 0,
         }
     }
 

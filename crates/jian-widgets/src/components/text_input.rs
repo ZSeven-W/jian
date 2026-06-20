@@ -10,6 +10,12 @@ pub struct TextInputView<'a> {
     pub font_size: f32,
     pub now_ms: u64,
     pub pad_x: f32,
+    /// Vertical offset added to the glyph baseline. `0.0` keeps the legacy
+    /// top-anchored draw — hosts that wrap the backend in a baseline-shifting
+    /// adapter pass `0.0`. A self-contained caller painting straight onto a
+    /// baseline-relative backend (e.g. jian ColorPicker's hex bar) passes the
+    /// centring delta so the run sits on its baseline with no wrapper.
+    pub baseline_delta_y: f32,
 }
 
 impl TextInputView<'_> {
@@ -19,11 +25,11 @@ impl TextInputView<'_> {
         let text = self.state.text();
         let shift = self.horizontal_shift(p, rect, font_size, pad_x);
         let base_x = rect.origin.x + pad_x - shift;
-        // Top-left origin: hosts that render TextInputView wrap the backend in a
-        // `BaselineAdjustingBackend` that shifts draw_text to the baseline, so
-        // this stays top-relative (unlike the label components, which emit the
-        // baseline directly).
-        let text_y = rect.origin.y + (rect.size.y - font_size) / 2.0;
+        // Top-anchored by default (hosts wrap the backend in a baseline-shifting
+        // adapter, so this stays top-relative — unlike the label components,
+        // which emit the baseline directly). `baseline_delta_y` lets a
+        // self-contained caller move the run onto its baseline without a wrapper.
+        let text_y = rect.origin.y + (rect.size.y - font_size) / 2.0 + self.baseline_delta_y;
 
         p.save();
         p.clip_rect(rect);
@@ -224,6 +230,7 @@ mod tests {
             font_size: 13.0,
             now_ms: 0,
             pad_x: 8.0,
+            baseline_delta_y: 0.0,
         };
         let t = Tokens::dark();
         let mut p = CapturePainter::default();
@@ -246,6 +253,7 @@ mod tests {
             font_size: 13.0,
             now_ms: 0,
             pad_x: 8.0,
+            baseline_delta_y: 0.0,
         };
         let t = Tokens::dark();
         let mut p = CapturePainter::default();
@@ -265,6 +273,7 @@ mod tests {
             font_size: 13.0,
             now_ms: 750,
             pad_x: 8.0,
+            baseline_delta_y: 0.0,
         };
         let t = Tokens::dark();
         let mut p = CapturePainter::default();
@@ -289,6 +298,7 @@ mod tests {
             font_size: 10.0,
             now_ms: 0,
             pad_x: 8.0,
+            baseline_delta_y: 0.0,
         };
         let t = Tokens::dark();
         let mut p = CapturePainter::default();
@@ -320,6 +330,7 @@ mod tests {
             font_size: 10.0,
             now_ms: 0,
             pad_x: 8.0,
+            baseline_delta_y: 0.0,
         };
         let mut p = CapturePainter::default();
         let point = Point2D::new(8.0 + 5.5 + 5.5 + 2.0, 10.0);
@@ -345,6 +356,7 @@ mod tests {
             font_size: 0.0,
             now_ms: 0,
             pad_x: 8.0,
+            baseline_delta_y: 0.0,
         };
         let touch = Tokens {
             density: crate::Density::Touch,

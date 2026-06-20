@@ -61,6 +61,7 @@ impl Input<'_> {
             font_size: self.font_size,
             now_ms: self.now_ms,
             pad_x,
+            baseline_delta_y: 0.0,
         }
         .paint(p, rect, t);
     }
