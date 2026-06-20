@@ -319,6 +319,19 @@ pub trait Painter {
         let _ = italic;
         self.measure_text_weighted(text, font_size, weight)
     }
+
+    /// Measure text width using a specific font `family`, so an editable
+    /// field's caret / selection geometry lines up with the glyphs it
+    /// actually paints. The family-blind [`Painter::measure_text`]
+    /// resolves the backend's default font, which on native differs from
+    /// a named draw family like "Inter" (named families go through the
+    /// system `FontMgr`, the default uses bundled Roboto) — that gap is
+    /// what makes a hand-positioned caret drift. The default impl
+    /// forwards to `measure_text`; backends that resolve named families
+    /// (native skia) override this to measure with `family`.
+    fn measure_text_family(&mut self, text: &str, font_size: f32, _family: &str) -> f32 {
+        self.measure_text(text, font_size)
+    }
 }
 
 #[cfg(test)]

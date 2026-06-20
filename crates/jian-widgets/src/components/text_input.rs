@@ -31,8 +31,8 @@ impl TextInputView<'_> {
         if let Some((start, end)) = self.state.highlight_range() {
             let start = jian_core::text_input::prev_char_boundary(text, start);
             let end = jian_core::text_input::prev_char_boundary(text, end);
-            let x0 = p.measure_text(&text[..start], font_size);
-            let x1 = p.measure_text(&text[..end], font_size);
+            let x0 = p.measure_text_family(&text[..start], font_size, FONT_FAMILY);
+            let x1 = p.measure_text_family(&text[..end], font_size, FONT_FAMILY);
             p.fill_round_rect(
                 Rect::xywh(
                     base_x + x0,
@@ -54,7 +54,7 @@ impl TextInputView<'_> {
             let mut x = base_x;
             if !prefix.is_empty() {
                 self.draw_text(p, prefix, Point2D::new(x, text_y), font_size, t.foreground);
-                x += p.measure_text(prefix, font_size);
+                x += p.measure_text_family(prefix, font_size, FONT_FAMILY);
             }
 
             self.draw_text(
@@ -64,7 +64,9 @@ impl TextInputView<'_> {
                 font_size,
                 t.foreground,
             );
-            let composition_w = p.measure_text(&composition.text, font_size).max(1.0);
+            let composition_w = p
+                .measure_text_family(&composition.text, font_size, FONT_FAMILY)
+                .max(1.0);
             let underline_y = text_y + font_size + 2.0;
             p.stroke_line(
                 Point2D::new(x, underline_y),
@@ -137,7 +139,7 @@ impl TextInputView<'_> {
         for (byte, ch) in text.char_indices() {
             let mut buf = [0; 4];
             let s = ch.encode_utf8(&mut buf);
-            let w = p.measure_text(s, font_size);
+            let w = p.measure_text_family(s, font_size, FONT_FAMILY);
             if target_x < x + w / 2.0 {
                 return byte;
             }
@@ -173,14 +175,14 @@ impl TextInputView<'_> {
     fn visual_caret_x(&self, p: &mut dyn Painter, base_x: f32, font_size: f32) -> f32 {
         let text = self.state.text();
         let caret = self.safe_caret();
-        let mut x = base_x + p.measure_text(&text[..caret], font_size);
+        let mut x = base_x + p.measure_text_family(&text[..caret], font_size, FONT_FAMILY);
         if let Some(composition) = self.state.composition() {
             if !composition.text.is_empty() {
                 let cursor = jian_core::text_input::prev_char_boundary(
                     &composition.text,
                     composition.cursor,
                 );
-                x += p.measure_text(&composition.text[..cursor], font_size);
+                x += p.measure_text_family(&composition.text[..cursor], font_size, FONT_FAMILY);
             }
         }
         x

@@ -123,7 +123,11 @@ impl TextArea<'_> {
                 if let Some(composition) = self.state.composition() {
                     if !composition.text.is_empty() {
                         let cursor = safe_byte(&composition.text, composition.cursor);
-                        origin.x += p.measure_text(&composition.text[..cursor], font_size);
+                        origin.x += p.measure_text_family(
+                            &composition.text[..cursor],
+                            font_size,
+                            FONT_FAMILY,
+                        );
                     }
                 }
                 p.fill_rect(
@@ -275,7 +279,7 @@ fn draw_line_with_composition(
 
     if !prefix.is_empty() {
         draw_text(p, prefix, Point2D::new(x, origin.y), font_size, color);
-        x += p.measure_text(prefix, font_size);
+        x += p.measure_text_family(prefix, font_size, FONT_FAMILY);
     }
 
     draw_text(
@@ -285,7 +289,9 @@ fn draw_line_with_composition(
         font_size,
         color,
     );
-    let composition_w = p.measure_text(&composition.text, font_size).max(1.0);
+    let composition_w = p
+        .measure_text_family(&composition.text, font_size, FONT_FAMILY)
+        .max(1.0);
     let underline_y = origin.y + font_size + 2.0;
     p.stroke_line(
         Point2D::new(x, underline_y),
@@ -316,7 +322,7 @@ fn wrap_segment(
         });
         return;
     }
-    if max_width <= 0.0 || p.measure_text(segment, font_size) <= max_width {
+    if max_width <= 0.0 || p.measure_text_family(segment, font_size, FONT_FAMILY) <= max_width {
         out.push(TextLine {
             text: segment.to_owned(),
             start: segment_start,
@@ -421,7 +427,7 @@ fn append_wrapped_token(
 ) {
     let mut probe = current.clone();
     probe.push_str(token.text);
-    if p.measure_text(&probe, font_size) > max_width {
+    if p.measure_text_family(&probe, font_size, FONT_FAMILY) > max_width {
         push_current(current, *current_start, *current_end, segment_start, out);
         append_token_to_empty_line(
             p,
@@ -458,7 +464,7 @@ fn append_token_to_empty_line(
     if token.text.is_empty() {
         return;
     }
-    if max_width <= 0.0 || p.measure_text(token.text, font_size) <= max_width {
+    if max_width <= 0.0 || p.measure_text_family(token.text, font_size, FONT_FAMILY) <= max_width {
         current.push_str(token.text);
         *current_start = token.start;
         *current_end = token.end;
@@ -470,7 +476,8 @@ fn append_token_to_empty_line(
         let token_end = token_byte + ch.len_utf8();
         let mut probe = current.clone();
         probe.push(ch);
-        if !current.is_empty() && p.measure_text(&probe, font_size) > max_width {
+        if !current.is_empty() && p.measure_text_family(&probe, font_size, FONT_FAMILY) > max_width
+        {
             push_current(current, *current_start, *current_end, segment_start, out);
             current.push(ch);
             *current_start = token_byte;
@@ -522,8 +529,8 @@ fn selection_x_range(
     let rel_start = start - line.start;
     let rel_end = end - line.start;
     Some((
-        p.measure_text(&line.text[..rel_start], font_size),
-        p.measure_text(&line.text[..rel_end], font_size),
+        p.measure_text_family(&line.text[..rel_start], font_size, FONT_FAMILY),
+        p.measure_text_family(&line.text[..rel_end], font_size, FONT_FAMILY),
     ))
 }
 
@@ -535,7 +542,7 @@ fn byte_offset_in_line(p: &mut dyn Painter, line: &TextLine, x: f32, font_size: 
     for (byte, ch) in line.text.char_indices() {
         let mut buf = [0; 4];
         let s = ch.encode_utf8(&mut buf);
-        let width = p.measure_text(s, font_size);
+        let width = p.measure_text_family(s, font_size, FONT_FAMILY);
         if x < cursor_x + width / 2.0 {
             return line.start + byte;
         }
@@ -563,7 +570,7 @@ fn caret_origin(
     let line = &lines[line_i];
     let rel = caret.saturating_sub(line.start).min(line.text.len());
     let rel = jian_core::text_input::prev_char_boundary(&line.text, rel);
-    let x = p.measure_text(&line.text[..rel], font_size);
+    let x = p.measure_text_family(&line.text[..rel], font_size, FONT_FAMILY);
     let visible_i = line_i - visible_start;
     Some(Point2D::new(
         rect.origin.x + pad_x + x,
