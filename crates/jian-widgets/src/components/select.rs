@@ -176,8 +176,10 @@ impl Select<'_> {
             } else {
                 t.popover_foreground
             };
+            // shadcn SelectItem indents the label past a left-aligned check
+            // column (TS `pl-8`), so selected + unselected rows align.
             let origin = Point2D::new(
-                row_rect.origin.x + 10.0,
+                row_rect.origin.x + 26.0,
                 centered_text_baseline_y(row_rect, font_size),
             );
             let layout = TextLayout::single_run(
@@ -190,12 +192,10 @@ impl Select<'_> {
             p.draw_text(&layout, origin);
 
             if item.selected {
+                // Left-aligned check (shadcn), in the indent reserved above.
                 p.stroke_svg_path(
                     CHECK_D,
-                    Point2D::new(
-                        row_rect.origin.x + row_rect.size.x - 24.0,
-                        row_rect.origin.y + 7.0,
-                    ),
+                    Point2D::new(row_rect.origin.x + 6.0, row_rect.origin.y + 7.0),
                     14.0,
                     t.primary,
                     1.75,

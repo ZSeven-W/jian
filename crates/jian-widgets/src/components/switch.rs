@@ -21,10 +21,6 @@ impl Switch {
         let radius = rect.size.y / 2.0;
         p.fill_round_rect(rect, radius, track);
 
-        if self.hovered && !self.pressed && self.enabled {
-            p.stroke_round_rect(rect, radius, t.border, 1.0);
-        }
-
         let knob = (rect.size.y - 4.0).max(0.0);
         let knob_x = if self.on {
             rect.origin.x + rect.size.x - knob - 2.0
