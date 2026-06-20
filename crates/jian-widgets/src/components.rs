@@ -14,6 +14,7 @@ pub mod progress;
 pub mod radio;
 pub mod scroll_area;
 pub mod select;
+pub mod select_trigger;
 pub mod separator;
 pub mod swatch;
 pub mod switch;
