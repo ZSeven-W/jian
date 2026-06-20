@@ -23,6 +23,14 @@ pub enum ButtonVariant {
     Link,
 }
 
+impl ButtonVariant {
+    /// Whether the variant paints an opaque fill (so the hover/press wash must
+    /// be overlaid on top rather than folded into the fill).
+    fn is_solid(self) -> bool {
+        matches!(self, Self::Primary | Self::Secondary | Self::Destructive)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Button<'a> {
     pub label: &'a str,
@@ -42,10 +50,21 @@ impl Button<'_> {
         } else {
             t.density.font_size()
         };
-        let (fill, stroke, mut text_color) = self.colors(t);
+        let feedback = self.feedback_wash(t);
+        let (fill, stroke, mut text_color) = self.colors(t, feedback);
 
         if let Some(color) = fill {
             p.fill_round_rect(rect, RADIUS, color);
+        }
+        // Solid variants (Primary / Secondary / Destructive) darken on
+        // hover / press by overlaying the feedback wash on top of their fill —
+        // shadcn primaries hover-darken. Ghost / Outline / DestructiveOutline
+        // already fold the wash into their (otherwise transparent) fill, so the
+        // overlay only applies where a solid fill would hide it.
+        if self.variant.is_solid() {
+            if let Some(wash) = feedback {
+                p.fill_round_rect(rect, RADIUS, wash);
+            }
         }
         if let Some(color) = stroke {
             p.stroke_round_rect(rect, RADIUS, color, 1.0);
@@ -91,19 +110,22 @@ impl Button<'_> {
         rect.contains(point)
     }
 
-    fn colors(&self, t: &Tokens) -> (Option<Color>, Option<Color>, Color) {
-        let feedback = if self.enabled {
-            if self.pressed {
-                Some(t.button_hover.with_alpha(t.button_hover.a * 1.8))
-            } else if self.hovered {
-                Some(t.button_hover)
-            } else {
-                None
-            }
+    /// The hover / press wash, or `None` at rest / when disabled. Solid
+    /// variants overlay it; transparent variants fold it into their fill.
+    fn feedback_wash(&self, t: &Tokens) -> Option<Color> {
+        if !self.enabled {
+            return None;
+        }
+        if self.pressed {
+            Some(t.button_hover.with_alpha(t.button_hover.a * 1.8))
+        } else if self.hovered {
+            Some(t.button_hover)
         } else {
             None
-        };
+        }
+    }
 
+    fn colors(&self, t: &Tokens, feedback: Option<Color>) -> (Option<Color>, Option<Color>, Color) {
         let (fill, stroke, text) = match self.variant {
             ButtonVariant::Ghost => (feedback, None, t.foreground),
             ButtonVariant::Primary => (Some(t.primary), None, t.primary_foreground),
@@ -249,6 +271,27 @@ mod tests {
         assert_eq!(p.fills_with(t.secondary), 1);
         let (_, _, color) = p.texts().next().expect("label should be painted");
         assert_eq!(color, t.secondary_foreground.to_jian());
+    }
+
+    #[test]
+    fn primary_hovered_overlays_feedback_wash_on_solid_fill() {
+        let t = Tokens::dark();
+        let b = Button {
+            label: "Export",
+            icon_d: None,
+            variant: ButtonVariant::Primary,
+            enabled: true,
+            hovered: true,
+            pressed: false,
+            font_size: 13.0,
+        };
+        let mut p = CapturePainter::default();
+
+        b.paint(&mut p, Rect::xywh(0.0, 0.0, 90.0, 30.0), &t);
+
+        // Solid primary fill + the hover wash overlaid on top.
+        assert_eq!(p.fills_with(t.primary), 1);
+        assert_eq!(p.fills_with(t.button_hover), 1);
     }
 
     #[test]
