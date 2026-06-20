@@ -28,7 +28,7 @@ fn components_pass_text_position_as_draw_origin_only() {
 
     Button {
         label: "Save",
-        icon_d: None,
+        icon_paths: None,
         variant: ButtonVariant::Ghost,
         enabled: true,
         hovered: false,

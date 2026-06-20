@@ -34,7 +34,7 @@ impl SelectTrigger<'_> {
         // owned by Button — the trigger never hand-rolls its feedback.
         Button {
             label: "",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Outline,
             enabled: self.enabled,
             hovered: self.hovered,

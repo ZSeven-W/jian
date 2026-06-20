@@ -34,8 +34,10 @@ impl ButtonVariant {
 #[derive(Debug, Clone, Copy)]
 pub struct Button<'a> {
     pub label: &'a str,
-    /// Optional lucide d-string (24x24 viewBox) stroked left of label.
-    pub icon_d: Option<&'a str>,
+    /// Optional lucide icon path(s) (24x24 viewBox) stroked left of the label.
+    /// A slice so multi-subpath icons (e.g. `braces`, `sparkles`) render in
+    /// full — matching `IconButton` / `SelectTrigger`.
+    pub icon_paths: Option<&'a [&'a str]>,
     pub variant: ButtonVariant,
     pub enabled: bool,
     pub hovered: bool,
@@ -76,7 +78,7 @@ impl Button<'_> {
 
         let label_width = p.measure_text(self.label, font_size);
         let icon_size = font_size + 3.0;
-        let has_icon = self.icon_d.is_some();
+        let has_icon = self.icon_paths.is_some();
         let has_label = !self.label.is_empty();
         let icon_width = if has_icon { icon_size } else { 0.0 };
         let gap = if has_icon && has_label {
@@ -87,9 +89,11 @@ impl Button<'_> {
         let total_width = icon_width + gap + label_width;
         let mut x = rect.origin.x + (rect.size.x - total_width).max(0.0) / 2.0;
 
-        if let Some(d) = self.icon_d {
+        if let Some(paths) = self.icon_paths {
             let top_left = Point2D::new(x, rect.origin.y + (rect.size.y - icon_size) / 2.0);
-            p.stroke_svg_path(d, top_left, icon_size, text_color, 1.75);
+            for d in paths {
+                p.stroke_svg_path(d, top_left, icon_size, text_color, 1.75);
+            }
             x += icon_size + gap;
         }
 
@@ -158,7 +162,7 @@ mod tests {
         let t = Tokens::dark();
         let b = Button {
             label: "Run",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Ghost,
             enabled: true,
             hovered: true,
@@ -180,7 +184,7 @@ mod tests {
         let t = Tokens::dark();
         let b = Button {
             label: "Save",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Primary,
             enabled: false,
             hovered: false,
@@ -201,7 +205,7 @@ mod tests {
         let t = Tokens::dark();
         let b = Button {
             label: "Save",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Ghost,
             enabled: false,
             hovered: true,
@@ -220,9 +224,10 @@ mod tests {
     fn icon_and_label_are_centered_as_one_group() {
         let t = Tokens::dark();
         let icon = "M4 12h16";
+        let icon_paths: &[&str] = &[icon];
         let b = Button {
             label: "Open",
-            icon_d: Some(icon),
+            icon_paths: Some(icon_paths),
             variant: ButtonVariant::Outline,
             enabled: true,
             hovered: false,
@@ -257,7 +262,7 @@ mod tests {
         let t = Tokens::dark();
         let b = Button {
             label: "Cancel",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Secondary,
             enabled: true,
             hovered: false,
@@ -278,7 +283,7 @@ mod tests {
         let t = Tokens::dark();
         let b = Button {
             label: "Export",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Primary,
             enabled: true,
             hovered: true,
@@ -299,7 +304,7 @@ mod tests {
         let t = Tokens::dark();
         let b = Button {
             label: "Disconnect",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::DestructiveOutline,
             enabled: true,
             hovered: false,
@@ -325,7 +330,7 @@ mod tests {
         let t = Tokens::dark();
         let b = Button {
             label: "Learn more",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Link,
             enabled: true,
             hovered: true,

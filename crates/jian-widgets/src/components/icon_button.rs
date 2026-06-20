@@ -61,7 +61,7 @@ impl IconButton<'_> {
         };
         Button {
             label: "",
-            icon_d: None,
+            icon_paths: None,
             variant,
             enabled: self.enabled,
             hovered: self.hovered,
