@@ -27,6 +27,8 @@
 //! own paint enums (`NodeKind` / `Effect`). The web host builds
 //! scenes too.
 
+use crate::scene_geometry::rect_has_extent;
+pub use crate::scene_geometry::{regular_polygon_points, stable_image_source_id};
 use jian_widgets::{Color, ImageAdjustments, ImageDrawMode, Point2D, Rect};
 #[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
@@ -742,33 +744,6 @@ impl SceneNode {
             children: Vec::new(),
         }
     }
-}
-
-fn rect_has_extent(rect: Rect) -> bool {
-    rect.size.x > 0.0 || rect.size.y > 0.0
-}
-
-pub fn stable_image_source_id(src: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
-    h.finish()
-}
-
-/// Vertices for a regular polygon fitted inside `rect`.
-pub fn regular_polygon_points(rect: Rect, sides: u32) -> Vec<Point2D> {
-    let n = sides.clamp(3, 100) as usize;
-    let cx = rect.origin.x + rect.size.x / 2.0;
-    let cy = rect.origin.y + rect.size.y / 2.0;
-    let rx = rect.size.x / 2.0;
-    let ry = rect.size.y / 2.0;
-    let start = -std::f32::consts::FRAC_PI_2;
-    (0..n)
-        .map(|i| {
-            let angle = start + i as f32 * std::f32::consts::TAU / n as f32;
-            Point2D::new(cx + rx * angle.cos(), cy + ry * angle.sin())
-        })
-        .collect()
 }
 
 /// Resolved stroke descriptor — colour already `$ref`-resolved.
