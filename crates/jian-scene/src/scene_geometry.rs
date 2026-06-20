@@ -13,7 +13,22 @@ pub(crate) fn rect_has_extent(rect: Rect) -> bool {
 pub fn stable_image_source_id(src: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    src.hash(&mut h);
+    let bytes = src.as_bytes();
+    // Hash length + bounded head/middle/tail windows rather than the whole
+    // string, so the id is O(1) even for multi-MB data URLs. Re-hashing the
+    // full base64 on every drag frame (the scene rebuilds on each node move)
+    // was the source of the image-drag lag. Distinct images differ in length
+    // and/or these windows, so collisions are negligible.
+    bytes.len().hash(&mut h);
+    const W: usize = 512;
+    if bytes.len() <= 3 * W {
+        bytes.hash(&mut h);
+    } else {
+        let mid = bytes.len() / 2;
+        bytes[..W].hash(&mut h);
+        bytes[mid..mid + W].hash(&mut h);
+        bytes[bytes.len() - W..].hash(&mut h);
+    }
     h.finish()
 }
 
