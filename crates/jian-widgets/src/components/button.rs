@@ -14,6 +14,11 @@ pub enum ButtonVariant {
     Destructive,
     /// Muted neutral fill (shadcn `secondary`) — secondary actions.
     Secondary,
+    /// Destructive border + text over a hover wash (shadcn `outline` in a
+    /// destructive context) — non-primary destructive actions like
+    /// Disconnect / Remove / Delete that shouldn't shout like a solid
+    /// `Destructive` CTA.
+    DestructiveOutline,
     /// Text-only, primary-colored, no fill/stroke (shadcn `link`).
     Link,
 }
@@ -105,6 +110,7 @@ impl Button<'_> {
             ButtonVariant::Outline => (feedback, Some(t.border), t.foreground),
             ButtonVariant::Destructive => (Some(t.destructive), None, t.primary_foreground),
             ButtonVariant::Secondary => (Some(t.secondary), None, t.secondary_foreground),
+            ButtonVariant::DestructiveOutline => (feedback, Some(t.destructive), t.destructive),
             ButtonVariant::Link => (None, None, t.primary),
         };
 
@@ -243,6 +249,32 @@ mod tests {
         assert_eq!(p.fills_with(t.secondary), 1);
         let (_, _, color) = p.texts().next().expect("label should be painted");
         assert_eq!(color, t.secondary_foreground.to_jian());
+    }
+
+    #[test]
+    fn destructive_outline_strokes_destructive_border_and_text() {
+        let t = Tokens::dark();
+        let b = Button {
+            label: "Disconnect",
+            icon_d: None,
+            variant: ButtonVariant::DestructiveOutline,
+            enabled: true,
+            hovered: false,
+            pressed: false,
+            font_size: 12.0,
+        };
+        let mut p = CapturePainter::default();
+
+        b.paint(&mut p, Rect::xywh(0.0, 0.0, 96.0, 28.0), &t);
+
+        // Destructive-colored border, no solid fill at rest.
+        assert!(p.ops.iter().any(|op| matches!(
+            op,
+            PaintOp::StrokeRoundRect(_, _, c, _) if *c == t.destructive
+        )));
+        assert_eq!(p.fills_with(t.destructive), 0);
+        let (_, _, color) = p.texts().next().expect("label should be painted");
+        assert_eq!(color, t.destructive.to_jian());
     }
 
     #[test]
