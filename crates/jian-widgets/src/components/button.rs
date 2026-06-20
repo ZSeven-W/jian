@@ -258,6 +258,30 @@ mod tests {
     }
 
     #[test]
+    fn label_sits_on_the_centered_baseline_not_top_left() {
+        // Painter::draw_text is BASELINE-relative; the label y must be the
+        // centered baseline (center + font_size*0.35), NOT the (h - fs)/2
+        // top-left form — else text rides ~font_size too high in host chrome.
+        let t = Tokens::dark();
+        let rect = Rect::xywh(0.0, 0.0, 80.0, 30.0);
+        let mut p = CapturePainter::default();
+        Button {
+            label: "Run",
+            icon_paths: None,
+            variant: ButtonVariant::Primary,
+            enabled: true,
+            hovered: false,
+            pressed: false,
+            font_size: 13.0,
+        }
+        .paint(&mut p, rect, &t);
+        let (_, origin, _) = p.texts().next().expect("label should be painted");
+        assert!((origin.y - crate::centered_text_baseline_y(rect, 13.0)).abs() < 0.01);
+        // And it must be well below the wrong top-left position.
+        assert!(origin.y > rect.origin.y + (rect.size.y - 13.0) / 2.0 + 5.0);
+    }
+
+    #[test]
     fn secondary_paints_secondary_fill_and_foreground() {
         let t = Tokens::dark();
         let b = Button {
