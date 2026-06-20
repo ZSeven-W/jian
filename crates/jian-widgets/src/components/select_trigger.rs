@@ -14,6 +14,10 @@ const PAD_X: f32 = 8.0;
 const CHEVRON_D: &str = "m6 9 6 6 6-6";
 
 pub struct SelectTrigger<'a> {
+    /// Optional leading icon (lucide path(s)) — e.g. a globe trigger. `None` for
+    /// a plain text dropdown; with an empty `label` it becomes an icon+chevron
+    /// dropdown button (TopBar globe / file-menu style).
+    pub icon_paths: Option<&'a [&'a str]>,
     /// The selected value; when empty the `placeholder` is shown muted.
     pub label: &'a str,
     pub placeholder: &'a str,
@@ -45,6 +49,21 @@ impl SelectTrigger<'_> {
             t.density.font_size()
         };
         let chevron = 14.0;
+        let mut text_x = rect.origin.x + PAD_X;
+
+        // Optional leading icon (e.g. a globe / file-menu trigger).
+        if let Some(paths) = self.icon_paths {
+            let isize = font_size + 1.0;
+            let mut ic = t.foreground;
+            if !self.enabled {
+                ic = ic.with_alpha(0.5);
+            }
+            let iy = rect.origin.y + (rect.size.y - isize) / 2.0;
+            for d in paths {
+                p.stroke_svg_path(d, Point2D::new(text_x, iy), isize, ic, 1.5);
+            }
+            text_x += isize + 6.0;
+        }
 
         // Value / placeholder, clipped so a long value never runs under the
         // chevron.
@@ -57,18 +76,16 @@ impl SelectTrigger<'_> {
             color = color.with_alpha(0.5);
         }
         if !text.is_empty() {
+            let clip_right = rect.origin.x + rect.size.x - PAD_X - chevron - 4.0;
             let clip = Rect::xywh(
-                rect.origin.x,
+                text_x,
                 rect.origin.y,
-                (rect.size.x - PAD_X - chevron - 4.0).max(0.0),
+                (clip_right - text_x).max(0.0),
                 rect.size.y,
             );
             p.save();
             p.clip_rect(clip);
-            let origin = Point2D::new(
-                rect.origin.x + PAD_X,
-                rect.origin.y + (rect.size.y - font_size) / 2.0,
-            );
+            let origin = Point2D::new(text_x, rect.origin.y + (rect.size.y - font_size) / 2.0);
             let layout = TextLayout::single_run(
                 text,
                 FONT_FAMILY,
@@ -105,6 +122,7 @@ mod tests {
 
     fn trigger<'a>(label: &'a str) -> SelectTrigger<'a> {
         SelectTrigger {
+            icon_paths: None,
             label,
             placeholder: "Select…",
             hovered: false,
@@ -112,6 +130,29 @@ mod tests {
             enabled: true,
             font_size: 12.0,
         }
+    }
+
+    #[test]
+    fn icon_trigger_strokes_leading_icon_and_chevron() {
+        let t = Tokens::dark();
+        let mut p = CapturePainter::default();
+        let globe: &[&str] = &["M2 12h20"];
+        SelectTrigger {
+            icon_paths: Some(globe),
+            label: "",
+            ..trigger("")
+        }
+        .paint(&mut p, Rect::xywh(0.0, 0.0, 44.0, 28.0), &t);
+
+        // leading icon + chevron => two distinct stroked paths.
+        assert!(p
+            .ops
+            .iter()
+            .any(|op| matches!(op, PaintOp::StrokeSvgPath { d, .. } if *d == "M2 12h20")));
+        assert!(p
+            .ops
+            .iter()
+            .any(|op| matches!(op, PaintOp::StrokeSvgPath { d, .. } if *d == CHEVRON_D)));
     }
 
     #[test]
