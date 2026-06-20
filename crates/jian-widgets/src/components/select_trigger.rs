@@ -26,16 +26,25 @@ pub struct SelectTrigger<'a> {
     pub enabled: bool,
     /// `<= 0` derives from the density font size.
     pub font_size: f32,
+    /// Draw the bordered (shadcn `Outline`) box. `false` → a borderless ghost
+    /// trigger (just icon + value + chevron with a hover wash) for chrome icon
+    /// dropdowns like the TopBar globe / file-menu.
+    pub bordered: bool,
 }
 
 impl SelectTrigger<'_> {
     pub fn paint(&self, p: &mut dyn Painter, rect: Rect, t: &Tokens) {
-        // Box = an Outline button: input/border outline + hover/press wash, all
-        // owned by Button — the trigger never hand-rolls its feedback.
+        // Box = a Button (Outline = bordered input box; Ghost = borderless chrome
+        // trigger) — input/border outline + hover/press wash owned by Button, so
+        // the trigger never hand-rolls its feedback.
         Button {
             label: "",
             icon_paths: None,
-            variant: ButtonVariant::Outline,
+            variant: if self.bordered {
+                ButtonVariant::Outline
+            } else {
+                ButtonVariant::Ghost
+            },
             enabled: self.enabled,
             hovered: self.hovered,
             pressed: self.pressed,
@@ -129,6 +138,7 @@ mod tests {
             pressed: false,
             enabled: true,
             font_size: 12.0,
+            bordered: true,
         }
     }
 
