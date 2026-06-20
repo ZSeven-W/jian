@@ -5,6 +5,7 @@ pub mod badge;
 pub mod button;
 pub mod card;
 pub mod checkbox;
+pub mod color_picker;
 pub mod dialog;
 pub mod icon_button;
 pub mod input;
