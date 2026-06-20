@@ -6,6 +6,21 @@ use crate::{Color, Painter, Rect, Tokens};
 /// Size of each checkerboard cell in px.
 const CHECKER: f32 = 5.0;
 const DEFAULT_RADIUS: f32 = 4.0;
+/// Transparency-checker shades. THEME-INDEPENDENT light greys (not `muted`/
+/// `card` tokens) so the pattern stays visible on any surface — a dark-theme
+/// card behind a translucent swatch must not swallow the checker.
+const CHECKER_LIGHT: Color = Color {
+    r: 0.95,
+    g: 0.95,
+    b: 0.95,
+    a: 1.0,
+};
+const CHECKER_DARK: Color = Color {
+    r: 0.78,
+    g: 0.78,
+    b: 0.78,
+    a: 1.0,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Swatch {
@@ -27,7 +42,7 @@ impl Swatch {
 
         // Only reveal a checkerboard when the color is translucent.
         if self.color.a < 1.0 {
-            self.paint_checker(p, rect, t);
+            self.paint_checker(p, rect);
         }
 
         // The (possibly translucent) color tints whatever sits behind it.
@@ -39,11 +54,11 @@ impl Swatch {
     }
 
     /// Tile alternating light/dark cells across `rect`, clipped to its bounds.
-    fn paint_checker(&self, p: &mut dyn Painter, rect: Rect, t: &Tokens) {
+    fn paint_checker(&self, p: &mut dyn Painter, rect: Rect) {
         p.save();
         p.clip_rect(rect);
-        let light = t.muted;
-        let dark = t.card;
+        let light = CHECKER_LIGHT;
+        let dark = CHECKER_DARK;
         let cols = (rect.size.x / CHECKER).ceil() as usize;
         let rows = (rect.size.y / CHECKER).ceil() as usize;
         for row in 0..rows {
@@ -76,8 +91,8 @@ mod tests {
 
         // Opaque -> no checker cells, just the one color fill.
         assert_eq!(p.fills_with(swatch.color), 1);
-        assert_eq!(p.fills_with(t.muted), 0);
-        assert_eq!(p.fills_with(t.card), 0);
+        assert_eq!(p.fills_with(CHECKER_LIGHT), 0);
+        assert_eq!(p.fills_with(CHECKER_DARK), 0);
     }
 
     #[test]
@@ -93,8 +108,8 @@ mod tests {
         swatch.paint(&mut p, Rect::xywh(0.0, 0.0, 20.0, 20.0), &t);
 
         // Multiple checker cells (both shades) plus the tinting color fill.
-        assert!(p.fills_with(t.muted) > 1);
-        assert!(p.fills_with(t.card) > 1);
+        assert!(p.fills_with(CHECKER_LIGHT) > 1);
+        assert!(p.fills_with(CHECKER_DARK) > 1);
         assert_eq!(p.fills_with(color), 1);
     }
 
