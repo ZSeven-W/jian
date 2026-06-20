@@ -32,6 +32,8 @@ impl Dialog<'_> {
         p.fill_round_rect(card, CARD_RADIUS, t.card);
         p.stroke_round_rect(card, CARD_RADIUS, t.border, 1.0);
 
+        // Top-anchored header title (not box-centered), so its baseline is an
+        // explicit offset rather than centered_text_baseline_y.
         let title_origin = Point2D::new(card.origin.x + 20.0, card.origin.y + 18.0);
         let title = TextLayout::single_run(
             self.title,

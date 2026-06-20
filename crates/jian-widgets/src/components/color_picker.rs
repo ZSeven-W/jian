@@ -64,9 +64,18 @@ impl ColorPicker<'_> {
             t.foreground.to_jian(),
             Point2D::new(0.0, 0.0),
         );
+        let header = Rect::xywh(
+            panel.origin.x,
+            header_top(panel),
+            PICKER_WIDTH,
+            HEADER_HEIGHT,
+        );
         p.draw_text(
             &title,
-            Point2D::new(panel.origin.x + PAD, header_top(panel) + 19.0),
+            Point2D::new(
+                panel.origin.x + PAD,
+                crate::centered_text_baseline_y(header, 13.0),
+            ),
         );
 
         paint_sv_box(p, sv_rect(panel), self.hue);
@@ -105,7 +114,10 @@ impl ColorPicker<'_> {
             );
             p.draw_text(
                 &text,
-                Point2D::new(bx + (RGB_BOX_W - text_w) / 2.0, rgb_y + 21.0),
+                Point2D::new(
+                    bx + (RGB_BOX_W - text_w) / 2.0,
+                    crate::centered_text_baseline_y(box_rect, 14.0),
+                ),
             );
             let lab_w = p.measure_text(label, 12.0);
             let lab = TextLayout::single_run(
@@ -115,6 +127,8 @@ impl ColorPicker<'_> {
                 t.muted_foreground.to_jian(),
                 Point2D::new(0.0, 0.0),
             );
+            // Channel caption sits BELOW its box (not box-centered), so its
+            // baseline is an explicit offset rather than centered_text_baseline_y.
             p.draw_text(
                 &lab,
                 Point2D::new(bx + (RGB_BOX_W - lab_w) / 2.0, rgb_y + RGB_BOX_H + 14.0),
@@ -143,7 +157,10 @@ impl ColorPicker<'_> {
         );
         p.draw_text(
             &hex_layout,
-            Point2D::new(hex.origin.x + 32.0, hex.origin.y + 19.0),
+            Point2D::new(
+                hex.origin.x + 32.0,
+                crate::centered_text_baseline_y(hex, 13.0),
+            ),
         );
 
         // Close (×) chip — a dim disc so it reads against the SV gradient.
