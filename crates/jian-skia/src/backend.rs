@@ -555,7 +555,31 @@ fn draw_image(
         let mut p = SkPaint::default();
         p.set_anti_alias(true);
         p.set_alpha_f(opacity);
-        let src_rect = SkRect::from_iwh(img.width(), img.height());
+        // object-fit: cover — parity with TS `node-renderer.ts` drawImage,
+        // whose default (`objectFit ?? 'fill'`) branch scales by `Math.max`.
+        // Center-crop the SOURCE to the destination's aspect ratio so the
+        // image fills its slot without distorting: a 4:3 photo dropped into a
+        // wide card header is cropped top/bottom, not squashed horizontally.
+        // The previous full-source → dst mapping stretched every image.
+        let iw = img.width() as f32;
+        let ih = img.height() as f32;
+        let dw = dst_rect.width().max(1.0);
+        let dh = dst_rect.height().max(1.0);
+        let src_rect = if iw > 0.0 && ih > 0.0 {
+            let src_aspect = iw / ih;
+            let dst_aspect = dw / dh;
+            let (mut cw, mut ch) = (iw, ih);
+            if src_aspect > dst_aspect {
+                cw = ih * dst_aspect; // source too wide → crop left/right
+            } else {
+                ch = iw / dst_aspect; // source too tall → crop top/bottom
+            }
+            let cx = (iw - cw) * 0.5;
+            let cy = (ih - ch) * 0.5;
+            SkRect::from_xywh(cx, cy, cw, ch)
+        } else {
+            SkRect::from_iwh(img.width(), img.height())
+        };
         canvas.draw_image_rect_with_sampling_options(
             img,
             Some((&src_rect, SrcRectConstraint::Strict)),
