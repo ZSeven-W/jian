@@ -138,7 +138,20 @@ impl LayoutEngine {
         // (Text / IconFont / Image / …) so leaf sizes propagate into
         // flex measurements.
         for (key, data) in doc_tree.nodes.iter() {
-            let style = resolve::node_to_style(&data.schema);
+            let mut style = resolve::node_to_style(&data.schema);
+            // Direction-aware flex_shrink: a child whose MAIN-AXIS size is a
+            // fixed Number must not be shrunk below it. `node_to_style` only
+            // pins fully-fixed squares (both axes Number); here, with the parent
+            // in hand, we also pin a `width:200, height:fit_content` card in a
+            // horizontal scroll row so it keeps its width — its title doesn't
+            // wrap and sibling cards stay equal-height (otherwise an overflowing
+            // row squeezes the cards into ragged, uneven heights).
+            if let Some(p) = data.parent {
+                let parent_horizontal = resolve::node_is_horizontal(&doc_tree.nodes[p].schema);
+                if resolve::main_axis_is_fixed_number(&data.schema, parent_horizontal) {
+                    style.flex_shrink = 0.0;
+                }
+            }
             let ctx = text_measure_for(&data.schema);
             let id = self
                 .tree

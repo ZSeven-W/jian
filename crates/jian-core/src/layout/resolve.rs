@@ -241,6 +241,48 @@ fn leaf_size(
     }
 }
 
+/// `(width, height)` sizing for ANY node — containers pull from their
+/// `ContainerProps`, every other variant from its own leaf width/height.
+fn node_size_refs(
+    n: &jian_ops_schema::node::PenNode,
+) -> (Option<&SizingBehavior>, Option<&SizingBehavior>) {
+    use jian_ops_schema::node::PenNode;
+    match n {
+        PenNode::Frame(f) => (f.container.width.as_ref(), f.container.height.as_ref()),
+        PenNode::Group(g) => (g.container.width.as_ref(), g.container.height.as_ref()),
+        PenNode::Rectangle(r) => (r.container.width.as_ref(), r.container.height.as_ref()),
+        _ => leaf_size(n),
+    }
+}
+
+/// True when this node lays its children out in a Row (horizontal main axis).
+pub fn node_is_horizontal(n: &jian_ops_schema::node::PenNode) -> bool {
+    use jian_ops_schema::node::PenNode;
+    let layout = match n {
+        PenNode::Frame(f) => f.container.layout.as_ref(),
+        PenNode::Group(g) => g.container.layout.as_ref(),
+        PenNode::Rectangle(r) => r.container.layout.as_ref(),
+        _ => None,
+    };
+    matches!(layout, Some(LayoutMode::Horizontal))
+}
+
+/// True when the child's MAIN-AXIS size — width when the parent is a Row,
+/// height when the parent is a Column — is a fixed `Number`. Such a child must
+/// not be flex-shrunk below that size: a `width:200, height:fit_content` dish
+/// card in a horizontal scroll row keeps its 200px instead of being squeezed
+/// (which would wrap its title and leave sibling cards at unequal heights). The
+/// cross axis is irrelevant, so this generalizes the both-axes-fixed rule that
+/// `node_to_style` applies to fully-fixed squares.
+pub fn main_axis_is_fixed_number(
+    child: &jian_ops_schema::node::PenNode,
+    parent_horizontal: bool,
+) -> bool {
+    let (w, h) = node_size_refs(child);
+    let axis = if parent_horizontal { w } else { h };
+    matches!(axis, Some(SizingBehavior::Number(_)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
