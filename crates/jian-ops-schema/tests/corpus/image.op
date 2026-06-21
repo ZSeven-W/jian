@@ -1,0 +1,26 @@
+{
+  "version": "0.8.0",
+  "children": [
+    {
+      "type": "image",
+      "id": "img-data",
+      "name": "Embedded",
+      "x": 0,
+      "y": 0,
+      "width": 120,
+      "height": 80,
+      "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJrqD0AAAAAElFTkSuQmCC",
+      "objectFit": "fit"
+    },
+    {
+      "type": "image",
+      "id": "img-path",
+      "name": "Linked",
+      "x": 140,
+      "y": 0,
+      "width": 120,
+      "height": 80,
+      "src": "assets/logo.png"
+    }
+  ]
+}

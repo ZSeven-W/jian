@@ -128,7 +128,13 @@ pub struct RadialGradientBody {
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct ImageFillBody {
-    pub url: String,
+    // Image-fill source — an `Arc`-shared string (`data:` URL or path),
+    // same rationale as `ImageNode.src` (see `crate::node::ImageSrc`): a
+    // multi-MB data URL here is otherwise cloned + content-compared on
+    // every scene-cache refresh. Wire form stays a plain string.
+    #[schemars(with = "String")]
+    #[cfg_attr(feature = "export-ts", ts(as = "String"))]
+    pub url: crate::node::ImageSrc,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<ImageFillMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

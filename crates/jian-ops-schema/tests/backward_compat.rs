@@ -52,3 +52,20 @@ fn v0_with_variables_no_extensions() {
     assert!(d.state.is_none());
     assert!(d.app.is_none());
 }
+
+#[test]
+fn v0_image_src_loads_into_arc_newtype() {
+    // An existing file stores `src` as a plain JSON string. After the
+    // `ImageSrc(Arc<str>)` migration it must still deserialize byte-for-byte
+    // (both a data: URL and a relative path), proving wire compatibility.
+    let d = load("image.op");
+    assert_eq!(d.children.len(), 2);
+    let jian_ops_schema::node::PenNode::Image(ref data_img) = d.children[0] else {
+        panic!("expected an Image node");
+    };
+    assert!(data_img.src.as_str().starts_with("data:image/png;base64,"));
+    let jian_ops_schema::node::PenNode::Image(ref path_img) = d.children[1] else {
+        panic!("expected an Image node");
+    };
+    assert_eq!(path_img.src, "assets/logo.png");
+}

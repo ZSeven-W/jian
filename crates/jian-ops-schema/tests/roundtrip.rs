@@ -48,3 +48,10 @@ fn pages() {
 fn full_jian_extensions() {
     assert_roundtrip("full-jian-extensions.op");
 }
+#[test]
+fn image() {
+    // Image nodes carry an `Arc`-shared `src` (a data: URL + a path); a
+    // green round-trip proves the newtype serializes byte-identically to
+    // a plain JSON string, so existing files still load + re-save.
+    assert_roundtrip("image.op");
+}

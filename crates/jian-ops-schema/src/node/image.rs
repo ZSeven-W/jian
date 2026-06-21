@@ -1,5 +1,6 @@
 use super::base::PenNodeBase;
 use super::container::CornerRadius;
+use super::image_src::ImageSrc;
 use crate::sizing::SizingBehavior;
 use crate::style::PenEffect;
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,14 @@ pub enum ImageFitMode {
 pub struct ImageNode {
     #[serde(flatten)]
     pub base: PenNodeBase,
-    pub src: String,
+    // Image source — an `Arc`-shared string (`data:` URL or path). See
+    // `ImageSrc` for why it is reference-counted. On the wire it is a
+    // plain string; `with`/`as` keep the schema + TS exports reporting
+    // `string` (a non-doc `//` comment avoids adding a schema description,
+    // so the tracked `ops.schema.json` stays byte-identical).
+    #[schemars(with = "String")]
+    #[cfg_attr(feature = "export-ts", ts(as = "String"))]
+    pub src: ImageSrc,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_fit: Option<ImageFitMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
