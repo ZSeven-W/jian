@@ -332,6 +332,18 @@ pub trait Painter {
     fn measure_text_family(&mut self, text: &str, font_size: f32, _family: &str) -> f32 {
         self.measure_text(text, font_size)
     }
+
+    fn measure_text_family_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> f32 {
+        let _ = family;
+        self.measure_text_styled(text, font_size, weight, italic)
+    }
 }
 
 #[cfg(test)]

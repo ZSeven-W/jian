@@ -751,6 +751,9 @@ impl SceneNode {
 pub struct SceneStroke {
     pub color: Color,
     pub width: f32,
+    /// Optional per-side stroke widths in `[top, right, bottom, left]`
+    /// order. `None` means the uniform `width` applies to every side.
+    pub sides: Option<[f32; 4]>,
 }
 
 /// Fill paint mode for a [`SceneNode`]. Mirrors

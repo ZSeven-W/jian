@@ -399,6 +399,7 @@ mod tests {
         line.stroke = Some(crate::layout_scene::SceneStroke {
             color: jian_widgets::geometry::Color::WHITE,
             width: 1.0,
+            sides: None,
         });
         let scene = one_page(vec![line]);
         // Right on the horizontal segment.

@@ -212,6 +212,7 @@ fn set_node_stroke_color_only_patches_an_existing_stroke() {
             a: 1.0,
         },
         width: 2.0,
+        sides: None,
     });
     let mut scene = LayoutScene {
         pages: vec![ScenePage {

@@ -118,7 +118,7 @@ pub struct ContainerProps {
     pub justify_content: Option<JustifyContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub align_items: Option<AlignItems>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, alias = "clip", skip_serializing_if = "Option::is_none")]
     pub clip_content: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner_radius: Option<CornerRadius>,
