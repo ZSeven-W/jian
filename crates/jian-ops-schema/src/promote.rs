@@ -350,6 +350,18 @@ pub fn promote_document(doc: &mut PenDocument) -> Vec<PromoteNote> {
     notes
 }
 
+/// Promote explicitly marked frames in a flat forest (slice of top-level nodes).
+///
+/// Thin public wrapper over [`promote_in_slice`] for callers that already hold
+/// a `Vec<PenNode>` forest without a full [`PenDocument`] context — e.g. the
+/// AI orchestrator's generated-subtree pipeline. Recurses into child containers
+/// exactly as [`promote_document`] does.
+pub fn promote_forest(nodes: &mut [PenNode]) -> Vec<PromoteNote> {
+    let mut notes = Vec::new();
+    promote_in_slice(nodes, &mut notes);
+    notes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,11 +495,76 @@ mod tests {
     }
 
     #[test]
+    fn promote_frame_preserves_events_bindings_state_semantics() {
+        // A role-tagged input frame carrying interactivity must keep its
+        // events/bindings/state/semantics after promotion to a text_input widget.
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"f1","role":"input",
+           "state":{"q":{"type":"string","default":""}},
+           "bindings":{"value":"$app.q"},
+           "events":{"onChange":[{"set":{"$app.q":"$event.value"}}]},
+           "semantics":{"label":"Search field"},
+           "children":[{"type":"text","id":"t1","content":"Search",
+                        "fill":[{"type":"solid","color":"#9A9A9A"}]}]}]}"##);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes[0].to, "text_input");
+        let PenNode::TextInput(ti) = &d.children[0] else {
+            panic!("did not become text_input")
+        };
+        assert!(ti.state.is_some(), "state must survive promotion");
+        assert!(ti.bindings.is_some(), "bindings must survive promotion");
+        assert!(ti.events.is_some(), "events must survive promotion");
+        assert!(ti.semantics.is_some(), "semantics must survive promotion");
+    }
+
+    #[test]
     fn muted_hex_rejects_non_ascii_without_panicking() {
         // A non-ASCII / non-hex fill string must not panic on a byte-
         // boundary slice; it simply isn't treated as a muted placeholder.
         assert!(!is_muted_hex("$变量"));
         assert!(!is_muted_hex("#abc"));
         assert!(is_muted_hex("#9A9A9A"));
+    }
+
+    #[test]
+    fn promote_forest_input_frame_becomes_text_input_with_placeholder_and_icons() {
+        // promote_forest operates on a bare Vec<PenNode> forest (no PenDocument
+        // wrapper) — the AI pipeline passes generated subtrees this way.
+        // role="input" + leading mail icon + muted placeholder + trailing eye
+        // should promote to a TextInput node carrying all three attributes.
+        let json = r##"[
+          {"type":"frame","id":"f1","role":"input","width":320,"height":48,
+           "cornerRadius":8,"fill":[{"type":"solid","color":"#f9fafb"}],"children":[
+             {"type":"icon_font","id":"ico1","iconFontName":"mail","width":20,"height":20},
+             {"type":"text","id":"t1","content":"Enter your email",
+              "fill":[{"type":"solid","color":"#9ca3af"}]},
+             {"type":"icon_font","id":"ico2","iconFontName":"eye","width":20,"height":20}
+           ]}
+        ]"##;
+        let mut nodes: Vec<PenNode> = serde_json::from_str(json).unwrap();
+        let notes = promote_forest(&mut nodes);
+
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].to, "text_input");
+        assert_eq!(notes[0].node_id, "f1");
+
+        let PenNode::TextInput(ti) = &nodes[0] else {
+            panic!("expected TextInput after promote_forest");
+        };
+        // Muted-fill text → placeholder.
+        assert_eq!(ti.placeholder.as_deref(), Some("Enter your email"));
+        assert!(ti.value.is_none(), "no non-muted text → value must be None");
+        // Icons carried through from the frame's icon_font children.
+        assert_eq!(ti.leading_icon.as_deref(), Some("mail"));
+        assert_eq!(ti.trailing_icon.as_deref(), Some("eye"));
+        // Base role cleared — the node type now carries the semantic.
+        assert!(ti.base.role.is_none());
+        // Original id preserved.
+        assert_eq!(ti.base.id, "f1");
+        // Container style forwarded.
+        assert!(
+            ti.fill.is_some(),
+            "fill must be carried over from the frame"
+        );
     }
 }
