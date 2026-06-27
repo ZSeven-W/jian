@@ -70,6 +70,8 @@ pub enum PenFill {
     Solid(SolidFillBody),
     LinearGradient(LinearGradientBody),
     RadialGradient(RadialGradientBody),
+    MeshGradient(MeshGradientBody),
+    Shader(ShaderFillBody),
     Image(ImageFillBody),
 }
 
@@ -115,6 +117,88 @@ pub struct RadialGradientBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f32>,
     pub stops: Vec<GradientStop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend_mode: Option<BlendMode>,
+}
+
+/// A single vertex of a `MeshGradient` grid. `row`/`col` are 0-based
+/// indices into a `rows`×`cols` lattice; `color` is the Gouraud-shaded
+/// colour anchored at that vertex.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct MeshVertexStop {
+    pub row: u32,
+    pub col: u32,
+    pub color: String,
+}
+
+/// Uniform-grid mesh gradient (v1). A `rows`×`cols` lattice of
+/// `MeshVertexStop`s is Gouraud-interpolated across the node's
+/// round-rect. Mirrors the sibling gradient bodies for the shared
+/// `explain`/`opacity`/`blend_mode` tail.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct MeshGradientBody {
+    pub rows: u32,
+    pub cols: u32,
+    pub stops: Vec<MeshVertexStop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacity: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend_mode: Option<BlendMode>,
+}
+
+/// One named uniform value bound into an SkSL shader fill via
+/// `RuntimeShaderBuilder` at paint time. `untagged` so the wire form is
+/// the bare JSON scalar/array the author wrote — a number is a `float`,
+/// a number array is a `vec2`/`vec3`/`vec4`, and a hex string is a
+/// `color` mapped to a `vec4` (premultiplied RGBA). The named-uniforms
+/// map on `ShaderFillBody` is optional; a shader may take none.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
+#[serde(untagged)]
+pub enum ShaderUniformValue {
+    /// `float` uniform.
+    Float(f32),
+    /// `vec2` / `vec3` / `vec4` uniform — the length picks the SkSL
+    /// type (RuntimeShaderBuilder rejects a mismatched arity).
+    Vec(Vec<f32>),
+    /// `color` uniform — a `#rgb` / `#rrggbb` / `#rrggbbaa` hex string
+    /// the backend expands into a `vec4` before binding.
+    Color(String),
+}
+
+/// Native SkSL shader fill (v1). The `sksl` source is stored RAW and is
+/// treated as untrusted: the renderer entrypoint is the SkSL signature
+/// `half4 main(float2 fragCoord)`. On compile failure the backend
+/// degrades to a visible solid fill (the first `color` uniform, else
+/// mid-gray) and never panics. Mirrors the sibling gradient bodies for
+/// the shared `opacity`/`blend_mode` tail.
+///
+/// Pencil-flavoured WebGL-GLSL import is an explicit follow-up, NOT v1;
+/// v1 expects SkSL (Skia's GLSL dialect) verbatim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
+#[serde(rename_all = "camelCase")]
+pub struct ShaderFillBody {
+    /// RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.
+    pub sksl: String,
+    /// Optional named-uniform map (`float` / `vec*` / `color`). A
+    /// shader may declare none; absent or empty both mean "no uniforms".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uniforms: Option<std::collections::BTreeMap<String, ShaderUniformValue>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -358,6 +442,73 @@ mod tests {
         let s = serde_json::to_string(&f).unwrap();
         let f2: PenFill = serde_json::from_str(&s).unwrap();
         assert_eq!(f, f2);
+    }
+
+    #[test]
+    fn mesh_gradient_roundtrip() {
+        let json = r##"{"type":"mesh_gradient","rows":2,"cols":2,"stops":[{"row":0,"col":0,"color":"#f00"},{"row":0,"col":1,"color":"#0f0"},{"row":1,"col":0,"color":"#00f"},{"row":1,"col":1,"color":"#ff0"}]}"##;
+        let f: PenFill = serde_json::from_str(json).unwrap();
+        match &f {
+            PenFill::MeshGradient(body) => {
+                assert_eq!(body.rows, 2);
+                assert_eq!(body.cols, 2);
+                assert_eq!(body.stops.len(), 4);
+                assert_eq!(body.stops[0].color, "#f00");
+                assert_eq!(body.stops[3].row, 1);
+                assert_eq!(body.stops[3].col, 1);
+            }
+            _ => panic!("wrong variant"),
+        }
+        let s = serde_json::to_string(&f).unwrap();
+        let f2: PenFill = serde_json::from_str(&s).unwrap();
+        assert_eq!(f, f2);
+    }
+
+    #[test]
+    fn shader_fill_roundtrip() {
+        let json = r##"{"type":"shader","sksl":"half4 main(float2 p){ return half4(1.0,0.0,0.0,1.0); }","uniforms":{"glow":0.5,"center":[0.5,0.5],"tint":"#ff00aa"}}"##;
+        let f: PenFill = serde_json::from_str(json).unwrap();
+        match &f {
+            PenFill::Shader(body) => {
+                assert!(body.sksl.contains("half4 main(float2 p)"));
+                let uniforms = body.uniforms.as_ref().expect("uniforms map");
+                assert_eq!(uniforms.get("glow"), Some(&ShaderUniformValue::Float(0.5)));
+                assert_eq!(
+                    uniforms.get("center"),
+                    Some(&ShaderUniformValue::Vec(vec![0.5, 0.5]))
+                );
+                assert_eq!(
+                    uniforms.get("tint"),
+                    Some(&ShaderUniformValue::Color("#ff00aa".into()))
+                );
+            }
+            _ => panic!("wrong variant"),
+        }
+        let s = serde_json::to_string(&f).unwrap();
+        let f2: PenFill = serde_json::from_str(&s).unwrap();
+        assert_eq!(f, f2);
+    }
+
+    #[test]
+    fn shader_fill_without_uniforms_roundtrip() {
+        let json = r##"{"type":"shader","sksl":"half4 main(float2 p){ return half4(0.0,0.0,0.0,1.0); }"}"##;
+        let f: PenFill = serde_json::from_str(json).unwrap();
+        match &f {
+            PenFill::Shader(body) => assert!(body.uniforms.is_none()),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn shader_fill_rejects_missing_sksl() {
+        // `sksl` is required — a shader fill with no source must fail to
+        // deserialize rather than silently producing an empty program.
+        let json = r##"{"type":"shader","uniforms":{"glow":0.5}}"##;
+        let parsed: Result<PenFill, _> = serde_json::from_str(json);
+        assert!(
+            parsed.is_err(),
+            "missing `sksl` must reject, got {parsed:?}"
+        );
     }
 
     #[test]

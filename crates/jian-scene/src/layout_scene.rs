@@ -142,6 +142,41 @@ pub enum SceneGradient {
         opacity: f32,
         stops: Vec<SceneGradientStop>,
     },
+    /// Uniform-grid mesh gradient (v1). `colors` is a row-major
+    /// `rows`×`cols` lattice (length == `rows * cols`); vertex `(r, c)`
+    /// lives at `colors[r * cols + c]` and Gouraud-interpolates across
+    /// the node's bounds.
+    Mesh {
+        rows: u32,
+        cols: u32,
+        colors: Vec<Color>,
+        opacity: f32,
+    },
+}
+
+/// One resolved SkSL shader uniform — a name plus a concrete float
+/// vector (length 1 = float, 2/3/4 = vec2/3/4). A `color`-typed uniform
+/// has already been expanded into a 4-float premultiplied-RGBA `vec4` by
+/// the loader, so the painter binds it directly.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneShaderUniform {
+    pub name: String,
+    pub values: Vec<f32>,
+}
+
+/// A native SkSL shader fill (v1), parallel to [`SceneGradient`].
+/// `sksl` is the RAW (untrusted) source; only the native Skia host
+/// compiles + runs it (cached `RuntimeEffect`). Every other painter
+/// degrades to `fallback` solid (documented parity gap, same as mesh).
+/// `opacity` folds into the paint alpha.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneShader {
+    pub sksl: String,
+    pub uniforms: Vec<SceneShaderUniform>,
+    pub opacity: f32,
+    /// Visible solid colour painted when the backend can't run the
+    /// program (first `color` uniform, else mid-gray).
+    pub fallback: Color,
 }
 
 /// A visual effect painted with a [`SceneNode`]. v1 ships drop
@@ -475,6 +510,10 @@ pub struct SceneNode {
     /// Path / Ellipse / Line painters that have no gradient overload
     /// yet) keep a sensible fallback.
     pub gradient: Option<SceneGradient>,
+    /// Resolved SkSL shader body — populated when `fill_type` is
+    /// `Shader`. Parallel to `gradient`; `fill` still holds the
+    /// fallback solid colour for painters that can't run the program.
+    pub shader: Option<SceneShader>,
     /// Resolved stroke (colour + width). `$ref` stroke colours are
     /// resolved at build time. `None` = no stroke.
     pub stroke: Option<SceneStroke>,
@@ -711,6 +750,7 @@ impl SceneNode {
             fill: None,
             fill_type: SceneFillType::Solid,
             gradient: None,
+            shader: None,
             stroke: None,
             text: None,
             text_runs: Vec::new(),
@@ -765,6 +805,8 @@ pub enum SceneFillType {
     Solid,
     LinearGradient,
     RadialGradient,
+    MeshGradient,
+    Shader,
     Image,
 }
 

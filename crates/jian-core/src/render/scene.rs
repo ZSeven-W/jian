@@ -23,8 +23,9 @@
 
 use crate::geometry::{point, rect, Point};
 use crate::render::{
-    BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, Paint, PathCommand,
-    RadialGradient, ShadowSpec, StrokeOp, TextAlign, TextRun,
+    BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
+    PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
+    TextRun,
 };
 use crate::scene::Color;
 use jian_ops_schema::node::PenNode;
@@ -506,6 +507,26 @@ fn emit_for_node(r: crate::geometry::Rect, json: &Value, out: &mut Vec<DrawOp>) 
             rect: rect_logical,
             radii,
             gradient: grad,
+            stroke,
+        });
+        return;
+    }
+
+    if let Some(grad) = first_fill.and_then(try_mesh_gradient) {
+        out.push(DrawOp::MeshGradientRect {
+            rect: rect_logical,
+            radii,
+            gradient: grad,
+            stroke,
+        });
+        return;
+    }
+
+    if let Some(shader) = first_fill.and_then(try_shader) {
+        out.push(DrawOp::ShaderRect {
+            rect: rect_logical,
+            radii,
+            shader,
             stroke,
         });
         return;
@@ -1291,6 +1312,123 @@ fn try_radial_gradient(fill: &Value) -> Option<RadialGradient> {
         radius,
         stops,
         opacity,
+    })
+}
+
+/// Parse a `mesh_gradient` fill entry into a `MeshGradient` (row-major
+/// colour grid). Requires `rows >= 2` and `cols >= 2`. Each `stops[]`
+/// entry carries `row`/`col` indices; vertices missing from the array
+/// fall back to transparent black so a sparse mesh still triangulates.
+fn try_mesh_gradient(fill: &Value) -> Option<MeshGradient> {
+    let obj = fill.as_object()?;
+    if obj.get("type").and_then(|t| t.as_str()) != Some("mesh_gradient") {
+        return None;
+    }
+    let rows = obj.get("rows").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let cols = obj.get("cols").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    if rows < 2 || cols < 2 {
+        return None;
+    }
+    let stops_arr = obj.get("stops")?.as_array()?;
+    let mut colors = vec![Color::rgba(0, 0, 0, 0); (rows * cols) as usize];
+    let mut any = false;
+    for s in stops_arr {
+        let so = s.as_object()?;
+        let row = so.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let col = so.get("col").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        if row >= rows || col >= cols {
+            continue;
+        }
+        let hex = so.get("color")?.as_str()?;
+        let color = Color::from_hex(hex)?;
+        colors[(row * cols + col) as usize] = color;
+        any = true;
+    }
+    if !any {
+        return None;
+    }
+    let opacity = obj.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    Some(MeshGradient {
+        rows,
+        cols,
+        colors,
+        opacity,
+    })
+}
+
+/// Parse a `shader` fill entry into a [`ShaderSpec`]. Requires a
+/// non-empty `sksl` source string. Uniforms (optional) are resolved
+/// here so the backend never re-walks JSON: a number → `float`, a
+/// number array → `vec*`, a hex string → a 4-float premultiplied-RGBA
+/// `vec4`. The `fallback` solid colour (used on compile failure) is the
+/// first `color`-typed uniform if any, else mid-gray. The SkSL source
+/// itself stays untrusted — it is NOT validated here; the backend
+/// compiles it behind a non-panicking `Result`.
+fn try_shader(fill: &Value) -> Option<ShaderSpec> {
+    let obj = fill.as_object()?;
+    if obj.get("type").and_then(|t| t.as_str()) != Some("shader") {
+        return None;
+    }
+    let sksl = obj.get("sksl")?.as_str()?.to_string();
+    if sksl.trim().is_empty() {
+        return None;
+    }
+    let mut uniforms: Vec<ShaderUniform> = Vec::new();
+    let mut fallback: Option<Color> = None;
+    if let Some(map) = obj.get("uniforms").and_then(|u| u.as_object()) {
+        for (name, val) in map {
+            match val {
+                Value::Number(n) => {
+                    if let Some(f) = n.as_f64() {
+                        uniforms.push(ShaderUniform {
+                            name: name.clone(),
+                            values: vec![f as f32],
+                        });
+                    }
+                }
+                Value::Array(arr) => {
+                    let values: Vec<f32> = arr
+                        .iter()
+                        .filter_map(|v| v.as_f64())
+                        .map(|f| f as f32)
+                        .collect();
+                    if !values.is_empty() {
+                        uniforms.push(ShaderUniform {
+                            name: name.clone(),
+                            values,
+                        });
+                    }
+                }
+                Value::String(hex) => {
+                    if let Some(c) = Color::from_hex(hex) {
+                        // Expand the colour to a premultiplied-RGBA vec4.
+                        let a = c.a() as f32 / 255.0;
+                        uniforms.push(ShaderUniform {
+                            name: name.clone(),
+                            values: vec![
+                                (c.r() as f32 / 255.0) * a,
+                                (c.g() as f32 / 255.0) * a,
+                                (c.b() as f32 / 255.0) * a,
+                                a,
+                            ],
+                        });
+                        if fallback.is_none() {
+                            fallback = Some(c);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let opacity = obj.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
+    Some(ShaderSpec {
+        sksl,
+        uniforms,
+        opacity,
+        // Mid-gray when no colour uniform exists, so a compile failure
+        // still paints a visible block instead of vanishing.
+        fallback: fallback.unwrap_or(Color::rgb(128, 128, 128)),
     })
 }
 

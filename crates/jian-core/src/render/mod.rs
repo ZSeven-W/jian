@@ -11,8 +11,9 @@ pub mod widget_style;
 
 pub use commands::{affine_to_array, RenderCommand};
 pub use paint::{
-    BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, Paint, PathCommand,
-    RadialGradient, ShadowSpec, StrokeOp, TextAlign, TextRun,
+    BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
+    PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
+    TextRun,
 };
 pub use scene::{collect_draws, collect_draws_with_state};
 

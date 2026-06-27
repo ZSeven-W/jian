@@ -284,6 +284,46 @@ pub trait Painter {
         }
     }
 
+    /// Paint a uniform-grid mesh gradient. `colors` is a row-major
+    /// `rows`×`cols` lattice. The default impl falls back to the
+    /// first-vertex colour as a flat fill — backends that can Gouraud-
+    /// interpolate (the native Skia host) override this. Keeping the
+    /// solid fallback here lets the capture / CanvasKit / frame backends
+    /// compile and render *something* without per-vertex support.
+    fn fill_round_rect_mesh_gradient(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        _rows: u32,
+        _cols: u32,
+        colors: &[Color],
+        opacity: f32,
+    ) {
+        if let Some(c) = colors.first() {
+            self.fill_round_rect(rect, radius, fold_alpha(*c, opacity));
+        }
+    }
+
+    /// Paint a native SkSL shader fill. `sksl` is the RAW (untrusted)
+    /// source (entrypoint `half4 main(float2 fragCoord)`); `uniforms`
+    /// carries `(name, values)` bindings (length 1 = float, 2/3/4 =
+    /// vec*); `fallback` is the visible solid colour to paint when the
+    /// backend can't compile / run the program. The default impl is the
+    /// solid fallback — only the native Skia host overrides this with a
+    /// real cached `RuntimeEffect`. Web / capture / frame backends keep
+    /// this fallback (documented parity gap, same as mesh gradients).
+    fn fill_round_rect_shader(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        _sksl: &str,
+        _uniforms: &[(&str, &[f32])],
+        opacity: f32,
+        fallback: Color,
+    ) {
+        self.fill_round_rect(rect, radius, fold_alpha(fallback, opacity));
+    }
+
     fn save(&mut self);
     fn restore(&mut self);
     fn translate(&mut self, offset: Point2D);

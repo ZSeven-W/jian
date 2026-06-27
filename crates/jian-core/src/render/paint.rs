@@ -164,6 +164,46 @@ pub struct RadialGradient {
     pub opacity: f32,
 }
 
+/// Uniform-grid mesh gradient description (v1).
+///
+/// A `rows`×`cols` lattice of vertex colours, Gouraud-interpolated across
+/// the target rect. `colors` is stored in row-major order (length must be
+/// `rows * cols`); vertex `(r, c)` lives at `colors[r * cols + c]` and maps
+/// to the rect position `(c / (cols - 1), r / (rows - 1))`.
+#[derive(Debug, Clone)]
+pub struct MeshGradient {
+    pub rows: u32,
+    pub cols: u32,
+    pub colors: Vec<Color>,
+    pub opacity: f32,
+}
+
+/// One resolved SkSL uniform binding. The scene walker pre-parses the
+/// canonical `ShaderUniformValue` into a concrete float-vector (a
+/// `color` hex string is expanded into a 4-float premultiplied-RGBA
+/// `vec4` at parse time) so the backend can bind it through
+/// `RuntimeShaderBuilder::set_uniform_float` without re-touching JSON.
+#[derive(Debug, Clone)]
+pub struct ShaderUniform {
+    pub name: String,
+    /// Length picks the SkSL arity: 1 = float, 2/3/4 = vec2/3/4.
+    pub values: Vec<f32>,
+}
+
+/// Native SkSL shader fill description (v1). `sksl` is the RAW,
+/// untrusted source (entrypoint `half4 main(float2 fragCoord)`).
+/// `fallback` is the visible solid colour the backend must paint if the
+/// program fails to compile (first `color` uniform, else mid-gray) so a
+/// bad shader never blanks the node or panics. `opacity` folds into the
+/// paint alpha.
+#[derive(Debug, Clone)]
+pub struct ShaderSpec {
+    pub sksl: String,
+    pub uniforms: Vec<ShaderUniform>,
+    pub opacity: f32,
+    pub fallback: Color,
+}
+
 /// A self-contained drawing operation issued by the scene walker to the backend.
 #[derive(Debug, Clone)]
 pub enum DrawOp {
@@ -203,6 +243,26 @@ pub enum DrawOp {
         rect: Rect,
         radii: BorderRadii,
         gradient: RadialGradient,
+        stroke: Option<StrokeOp>,
+    },
+    /// Rounded rect with a Gouraud-interpolated mesh gradient fill.
+    /// Sibling to `RadialGradientRect`; emitted for nodes whose `fill[]`
+    /// starts with a `mesh_gradient` entry.
+    MeshGradientRect {
+        rect: Rect,
+        radii: BorderRadii,
+        gradient: MeshGradient,
+        stroke: Option<StrokeOp>,
+    },
+    /// Rounded rect filled by a native SkSL shader. Sibling to
+    /// `MeshGradientRect`; emitted for nodes whose `fill[]` starts with a
+    /// `shader` entry. The backend compiles + caches the program (keyed
+    /// on a hash of the source) and degrades to `shader.fallback` solid
+    /// on a compile error.
+    ShaderRect {
+        rect: Rect,
+        radii: BorderRadii,
+        shader: ShaderSpec,
         stroke: Option<StrokeOp>,
     },
     /// A rounded rect with an outer drop shadow drawn underneath. The

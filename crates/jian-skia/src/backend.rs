@@ -16,6 +16,7 @@ use crate::color::to_sk_color;
 use crate::convert::{to_sk_matrix, to_sk_rect};
 use crate::image::ImageCache;
 use crate::path::to_sk_path;
+use crate::shader_cache::ShaderCache;
 use crate::surface::SkiaSurface;
 use jian_core::geometry::{Affine2, Rect, Size};
 use jian_core::render::{BorderRadii, DrawOp, ImageSource, Paint, RenderBackend, ShadowSpec};
@@ -48,6 +49,10 @@ pub struct SkiaBackend {
     /// Decoded `sk_Image` cache keyed by `ImageSource::cache_key`.
     /// Reused across frames so scrolling lists don't repeat decode.
     image_cache: ImageCache,
+    /// Compiled-SkSL `RuntimeEffect` cache keyed by source hash —
+    /// compile-once-per-unique-source so per-frame repaints reuse the
+    /// program instead of recompiling.
+    shader_cache: ShaderCache,
 }
 
 impl SkiaBackend {
@@ -56,7 +61,14 @@ impl SkiaBackend {
             pending_filter: None,
             cmds: Vec::new(),
             image_cache: ImageCache::new(),
+            shader_cache: ShaderCache::new(),
         }
+    }
+
+    /// Number of distinct SkSL programs compiled so far — exposed for
+    /// the compile-cache proof (per-frame repaints must NOT grow this).
+    pub fn shader_compile_count(&self) -> u64 {
+        self.shader_cache.compile_count()
     }
 
     fn record(&mut self, cmd: Cmd) {
@@ -118,7 +130,7 @@ impl RenderBackend for SkiaBackend {
                     canvas.restore();
                 }
                 Cmd::Draw(op) => {
-                    draw_canvas(canvas, &op, &mut self.image_cache);
+                    draw_canvas(canvas, &op, &mut self.image_cache, &mut self.shader_cache);
                 }
             }
         }
@@ -180,7 +192,12 @@ impl SkiaBackend {
     /// directly. Host adapters that already have the surface in hand can
     /// use this to avoid the buffer-and-replay round-trip.
     pub fn draw_on(&mut self, surface: &mut SkiaSurface, op: &DrawOp) {
-        draw_canvas(surface.canvas(), op, &mut self.image_cache);
+        draw_canvas(
+            surface.canvas(),
+            op,
+            &mut self.image_cache,
+            &mut self.shader_cache,
+        );
     }
 
     /// GPU-canvas adapter — same as `draw_on` but accepts a borrowed
@@ -189,11 +206,16 @@ impl SkiaBackend {
     /// OpenPencil's `SharedSkiaContext`) and only need the per-`DrawOp`
     /// canvas dispatch from this crate.
     pub fn draw_on_canvas(&mut self, canvas: &skia_safe::Canvas, op: &DrawOp) {
-        draw_canvas(canvas, op, &mut self.image_cache);
+        draw_canvas(canvas, op, &mut self.image_cache, &mut self.shader_cache);
     }
 }
 
-fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp, image_cache: &mut ImageCache) {
+fn draw_canvas(
+    canvas: &skia_safe::Canvas,
+    op: &DrawOp,
+    image_cache: &mut ImageCache,
+    shader_cache: &mut ShaderCache,
+) {
     match op {
         DrawOp::Rect { rect, paint } => draw_rect(canvas, *rect, paint),
         DrawOp::RoundedRect { rect, radii, paint } => draw_rrect(canvas, *rect, *radii, paint),
@@ -233,6 +255,18 @@ fn draw_canvas(canvas: &skia_safe::Canvas, op: &DrawOp, image_cache: &mut ImageC
             gradient,
             stroke,
         } => draw_radial_gradient_rect(canvas, *rect, *radii, gradient, stroke.as_ref()),
+        DrawOp::MeshGradientRect {
+            rect,
+            radii,
+            gradient,
+            stroke,
+        } => draw_mesh_gradient_rect(canvas, *rect, *radii, gradient, stroke.as_ref()),
+        DrawOp::ShaderRect {
+            rect,
+            radii,
+            shader,
+            stroke,
+        } => draw_shader_rect(canvas, shader_cache, *rect, *radii, shader, stroke.as_ref()),
         DrawOp::ShadowedRect {
             rect,
             radii,
@@ -663,6 +697,193 @@ fn draw_radial_gradient_rect(
     }
 }
 
+fn draw_mesh_gradient_rect(
+    canvas: &skia_safe::Canvas,
+    rect: Rect,
+    radii: BorderRadii,
+    g: &jian_core::render::MeshGradient,
+    stroke: Option<&jian_core::render::StrokeOp>,
+) {
+    use skia_safe::{vertices::VertexMode, BlendMode as SkBlendMode, Vertices};
+
+    let rows = g.rows.max(2);
+    let cols = g.cols.max(2);
+    let vcount = (rows * cols) as usize;
+    if g.colors.len() != vcount {
+        return;
+    }
+
+    // Lattice vertex positions across the rect: vertex (r, c) maps to
+    // (c/(cols-1), r/(rows-1)) of the rect. Colours come straight from
+    // the row-major grid; `texs` is unused (no shader) but must match
+    // the vertex count, so we reuse `positions`.
+    let mut positions: Vec<SkPoint> = Vec::with_capacity(vcount);
+    let mut colors: Vec<Color> = Vec::with_capacity(vcount);
+    let denom_c = (cols - 1) as f32;
+    let denom_r = (rows - 1) as f32;
+    for r in 0..rows {
+        for c in 0..cols {
+            let fx = rect.min_x() + (c as f32 / denom_c) * rect.size.width;
+            let fy = rect.min_y() + (r as f32 / denom_r) * rect.size.height;
+            positions.push(SkPoint::new(fx, fy));
+            let jc = g.colors[(r * cols + c) as usize];
+            colors.push(Color::from_argb(jc.a(), jc.r(), jc.g(), jc.b()));
+        }
+    }
+
+    // Triangulate each grid cell into two triangles (CCW). Index of
+    // vertex (r, c) is `r * cols + c`.
+    let mut indices: Vec<u16> = Vec::with_capacity(((rows - 1) * (cols - 1) * 6) as usize);
+    for r in 0..(rows - 1) {
+        for c in 0..(cols - 1) {
+            let tl = (r * cols + c) as u16;
+            let tr = (r * cols + c + 1) as u16;
+            let bl = ((r + 1) * cols + c) as u16;
+            let br = ((r + 1) * cols + c + 1) as u16;
+            indices.extend_from_slice(&[tl, tr, bl, tr, br, bl]);
+        }
+    }
+
+    let vertices = Vertices::new_copy(
+        VertexMode::Triangles,
+        &positions,
+        &positions,
+        &colors,
+        Some(&indices),
+    );
+
+    // Clip to the node's round-rect so the Gouraud fill respects corner
+    // radius, then draw the per-vertex-coloured triangles. SrcOver blends
+    // the vertex colours straight onto the canvas (Modulate would need a
+    // shader to modulate against).
+    let is_rounded = radii != BorderRadii::zero();
+    let restore_count = canvas.save();
+    if is_rounded {
+        let sk_rect = to_sk_rect(rect);
+        let radii_arr = [
+            SkPoint::new(radii.tl, radii.tl),
+            SkPoint::new(radii.tr, radii.tr),
+            SkPoint::new(radii.br, radii.br),
+            SkPoint::new(radii.bl, radii.bl),
+        ];
+        let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
+        canvas.clip_rrect(rrect, None, Some(true));
+    } else {
+        canvas.clip_rect(to_sk_rect(rect), None, Some(true));
+    }
+
+    // `draw_vertices` with no shader combines each interpolated vertex
+    // colour with the paint's colour via `mode`. A default Paint is opaque
+    // BLACK, so seed it white and use `Modulate` (white × vertex == vertex)
+    // to pass the vertex colours through unchanged; `opacity` rides in the
+    // paint alpha.
+    let mut paint = SkPaint::default();
+    paint.set_anti_alias(true);
+    paint.set_color4f(Color4f::new(1.0, 1.0, 1.0, g.opacity), None);
+    canvas.draw_vertices(&vertices, SkBlendMode::Modulate, &paint);
+    canvas.restore_to_count(restore_count);
+
+    if let Some(stroke) = stroke {
+        let mut p = SkPaint::new(to_sk_color(stroke.color), None);
+        p.set_style(PaintStyle::Stroke);
+        p.set_stroke_width(stroke.width);
+        p.set_anti_alias(true);
+        if is_rounded {
+            let sk_rect = to_sk_rect(rect);
+            let radii_arr = [
+                SkPoint::new(radii.tl, radii.tl),
+                SkPoint::new(radii.tr, radii.tr),
+                SkPoint::new(radii.br, radii.br),
+                SkPoint::new(radii.bl, radii.bl),
+            ];
+            let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
+            canvas.draw_rrect(rrect, &p);
+        } else {
+            canvas.draw_rect(to_sk_rect(rect), &p);
+        }
+    }
+}
+
+/// Fill a (round-)rect with a native SkSL shader. The program is
+/// compiled once and cached on `shader_cache` (keyed by source hash);
+/// per-frame repaints reuse the `RuntimeEffect`. Uniforms are bound
+/// through `RuntimeShaderBuilder`. On ANY compile failure (or a failed
+/// `make_shader`) we degrade to `shader.fallback` solid — never panic,
+/// since the SkSL source is untrusted.
+fn draw_shader_rect(
+    canvas: &skia_safe::Canvas,
+    shader_cache: &mut ShaderCache,
+    rect: Rect,
+    radii: BorderRadii,
+    spec: &jian_core::render::ShaderSpec,
+    stroke: Option<&jian_core::render::StrokeOp>,
+) {
+    let is_rounded = radii != BorderRadii::zero();
+    let radii_arr = [
+        SkPoint::new(radii.tl, radii.tl),
+        SkPoint::new(radii.tr, radii.tr),
+        SkPoint::new(radii.br, radii.br),
+        SkPoint::new(radii.bl, radii.bl),
+    ];
+
+    let shader = build_shader(shader_cache, spec);
+    let mut paint = SkPaint::default();
+    paint.set_anti_alias(true);
+    paint.set_style(PaintStyle::Fill);
+    paint.set_alpha_f(spec.opacity.clamp(0.0, 1.0));
+    match shader {
+        Some(s) => {
+            paint.set_shader(s);
+        }
+        None => {
+            // Compile failed (or no shader produced) — visible solid
+            // fallback so the node still paints.
+            let c = to_sk_color(spec.fallback);
+            paint.set_color4f(c, None);
+        }
+    }
+    if is_rounded {
+        let rrect = RRect::new_rect_radii(to_sk_rect(rect), &radii_arr);
+        canvas.draw_rrect(rrect, &paint);
+    } else {
+        canvas.draw_rect(to_sk_rect(rect), &paint);
+    }
+
+    if let Some(stroke) = stroke {
+        let mut p = SkPaint::new(to_sk_color(stroke.color), None);
+        p.set_style(PaintStyle::Stroke);
+        p.set_stroke_width(stroke.width);
+        p.set_anti_alias(true);
+        if is_rounded {
+            let rrect = RRect::new_rect_radii(to_sk_rect(rect), &radii_arr);
+            canvas.draw_rrect(rrect, &p);
+        } else {
+            canvas.draw_rect(to_sk_rect(rect), &p);
+        }
+    }
+}
+
+/// Compile + bind a shader spec into a `skia_safe::Shader`, or `None` on
+/// any failure. Cached compile lives in `shader_cache`; uniform binding
+/// errors (a name the program doesn't declare, or an arity mismatch) are
+/// tolerated — a best-effort bind still yields a usable shader.
+fn build_shader(
+    shader_cache: &mut ShaderCache,
+    spec: &jian_core::render::ShaderSpec,
+) -> Option<skia_safe::Shader> {
+    use skia_safe::runtime_effect::RuntimeShaderBuilder;
+    // `RuntimeEffect` is an RCHandle — this clone is a refcount bump, not
+    // a recompile.
+    let effect = shader_cache.get_or_compile(&spec.sksl)?;
+    let mut builder = RuntimeShaderBuilder::new(effect);
+    for u in &spec.uniforms {
+        // Ignore bind errors (undeclared name / wrong arity) so one bad
+        // uniform doesn't sink the whole fill.
+        let _ = builder.set_uniform_float(&u.name, &u.values);
+    }
+    builder.make_shader(&skia_safe::Matrix::default())
+}
+
 fn draw_shadowed_rect(
     canvas: &skia_safe::Canvas,
     rect: Rect,
@@ -938,6 +1159,249 @@ mod tests {
         backend.end_frame(&mut surface);
         let png = surface.encode_png().expect("png");
         assert!(png.len() > 100);
+    }
+
+    #[test]
+    fn mesh_gradient_rect_draws_through_trait() {
+        use jian_core::render::MeshGradient;
+        let mut backend = SkiaBackend::new();
+        let mut surface = backend.new_surface(size(64.0, 64.0));
+        backend.begin_frame(&mut surface, 0xffffffff);
+        // 2x2 corner mesh: red / green / blue / yellow.
+        backend.draw(&DrawOp::MeshGradientRect {
+            rect: rect(0.0, 0.0, 64.0, 64.0),
+            radii: BorderRadii::uniform(8.0),
+            gradient: MeshGradient {
+                rows: 2,
+                cols: 2,
+                colors: vec![
+                    Color::rgb(0xff, 0x00, 0x00),
+                    Color::rgb(0x00, 0xff, 0x00),
+                    Color::rgb(0x00, 0x00, 0xff),
+                    Color::rgb(0xff, 0xff, 0x00),
+                ],
+                opacity: 1.0,
+            },
+            stroke: None,
+        });
+        backend.end_frame(&mut surface);
+        let png = surface.encode_png().expect("png");
+        assert!(png.len() > 100);
+    }
+
+    #[test]
+    fn mesh_gradient_is_actually_interpolated_not_flat() {
+        // PROOF: a 2x2 R/G/B/Y mesh must Gouraud-interpolate, so the
+        // CENTRE pixel is a blend of all four corners (≈ mid-tone on every
+        // channel) and is NOT equal to any single corner colour. A flat
+        // first-stop fallback would make the centre exactly one corner.
+        use jian_core::render::MeshGradient;
+        let mut backend = SkiaBackend::new();
+        let w = 64i32;
+        let h = 64i32;
+        let mut surface = backend.new_surface(size(w as f32, h as f32));
+        backend.begin_frame(&mut surface, 0xff000000); // opaque black clear
+        backend.draw(&DrawOp::MeshGradientRect {
+            rect: rect(0.0, 0.0, w as f32, h as f32),
+            radii: BorderRadii::zero(), // no clip rounding so centre is mesh
+            gradient: MeshGradient {
+                rows: 2,
+                cols: 2,
+                // TL=red, TR=green, BL=blue, BR=yellow
+                colors: vec![
+                    Color::rgb(0xff, 0x00, 0x00),
+                    Color::rgb(0x00, 0xff, 0x00),
+                    Color::rgb(0x00, 0x00, 0xff),
+                    Color::rgb(0xff, 0xff, 0x00),
+                ],
+                opacity: 1.0,
+            },
+            stroke: None,
+        });
+        backend.end_frame(&mut surface);
+
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        assert!(surface.read_rgba8(&mut buf), "read_rgba8 failed");
+        let px = |x: i32, y: i32| -> (u8, u8, u8, u8) {
+            let i = ((y * w + x) * 4) as usize;
+            (buf[i], buf[i + 1], buf[i + 2], buf[i + 3])
+        };
+
+        // Corners (1px inset) should still read close to their pure colour.
+        let tl = px(1, 1);
+        let tr = px(w - 2, 1);
+        let bl = px(1, h - 2);
+        let br = px(w - 2, h - 2);
+        assert!(tl.0 > 200 && tl.1 < 60 && tl.2 < 60, "TL not red: {:?}", tl);
+        assert!(
+            tr.0 < 60 && tr.1 > 200 && tr.2 < 60,
+            "TR not green: {:?}",
+            tr
+        );
+        assert!(
+            bl.0 < 60 && bl.1 < 60 && bl.2 > 200,
+            "BL not blue: {:?}",
+            bl
+        );
+        assert!(
+            br.0 > 200 && br.1 > 200 && br.2 < 60,
+            "BR not yellow: {:?}",
+            br
+        );
+
+        // Centre must be an interpolated blend, NOT any single corner solid.
+        // Triangulation is [TL,TR,BL] + [TR,BR,BL]; the shared diagonal runs
+        // TR(green)->BL(blue), and the geometric centre sits on that diagonal,
+        // so the centre is a green<->blue blend (G,B mid; R near 0 because red
+        // only lives at the two off-diagonal corners TL/BR). This is correct
+        // Gouraud behaviour for a triangle mesh — a flat first-stop fallback
+        // would instead paint the centre exactly one corner colour.
+        let c = px(w / 2, h / 2);
+        assert!(
+            c.1 > 60 && c.1 < 200 && c.2 > 60 && c.2 < 200,
+            "centre is not a green/blue diagonal blend (suggests flat fallback): {:?}",
+            c
+        );
+        // Centre differs from every corner -> not a first-stop solid.
+        for (name, corner) in [("TL", tl), ("TR", tr), ("BL", bl), ("BR", br)] {
+            assert!(
+                (c.0 as i32 - corner.0 as i32).abs()
+                    + (c.1 as i32 - corner.1 as i32).abs()
+                    + (c.2 as i32 - corner.2 as i32).abs()
+                    > 60,
+                "centre {:?} too close to corner {} {:?} (flat fill?)",
+                c,
+                name,
+                corner
+            );
+        }
+
+        // Edge midpoints must be two-colour blends along that edge.
+        let top_mid = px(w / 2, 1); // red↔green
+        assert!(
+            top_mid.0 > 60 && top_mid.1 > 60 && top_mid.2 < 80,
+            "top edge midpoint not a red/green blend: {:?}",
+            top_mid
+        );
+        let left_mid = px(1, h / 2); // red↔blue
+        assert!(
+            left_mid.0 > 60 && left_mid.2 > 60 && left_mid.1 < 80,
+            "left edge midpoint not a red/blue blend: {:?}",
+            left_mid
+        );
+    }
+
+    #[test]
+    fn shader_rect_valid_sksl_paints_red() {
+        // A trivial valid SkSL program returning opaque red must paint
+        // red across the rect (NOT the fallback colour).
+        use jian_core::render::ShaderSpec;
+        let mut backend = SkiaBackend::new();
+        let w = 32i32;
+        let h = 32i32;
+        let mut surface = backend.new_surface(size(w as f32, h as f32));
+        backend.begin_frame(&mut surface, 0xff000000);
+        backend.draw(&DrawOp::ShaderRect {
+            rect: rect(0.0, 0.0, w as f32, h as f32),
+            radii: BorderRadii::zero(),
+            shader: ShaderSpec {
+                sksl: "half4 main(float2 p){ return half4(1.0, 0.0, 0.0, 1.0); }".into(),
+                uniforms: vec![],
+                opacity: 1.0,
+                // Fallback is green — proves the red came from the shader,
+                // not the fallback path.
+                fallback: Color::rgb(0x00, 0xff, 0x00),
+            },
+            stroke: None,
+        });
+        backend.end_frame(&mut surface);
+
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        assert!(surface.read_rgba8(&mut buf), "read_rgba8 failed");
+        let i = ((h / 2 * w + w / 2) * 4) as usize;
+        let (r, g, b) = (buf[i], buf[i + 1], buf[i + 2]);
+        assert!(
+            r > 200 && g < 60 && b < 60,
+            "centre should be shader red, got ({r},{g},{b})"
+        );
+        // A valid program must have compiled exactly once.
+        assert_eq!(backend.shader_compile_count(), 1);
+    }
+
+    #[test]
+    fn shader_rect_invalid_sksl_falls_back_without_panic() {
+        // Garbage SkSL must NOT panic; it degrades to the fallback solid.
+        use jian_core::render::ShaderSpec;
+        let mut backend = SkiaBackend::new();
+        let w = 32i32;
+        let h = 32i32;
+        let mut surface = backend.new_surface(size(w as f32, h as f32));
+        backend.begin_frame(&mut surface, 0xff000000);
+        backend.draw(&DrawOp::ShaderRect {
+            rect: rect(0.0, 0.0, w as f32, h as f32),
+            radii: BorderRadii::zero(),
+            shader: ShaderSpec {
+                sksl: "this is not valid sksl at all {{{".into(),
+                uniforms: vec![],
+                opacity: 1.0,
+                fallback: Color::rgb(0x00, 0x00, 0xff), // blue fallback
+            },
+            stroke: None,
+        });
+        backend.end_frame(&mut surface);
+
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        assert!(surface.read_rgba8(&mut buf), "read_rgba8 failed");
+        let i = ((h / 2 * w + w / 2) * 4) as usize;
+        let (r, g, b) = (buf[i], buf[i + 1], buf[i + 2]);
+        assert!(
+            b > 200 && r < 60 && g < 60,
+            "centre should be blue fallback, got ({r},{g},{b})"
+        );
+    }
+
+    #[test]
+    fn shader_compile_is_cached_across_frames() {
+        // PERF PROOF: drawing the SAME source many times compiles ONCE.
+        use jian_core::render::ShaderSpec;
+        let mut backend = SkiaBackend::new();
+        let mut surface = backend.new_surface(size(16.0, 16.0));
+        let spec = ShaderSpec {
+            sksl: "half4 main(float2 p){ return half4(0.2, 0.4, 0.6, 1.0); }".into(),
+            uniforms: vec![],
+            opacity: 1.0,
+            fallback: Color::rgb(0x80, 0x80, 0x80),
+        };
+        for _ in 0..10 {
+            backend.begin_frame(&mut surface, 0xff000000);
+            backend.draw(&DrawOp::ShaderRect {
+                rect: rect(0.0, 0.0, 16.0, 16.0),
+                radii: BorderRadii::zero(),
+                shader: spec.clone(),
+                stroke: None,
+            });
+            backend.end_frame(&mut surface);
+        }
+        assert_eq!(
+            backend.shader_compile_count(),
+            1,
+            "same source must compile exactly once across 10 frames"
+        );
+
+        // A second, distinct source bumps the count to 2.
+        let spec2 = ShaderSpec {
+            sksl: "half4 main(float2 p){ return half4(0.6, 0.4, 0.2, 1.0); }".into(),
+            ..spec.clone()
+        };
+        backend.begin_frame(&mut surface, 0xff000000);
+        backend.draw(&DrawOp::ShaderRect {
+            rect: rect(0.0, 0.0, 16.0, 16.0),
+            radii: BorderRadii::zero(),
+            shader: spec2,
+            stroke: None,
+        });
+        backend.end_frame(&mut surface);
+        assert_eq!(backend.shader_compile_count(), 2);
     }
 
     #[test]

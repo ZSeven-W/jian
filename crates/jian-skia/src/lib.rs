@@ -39,10 +39,12 @@ pub(crate) mod image;
 #[cfg(feature = "textlayout")]
 pub mod measure;
 pub mod path;
+pub mod shader_cache;
 pub mod startup;
 pub mod surface;
 
 pub use backend::SkiaBackend;
 #[cfg(feature = "textlayout")]
 pub use measure::SkiaMeasure;
+pub use shader_cache::ShaderCache;
 pub use surface::SkiaSurface;

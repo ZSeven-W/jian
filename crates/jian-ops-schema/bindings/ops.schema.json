@@ -6744,6 +6744,116 @@
           }
         },
         {
+          "description": "Uniform-grid mesh gradient (v1). A `rows`×`cols` lattice of `MeshVertexStop`s is Gouraud-interpolated across the node's round-rect. Mirrors the sibling gradient bodies for the shared `explain`/`opacity`/`blend_mode` tail.",
+          "type": "object",
+          "required": [
+            "cols",
+            "rows",
+            "stops",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "mesh_gradient"
+              ]
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "cols": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "stops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/MeshVertexStop"
+              }
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "opacity": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "blendMode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "description": "Native SkSL shader fill (v1). The `sksl` source is stored RAW and is treated as untrusted: the renderer entrypoint is the SkSL signature `half4 main(float2 fragCoord)`. On compile failure the backend degrades to a visible solid fill (the first `color` uniform, else mid-gray) and never panics. Mirrors the sibling gradient bodies for the shared `opacity`/`blend_mode` tail.\n\nPencil-flavoured WebGL-GLSL import is an explicit follow-up, NOT v1; v1 expects SkSL (Skia's GLSL dialect) verbatim.",
+          "type": "object",
+          "required": [
+            "sksl",
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "shader"
+              ]
+            },
+            "sksl": {
+              "description": "RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.",
+              "type": "string"
+            },
+            "uniforms": {
+              "description": "Optional named-uniform map (`float` / `vec*` / `color`). A shader may declare none; absent or empty both mean \"no uniforms\".",
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "$ref": "#/definitions/ShaderUniformValue"
+              }
+            },
+            "explain": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "opacity": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
+            "blendMode": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "type",
@@ -6886,6 +6996,52 @@
           "type": "string"
         }
       }
+    },
+    "MeshVertexStop": {
+      "description": "A single vertex of a `MeshGradient` grid. `row`/`col` are 0-based indices into a `rows`×`cols` lattice; `color` is the Gouraud-shaded colour anchored at that vertex.",
+      "type": "object",
+      "required": [
+        "col",
+        "color",
+        "row"
+      ],
+      "properties": {
+        "row": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "col": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "color": {
+          "type": "string"
+        }
+      }
+    },
+    "ShaderUniformValue": {
+      "description": "One named uniform value bound into an SkSL shader fill via `RuntimeShaderBuilder` at paint time. `untagged` so the wire form is the bare JSON scalar/array the author wrote — a number is a `float`, a number array is a `vec2`/`vec3`/`vec4`, and a hex string is a `color` mapped to a `vec4` (premultiplied RGBA). The named-uniforms map on `ShaderFillBody` is optional; a shader may take none.",
+      "anyOf": [
+        {
+          "description": "`float` uniform.",
+          "type": "number",
+          "format": "float"
+        },
+        {
+          "description": "`vec2` / `vec3` / `vec4` uniform — the length picks the SkSL type (RuntimeShaderBuilder rejects a mismatched arity).",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "float"
+          }
+        },
+        {
+          "description": "`color` uniform — a `#rgb` / `#rrggbb` / `#rrggbbaa` hex string the backend expands into a `vec4` before binding.",
+          "type": "string"
+        }
+      ]
     },
     "ImageFillMode": {
       "type": "string",
