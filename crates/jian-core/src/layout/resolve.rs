@@ -256,6 +256,9 @@ fn node_size_refs(
 }
 
 /// True when this node lays its children out in a Row (horizontal main axis).
+/// A `null`/absent layout defaults to Row — matching `resolve_flex_direction`,
+/// whose `None => Row` default would otherwise disagree with a `null`-layout
+/// container being classed as vertical (the OycZJ sidebar+content root).
 pub fn node_is_horizontal(n: &jian_ops_schema::node::PenNode) -> bool {
     use jian_ops_schema::node::PenNode;
     let layout = match n {
@@ -264,7 +267,7 @@ pub fn node_is_horizontal(n: &jian_ops_schema::node::PenNode) -> bool {
         PenNode::Rectangle(r) => r.container.layout.as_ref(),
         _ => None,
     };
-    matches!(layout, Some(LayoutMode::Horizontal))
+    !matches!(layout, Some(LayoutMode::Vertical))
 }
 
 /// True when the child's MAIN-AXIS size — width when the parent is a Row,
@@ -281,6 +284,32 @@ pub fn main_axis_is_fixed_number(
     let (w, h) = node_size_refs(child);
     let axis = if parent_horizontal { w } else { h };
     matches!(axis, Some(SizingBehavior::Number(_)))
+}
+
+/// Surgical cross-axis fill: in a horizontal (Row) parent, a child whose
+/// HEIGHT is `fill_container` should stretch to the parent's cross axis. taffy
+/// resolves `fill_container` to `percent(1.0)`, which fails inside a parent
+/// whose own height isn't definite (the OycZJ sidebar footer never sank to the
+/// bottom). Mapping it to `align_self: Stretch` + `height: auto` makes taffy
+/// stretch the child across the row's resolved height instead. Width is left
+/// untouched on purpose — stretching the main axis would change text wrapping
+/// and reintroduced a +350px height regression in the corpus gate.
+pub fn apply_fill_container_axes(
+    style: &mut Style,
+    child: &jian_ops_schema::node::PenNode,
+    parent_horizontal: bool,
+) {
+    if !parent_horizontal {
+        return;
+    }
+    let (_, h) = node_size_refs(child);
+    if matches!(
+        h,
+        Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
+    ) {
+        style.align_self = Some(AlignItems::Stretch);
+        style.size.height = auto();
+    }
 }
 
 #[cfg(test)]

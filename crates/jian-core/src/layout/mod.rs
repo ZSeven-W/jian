@@ -151,6 +151,10 @@ impl LayoutEngine {
                 if resolve::main_axis_is_fixed_number(&data.schema, parent_horizontal) {
                     style.flex_shrink = 0.0;
                 }
+                // A fill-height child in a row stretches to the row's height
+                // (so a space_between sidebar's footer reaches the bottom)
+                // instead of collapsing on an indefinite-height parent.
+                resolve::apply_fill_container_axes(&mut style, &data.schema, parent_horizontal);
             }
             let ctx = text_measure_for(&data.schema);
             let id = self
@@ -486,12 +490,14 @@ fn measure_text_for_taffy(
                 _ => None,
             },
         },
-        // Auto wraps to the container's available width.
-        TextGrowth::Auto => match (known.width, avail.width) {
-            (Some(w), _) => Some(w),
-            (None, AvailableSpace::Definite(w)) => Some(w),
-            _ => None,
-        },
+        // Auto is content-sized and NEVER wraps (Pencil semantics: a
+        // `textGrowth: auto` node reports its natural single-line extent;
+        // designs that want wrapping author `fixed-width`). Wrapping it to
+        // the container split single-line labels / subtitles onto two lines,
+        // inflating the measured box while the painter (which honours
+        // `text_wrap = false` for auto) still drew one line — so every
+        // section holding auto text grew taller than Pencil's.
+        TextGrowth::Auto => None,
     };
 
     let req = MeasureRequest {
