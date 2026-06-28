@@ -59,6 +59,13 @@ impl SkiaMeasure {
     pub fn with_font_manager(font_mgr: FontMgr) -> Self {
         let mut fc = FontCollection::new();
         fc.set_default_font_manager(font_mgr, None);
+        // Measure against the host's bundled design fonts too, so a
+        // family the system lacks shapes with the right metrics here —
+        // otherwise `fit_content` heights are computed from fallback
+        // glyphs and every text block lands at the wrong height.
+        if let Some(provider) = crate::bundled_fonts::bundled_provider() {
+            fc.set_asset_font_manager(Some(provider.into()));
+        }
         Self {
             font_collection: Rc::new(fc),
         }
@@ -106,6 +113,12 @@ impl MeasureBackend for SkiaMeasure {
             if req.line_height > 0.0 {
                 ts.set_height(req.line_height);
                 ts.set_height_override(true);
+                // CSS / Pencil split the line-height leading half above +
+                // half below the glyphs; skia's default proportional
+                // distribution shifts each baseline, so measured text
+                // height (and the baseline the renderer paints to) drifts
+                // from Pencil. Keep measure + paint on the same rule.
+                ts.set_half_leading(true);
             }
             builder.push_style(&ts);
             builder.add_text(run.text);

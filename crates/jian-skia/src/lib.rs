@@ -32,6 +32,8 @@
 //! ```
 
 pub mod backend;
+#[cfg(feature = "textlayout")]
+pub mod bundled_fonts;
 pub mod color;
 pub mod convert;
 pub mod icons;
@@ -44,6 +46,8 @@ pub mod startup;
 pub mod surface;
 
 pub use backend::SkiaBackend;
+#[cfg(feature = "textlayout")]
+pub use bundled_fonts::register_bundled_fonts;
 #[cfg(feature = "textlayout")]
 pub use measure::SkiaMeasure;
 pub use shader_cache::ShaderCache;

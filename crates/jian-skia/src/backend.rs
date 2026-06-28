@@ -402,7 +402,11 @@ fn draw_text_paragraph(canvas: &skia_safe::Canvas, run: &jian_core::render::Text
     };
     use skia_safe::FontMgr;
 
-    let font_provider = TypefaceFontProvider::new();
+    // Asset manager carries the host's bundled design fonts (if any),
+    // so a family the system lacks still resolves here instead of
+    // silently falling back to the platform default.
+    let font_provider =
+        crate::bundled_fonts::bundled_provider().unwrap_or_else(TypefaceFontProvider::new);
     let mut collection = FontCollection::new();
     collection.set_default_font_manager(FontMgr::new(), None);
     collection.set_asset_font_manager(Some(font_provider.clone().into()));
@@ -413,12 +417,18 @@ fn draw_text_paragraph(canvas: &skia_safe::Canvas, run: &jian_core::render::Text
         TextAlign::Center => SkTextAlign::Center,
         TextAlign::End => SkTextAlign::End,
     });
-    if run.line_height > 0.0 {
-        style.set_height(run.line_height);
-    }
-
     let mut text_style = TextStyle::new();
     text_style.set_font_size(run.font_size);
+    if run.line_height > 0.0 {
+        // Apply line-height on the TEXT style (matching `SkiaMeasure`), not
+        // the paragraph style, so paint and measure use the identical box;
+        // `half_leading` splits the extra leading half above + half below
+        // the glyphs the way Pencil/CSS do (skia's proportional default
+        // drifts each baseline and ghosts multi-line text vs Pencil).
+        text_style.set_height(run.line_height);
+        text_style.set_height_override(true);
+        text_style.set_half_leading(true);
+    }
     let c4 = to_sk_color(run.color);
     text_style.set_color(skia_safe::Color::from_argb(
         (c4.a * 255.0) as u8,
