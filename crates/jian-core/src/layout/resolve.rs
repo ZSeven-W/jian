@@ -286,28 +286,38 @@ pub fn main_axis_is_fixed_number(
     matches!(axis, Some(SizingBehavior::Number(_)))
 }
 
-/// Surgical cross-axis fill: in a horizontal (Row) parent, a child whose
-/// HEIGHT is `fill_container` should stretch to the parent's cross axis. taffy
-/// resolves `fill_container` to `percent(1.0)`, which fails inside a parent
-/// whose own height isn't definite (the OycZJ sidebar footer never sank to the
-/// bottom). Mapping it to `align_self: Stretch` + `height: auto` makes taffy
-/// stretch the child across the row's resolved height instead. Width is left
-/// untouched on purpose — stretching the main axis would change text wrapping
-/// and reintroduced a +350px height regression in the corpus gate.
+/// Fix `fill_container` height by the parent's axis. taffy resolves
+/// `fill_container` to `percent(1.0)`, which fails inside a parent whose own
+/// height isn't definite (the OycZJ sidebar footer never sank to the bottom).
+///
+/// - **Horizontal parent** (height is the CROSS axis): map to
+///   `align_self: Stretch` + `height: auto` so the child stretches across the
+///   row's resolved height. Width (the main axis) is left untouched on purpose —
+///   stretching it changes text wrapping and reintroduced a +350px height
+///   regression in the corpus gate.
+/// - **Vertical parent** (height is the MAIN axis): map to `flex_grow: 1` +
+///   `height: auto` so an empty `fill_container` spacer GROWS into the column's
+///   remaining space and pushes a sidebar footer to the bottom (without it,
+///   `percent(1.0)` + `flex_shrink` collapses the spacer to zero). Height-only:
+///   no text-wrap / width impact, so it is safe from the main-axis regression
+///   above (which was width-driven).
 pub fn apply_fill_container_axes(
     style: &mut Style,
     child: &jian_ops_schema::node::PenNode,
     parent_horizontal: bool,
 ) {
-    if !parent_horizontal {
-        return;
-    }
     let (_, h) = node_size_refs(child);
-    if matches!(
+    if !matches!(
         h,
         Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
     ) {
+        return;
+    }
+    if parent_horizontal {
         style.align_self = Some(AlignItems::Stretch);
+        style.size.height = auto();
+    } else {
+        style.flex_grow = 1.0;
         style.size.height = auto();
     }
 }
