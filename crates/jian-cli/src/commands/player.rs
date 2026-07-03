@@ -449,7 +449,11 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     }
     if let Some((router, table)) = screen_nav {
         let mut current = table.entry_path().to_owned();
-        let size = (w, h); // the resolved window size from above
+        // Startup fallback only — the hook prefers the LIVE viewport
+        // size (kept current by the run loop's `Resized` arm) so a
+        // resize-then-navigate relayouts to the actual window, not the
+        // launch geometry.
+        let window_size = (w, h);
         host = host.with_frame_hook(Box::new(move |rt: &mut jian_core::Runtime| {
             match jian_core::screens::reconcile_screens(rt, &router, &table, &mut current) {
                 Ok(outcome) => {
@@ -460,7 +464,13 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
                         );
                     }
                     if outcome.switched.is_some() {
-                        if let Err(e) = rt.build_layout(size) {
+                        let (lw, lh) = (rt.viewport.size.width, rt.viewport.size.height);
+                        let layout_size = if lw > 0.0 && lh > 0.0 {
+                            (lw, lh)
+                        } else {
+                            window_size // pre-first-resize safety
+                        };
+                        if let Err(e) = rt.build_layout(layout_size) {
                             eprintln!("jian player: relayout after screen switch failed: {e}");
                         }
                         rt.rebuild_spatial();
