@@ -147,6 +147,14 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
         PenNode::Frame(f) => container_to_style(&f.container),
         PenNode::Group(g) => container_to_style(&g.container),
         PenNode::Rectangle(r) => container_to_style(&r.container),
+        PenNode::Line(l) => Style {
+            size: Size {
+                width: length(l.x2.unwrap_or(0.0).abs() as f32),
+                height: length(l.y2.unwrap_or(0.0).abs() as f32),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        },
         _ => {
             let (w, h) = leaf_size(n);
             // A fixed (Number) leaf must not be flex-shrunk below its size:
@@ -237,6 +245,18 @@ fn leaf_size(
         PenNode::TextInput(t) => (t.width.as_ref(), t.height.as_ref()),
         PenNode::IconFont(i) => (i.width.as_ref(), i.height.as_ref()),
         PenNode::Image(i) => (i.width.as_ref(), i.height.as_ref()),
+        // Ellipse was missing — its width/height never reached the flex
+        // solver, so a 36×36 avatar ring measured 0×0 and `justifyContent:
+        // center` parked its ORIGIN at the parent's center (+half, +half);
+        // paint then drew the declared 36×36 shifted by its own radius
+        // (measured: a 270° arc ring rendered half-off its avatar).
+        PenNode::Ellipse(e) => (e.width.as_ref(), e.height.as_ref()),
+        PenNode::Polygon(p) => (p.width.as_ref(), p.height.as_ref()),
+        // Path has the same flex-solver requirement as Ellipse:
+        // chart paths authored as fill_container inside a layout:none card
+        // resolved to w=0, so the painter's path-fit fallback translated
+        // without scaling and the chart line never stretched with its card.
+        PenNode::Path(p) => (p.width.as_ref(), p.height.as_ref()),
         PenNode::TextArea(t) => (t.width.as_ref(), t.height.as_ref()),
         PenNode::Select(s) => (s.width.as_ref(), s.height.as_ref()),
         PenNode::Switch(s) => (s.width.as_ref(), s.height.as_ref()),
