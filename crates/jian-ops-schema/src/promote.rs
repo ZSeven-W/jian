@@ -14,8 +14,8 @@
 use crate::document::PenDocument;
 use crate::node::text::TextContent;
 use crate::node::{
-    CheckboxNode, FrameNode, PenNode, SelectNode, SliderNode, SwitchNode, TextAreaNode,
-    TextInputNode,
+    CheckboxNode, FrameNode, NumberInputNode, NumberOrExpression, PenNode, ProgressNode,
+    RadioGroupNode, SelectNode, SelectOption, SliderNode, SwitchNode, TextAreaNode, TextInputNode,
 };
 use crate::semantics::SemanticRole;
 use crate::style::PenFill;
@@ -28,6 +28,9 @@ pub enum WidgetKind {
     Switch,
     Checkbox,
     Slider,
+    RadioGroup,
+    NumberInput,
+    Progress,
 }
 
 impl WidgetKind {
@@ -39,23 +42,44 @@ impl WidgetKind {
             WidgetKind::Switch => "switch",
             WidgetKind::Checkbox => "checkbox",
             WidgetKind::Slider => "slider",
+            WidgetKind::RadioGroup => "radio_group",
+            WidgetKind::NumberInput => "number_input",
+            WidgetKind::Progress => "progress",
         }
     }
 }
 
-/// Explicit `base.role` strings honoured for promotion. Aliases come
-/// from the AI role vocabulary (role-definitions.md) — extend ONLY
-/// when that vocabulary grows, never with name heuristics.
+/// Explicit `base.role` → widget-kind table. Single source of truth:
+/// `role_to_kind` and `promotable_roles` both derive from it. Aliases
+/// come from the AI role vocabulary (role-definitions.md) — extend
+/// ONLY when that vocabulary grows, never with name heuristics.
+const ROLE_TABLE: &[(&str, WidgetKind)] = &[
+    ("input", WidgetKind::TextInput),
+    ("form-input", WidgetKind::TextInput),
+    ("textarea", WidgetKind::TextArea),
+    ("text-area", WidgetKind::TextArea),
+    ("select", WidgetKind::Select),
+    ("dropdown", WidgetKind::Select),
+    ("switch", WidgetKind::Switch),
+    ("toggle", WidgetKind::Switch),
+    ("checkbox", WidgetKind::Checkbox),
+    ("slider", WidgetKind::Slider),
+    ("radio-group", WidgetKind::RadioGroup),
+    ("radio", WidgetKind::RadioGroup),
+    ("number-input", WidgetKind::NumberInput),
+    ("progress", WidgetKind::Progress),
+    ("progress-bar", WidgetKind::Progress),
+];
+
 fn role_to_kind(role: &str) -> Option<WidgetKind> {
-    Some(match role {
-        "input" | "form-input" => WidgetKind::TextInput,
-        "textarea" | "text-area" => WidgetKind::TextArea,
-        "select" | "dropdown" => WidgetKind::Select,
-        "switch" | "toggle" => WidgetKind::Switch,
-        "checkbox" => WidgetKind::Checkbox,
-        "slider" => WidgetKind::Slider,
-        _ => return None,
-    })
+    ROLE_TABLE.iter().find(|(r, _)| *r == role).map(|(_, k)| *k)
+}
+
+/// Every `base.role` string the promote table honours — derived from
+/// [`ROLE_TABLE`], so downstream skill/prompt parity tests can never
+/// drift from the actual lookup.
+pub fn promotable_roles() -> impl Iterator<Item = &'static str> {
+    ROLE_TABLE.iter().map(|(role, _)| *role)
 }
 
 /// Explicit-marker check: `base.role` first, then `semantics.role`.
@@ -142,6 +166,27 @@ fn split_text(frame: &FrameNode) -> (Option<String>, Option<String>) {
         }
     }
     (placeholder, value)
+}
+
+/// All visible (non-muted) text-child contents, in authoring order —
+/// radio-group promotion turns each into one option.
+fn collect_text_labels(frame: &FrameNode) -> Vec<String> {
+    let mut labels = Vec::new();
+    for child in frame.children.iter().flatten() {
+        if let PenNode::Text(t) = child {
+            let muted = first_solid_hex(&t.fill)
+                .map(|h| is_muted_hex(&h))
+                .unwrap_or(false);
+            if muted {
+                continue;
+            }
+            let content = text_content_string(&t.content);
+            if !content.trim().is_empty() {
+                labels.push(content);
+            }
+        }
+    }
+    labels
 }
 
 /// Pull leading + trailing lucide glyph names from a frame's `icon_font`
@@ -284,6 +329,83 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             max: None,
             step: None,
             value: None,
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::RadioGroup => PenNode::RadioGroup(RadioGroupNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            value: None,
+            options: {
+                let labels = collect_text_labels(frame);
+                (!labels.is_empty()).then(|| {
+                    labels
+                        .into_iter()
+                        .map(|l| SelectOption {
+                            value: l.clone(),
+                            label: l,
+                        })
+                        .collect()
+                })
+            },
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::NumberInput => PenNode::NumberInput(NumberInputNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            placeholder,
+            value: value
+                .as_deref()
+                .and_then(|v| v.trim().parse::<f64>().ok())
+                .map(NumberOrExpression::Number),
+            leading_icon,
+            trailing_icon,
+            min: None,
+            max: None,
+            step: None,
+            fill: c.fill.clone(),
+            stroke: c.stroke.clone(),
+            effects: c.effects.clone(),
+            corner_radius: c.corner_radius.clone(),
+            states: None,
+            state: frame.state.clone(),
+            bindings: frame.bindings.clone(),
+            events: frame.events.clone(),
+            lifecycle: frame.lifecycle.clone(),
+            semantics: frame.semantics.clone(),
+            gestures: frame.gestures.clone(),
+            route: frame.route.clone(),
+        }),
+        WidgetKind::Progress => PenNode::Progress(ProgressNode {
+            base,
+            width: c.width.clone(),
+            height: c.height.clone(),
+            value: None,
+            max: None,
+            indeterminate: None,
             fill: c.fill.clone(),
             stroke: c.stroke.clone(),
             effects: c.effects.clone(),
@@ -566,5 +688,74 @@ mod tests {
             ti.fill.is_some(),
             "fill must be carried over from the frame"
         );
+    }
+
+    #[test]
+    fn promotes_radio_group_role_with_text_options() {
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"rg","role":"radio-group","width":200,"height":80,"children":[
+            {"type":"text","id":"o1","content":"Monthly"},
+            {"type":"text","id":"o2","content":"Yearly"}]}]}"##);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].to, "radio_group");
+        let PenNode::RadioGroup(rg) = &d.children[0] else {
+            panic!("expected RadioGroup, got {:?}", d.children[0]);
+        };
+        assert!(rg.base.role.is_none(), "role marker must be cleared");
+        let opts = rg.options.as_ref().expect("options from text children");
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0].label, "Monthly");
+        assert_eq!(opts[1].value, "Yearly");
+    }
+
+    #[test]
+    fn promotes_number_input_role_with_muted_placeholder() {
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"amt","role":"number-input","width":160,"height":40,"children":[
+            {"type":"text","id":"ph","content":"0.00",
+             "fill":[{"type":"solid","color":"#9A9A9A"}]}]}]}"##);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].to, "number_input");
+        let PenNode::NumberInput(n) = &d.children[0] else {
+            panic!("expected NumberInput, got {:?}", d.children[0]);
+        };
+        assert_eq!(n.placeholder.as_deref(), Some("0.00"));
+        assert!(n.value.is_none(), "muted text is placeholder, not value");
+    }
+
+    #[test]
+    fn promotes_progress_role() {
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"bar","role":"progress","width":300,"height":8}]}"##);
+        let notes = promote_document(&mut d);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].to, "progress");
+        assert!(
+            matches!(&d.children[0], PenNode::Progress(_)),
+            "got {:?}",
+            d.children[0]
+        );
+    }
+
+    #[test]
+    fn tabs_role_is_not_promoted() {
+        // Deliberate exclusion: legacy tabs frames stay frames.
+        let mut d = doc(r##"{"version":"1.1","formatVersion":"1.1","children":[
+          {"type":"frame","id":"t","role":"tabs","width":300,"height":200}]}"##);
+        let notes = promote_document(&mut d);
+        assert!(notes.is_empty());
+        assert!(matches!(&d.children[0], PenNode::Frame(_)));
+    }
+
+    #[test]
+    fn role_table_has_no_duplicate_keys() {
+        // `role_to_kind` is first-match over ROLE_TABLE — a duplicate
+        // key would silently shadow a mapping.
+        let mut seen = std::collections::BTreeSet::new();
+        for role in promotable_roles() {
+            assert!(seen.insert(role), "duplicate role key {role}");
+        }
     }
 }
