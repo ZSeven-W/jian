@@ -140,5 +140,13 @@ fn warning_tuple(w: &LoadWarning) -> (&'static str, serde_json::Value) {
             "invalid_expression",
             serde_json::json!({ "path": path, "expr": expr, "reason": reason }),
         ),
+        LoadWarning::LegacyRolePromoted {
+            path,
+            from_role,
+            to,
+        } => (
+            "legacy_role_promoted",
+            serde_json::json!({ "path": path, "from_role": from_role, "to": to }),
+        ),
     }
 }

@@ -167,6 +167,21 @@ fn describe(source: &str, w: &LoadWarning) -> (Severity, String, Option<Span>) {
                 span,
             )
         }
+        LoadWarning::LegacyRolePromoted {
+            path,
+            from_role,
+            to,
+        } => {
+            let span = locate_quoted_key(source, from_role);
+            (
+                Severity::Warning,
+                format!(
+                    "legacy role `{}` at `{}` promoted to `{}` widget",
+                    from_role, path, to
+                ),
+                span,
+            )
+        }
     }
 }
 
