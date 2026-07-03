@@ -24,6 +24,8 @@ use skia_safe::{
 };
 use std::rc::Rc;
 
+use crate::font_resolve::FontResolver;
+
 /// Wrap budget passed to `paragraph.layout()` when the caller wants
 /// the natural single-line extent. Skia requires a finite width
 /// (NaN / infinity panic), so we use a value far larger than any
@@ -38,6 +40,12 @@ const NATURAL_LAYOUT_BUDGET: f32 = 1.0e6;
 /// run uses the typeface's `Normal` width.
 const FONT_WIDTH: Width = Width::NORMAL;
 
+/// Canvas text paint advances literal-newline lines by `font_size * 1.2`
+/// when no `lineHeight` is authored. Skia Paragraph's font-metrics default
+/// is too tight for that native paint path, so measurement must use the
+/// painter's line advance for explicit multiline content.
+const DEFAULT_PAINT_LINE_HEIGHT: f32 = 1.2;
+
 /// Measure backend that defers to skia's paragraph shaper.
 ///
 /// Construct once at host startup, share the same `Rc` across the
@@ -46,6 +54,7 @@ const FONT_WIDTH: Width = Width::NORMAL;
 /// can build via [`SkiaMeasure::with_font_manager`].
 pub struct SkiaMeasure {
     font_collection: Rc<FontCollection>,
+    font_resolver: FontResolver,
 }
 
 impl SkiaMeasure {
@@ -57,8 +66,9 @@ impl SkiaMeasure {
     /// Use a host-supplied `FontMgr` — for example one that wraps a
     /// `TypefaceFontProvider` populated with bundled `.ttf` blobs.
     pub fn with_font_manager(font_mgr: FontMgr) -> Self {
+        let font_resolver = FontResolver::new(font_mgr);
         let mut fc = FontCollection::new();
-        fc.set_default_font_manager(font_mgr, None);
+        fc.set_default_font_manager(font_resolver.ordered_font_manager(), None);
         // Measure against the host's bundled design fonts too, so a
         // family the system lacks shapes with the right metrics here —
         // otherwise `fit_content` heights are computed from fallback
@@ -68,8 +78,64 @@ impl SkiaMeasure {
         }
         Self {
             font_collection: Rc::new(fc),
+            font_resolver,
         }
     }
+
+    fn resolved_natural_width(&self, req: &MeasureRequest<'_>) -> f32 {
+        let mut max_line_width = 0.0_f32;
+        let mut line_width = 0.0_f32;
+        let mut line_chars = 0usize;
+        let mut line_spacing = 0.0_f32;
+        for run in req.runs {
+            let italic = matches!(run.font_style, FontStyleKind::Italic);
+            let mut parts = run.text.split('\n').peekable();
+            while let Some(part) = parts.next() {
+                line_width += self.font_resolver.measure_text(
+                    part,
+                    run.font_size,
+                    run.font_family,
+                    run.font_weight,
+                    italic,
+                );
+                line_chars += part.chars().count();
+                line_spacing = line_spacing.max(run.letter_spacing.max(0.0));
+                if parts.peek().is_some() {
+                    max_line_width = max_line_width
+                        .max(line_width + letter_spacing_width(line_chars, line_spacing));
+                    line_width = 0.0;
+                    line_chars = 0;
+                    line_spacing = 0.0;
+                }
+            }
+        }
+        max_line_width.max(line_width + letter_spacing_width(line_chars, line_spacing))
+    }
+}
+
+fn letter_spacing_width(chars: usize, spacing: f32) -> f32 {
+    if chars <= 1 {
+        return 0.0;
+    }
+    chars.saturating_sub(1) as f32 * spacing
+}
+
+fn has_literal_newline(req: &MeasureRequest<'_>) -> bool {
+    req.runs.iter().any(|run| run.text.contains('\n'))
+}
+
+fn painted_multiline_height(req: &MeasureRequest<'_>, line_count: u16) -> f32 {
+    let max_size = req
+        .runs
+        .iter()
+        .map(|run| run.font_size)
+        .fold(0.0_f32, f32::max);
+    let line_mult = if req.line_height > 0.0 {
+        req.line_height
+    } else {
+        DEFAULT_PAINT_LINE_HEIGHT
+    };
+    f32::from(line_count) * max_size * line_mult
 }
 
 impl Default for SkiaMeasure {
@@ -138,18 +204,24 @@ impl MeasureBackend for SkiaMeasure {
             // would paint, which is the contract the plan promises.
             Some(_) => paragraph.longest_line(),
             // Natural extent: `max_intrinsic_width` is the unwrapped
-            // single-line width even when the layout was given an
-            // arbitrary huge budget.
-            None => paragraph.max_intrinsic_width(),
+            // single-line width, but the direct resolver path also
+            // applies native synthetic-bold width compensation.
+            None => self.resolved_natural_width(req),
+        };
+        let line_count = paragraph.line_number().max(1) as u16;
+        let height = if has_literal_newline(req) {
+            painted_multiline_height(req, line_count)
+        } else {
+            paragraph.height()
         };
 
         MeasureResult {
             width,
-            height: paragraph.height(),
+            height,
             // line_number is 0-indexed in skia; layout always
             // produces at least one logical line for non-empty
             // text, so report `max(1, n)`.
-            line_count: paragraph.line_number().max(1) as u16,
+            line_count,
             baseline: paragraph.alphabetic_baseline(),
         }
     }
@@ -282,6 +354,83 @@ mod tests {
             res.height > 16.0,
             "wrapped text should be taller than one line"
         );
+    }
+
+    #[test]
+    fn multiline_height_matches_painted_line_count_times_line_height() {
+        struct Case {
+            text: &'static str,
+            size: f32,
+            line_height: f32,
+            lines: u16,
+        }
+
+        let backend = SkiaMeasure::new();
+        for case in [
+            Case {
+                text: "contact\nhello@darkbrew.cz",
+                size: 16.0,
+                line_height: 0.0,
+                lines: 2,
+            },
+            Case {
+                text: "first\nsecond\nthird",
+                size: 18.0,
+                line_height: 0.0,
+                lines: 3,
+            },
+            Case {
+                text: "contact\nhello@darkbrew.cz",
+                size: 16.0,
+                line_height: 1.5,
+                lines: 2,
+            },
+            Case {
+                text: "first\nsecond\nthird",
+                size: 18.0,
+                line_height: 1.5,
+                lines: 3,
+            },
+        ] {
+            let runs = [StyledRun {
+                text: case.text,
+                font_family: None,
+                font_size: case.size,
+                font_weight: 400,
+                font_style: FontStyleKind::Normal,
+                letter_spacing: 0.0,
+            }];
+            let measured = backend.measure(&MeasureRequest {
+                runs: &runs,
+                line_height: case.line_height,
+                max_width: None,
+            });
+            let line_mult = if case.line_height > 0.0 {
+                case.line_height
+            } else {
+                1.2
+            };
+            let expected = f32::from(case.lines) * case.size * line_mult;
+            let rel = (measured.height - expected).abs() / measured.height.max(expected).max(1.0);
+            println!(
+                "multiline measure text={:?} size={} line_height={} measured={:.3} expected={:.3} lines={} diff={:.2}%",
+                case.text,
+                case.size,
+                case.line_height,
+                measured.height,
+                expected,
+                measured.line_count,
+                rel * 100.0
+            );
+            assert_eq!(measured.line_count, case.lines);
+            assert!(
+                rel <= 0.02,
+                "multiline height drift exceeded 2%: measured={:.3} expected={:.3} diff={:.2}%",
+                measured.height,
+                expected,
+                rel * 100.0
+            );
+        }
     }
 
     #[test]

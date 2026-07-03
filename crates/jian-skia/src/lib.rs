@@ -36,6 +36,8 @@ pub mod backend;
 pub mod bundled_fonts;
 pub mod color;
 pub mod convert;
+#[cfg(feature = "textlayout")]
+pub mod font_resolve;
 pub mod icons;
 pub(crate) mod image;
 #[cfg(feature = "textlayout")]
@@ -48,6 +50,10 @@ pub mod surface;
 pub use backend::SkiaBackend;
 #[cfg(feature = "textlayout")]
 pub use bundled_fonts::register_bundled_fonts;
+#[cfg(feature = "textlayout")]
+pub use font_resolve::{
+    FontResolver, FontSegment, ResolvedTypeface, SYNTHETIC_BOLD_WIDTH_FACTOR, SYNTHETIC_ITALIC_SKEW,
+};
 #[cfg(feature = "textlayout")]
 pub use measure::SkiaMeasure;
 pub use shader_cache::ShaderCache;
