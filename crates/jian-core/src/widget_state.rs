@@ -2,6 +2,7 @@
 //! id. Lazily created on first access, seeded from the node's authored
 //! props; survives `replace_document` for ids that still exist.
 
+use crate::state::StateGraph;
 use crate::text_input::TextInputState;
 use jian_ops_schema::node::{BoolOrExpression, NumberOrExpression, PenNode};
 use std::collections::HashMap;
@@ -45,8 +46,16 @@ impl WidgetStateStore {
     /// Seed-from-node on first access. Returns `None` for nodes that
     /// carry no interactive runtime state (e.g. `progress`, which is
     /// display-only and reads its value straight from the state graph).
-    pub fn get_or_init(&mut self, node: &PenNode) -> Option<&mut WidgetState> {
-        let (id, init) = match node {
+    ///
+    /// When the node's `bindings["bind:value"]` targets `$state.<key>`
+    /// and the state graph already holds a persisted value for that
+    /// key (e.g. after a screen switch re-mounts a bound widget), the
+    /// freshly-built seed is overridden with that value instead of the
+    /// authored prop — this is how bound input values survive
+    /// navigation. Live `Occupied` state of a matching variant is
+    /// never touched here.
+    pub fn get_or_init(&mut self, node: &PenNode, state: &StateGraph) -> Option<&mut WidgetState> {
+        let (id, mut init) = match node {
             PenNode::TextInput(n) => (
                 &n.base.id,
                 WidgetState::TextInput(TextInputState::with_text(
@@ -106,6 +115,9 @@ impl WidgetStateStore {
             ),
             _ => return None,
         };
+        if let Some(v) = bound_app_value(node, state) {
+            apply_bound(&mut init, &v);
+        }
         use std::collections::hash_map::Entry;
         match self.map.entry(id.clone()) {
             Entry::Occupied(mut o) => {
@@ -151,6 +163,62 @@ impl WidgetStateStore {
     }
 }
 
+/// The node's `bind:value` target as an app-scope key (`$state.<key>`
+/// binds into app scope — see `Runtime::sync_bound_value`), when the
+/// state graph currently holds a value for it.
+fn bound_app_value(node: &PenNode, state: &StateGraph) -> Option<serde_json::Value> {
+    let bindings = match node {
+        PenNode::TextInput(n) => n.bindings.as_ref(),
+        PenNode::TextArea(n) => n.bindings.as_ref(),
+        PenNode::NumberInput(n) => n.bindings.as_ref(),
+        PenNode::Switch(n) => n.bindings.as_ref(),
+        PenNode::Checkbox(n) => n.bindings.as_ref(),
+        PenNode::Select(n) => n.bindings.as_ref(),
+        PenNode::RadioGroup(n) => n.bindings.as_ref(),
+        PenNode::Slider(n) => n.bindings.as_ref(),
+        PenNode::Tabs(n) => n.bindings.as_ref(),
+        _ => None,
+    }?;
+    let key = bindings
+        .get("bind:value")?
+        .as_str()
+        .strip_prefix("$state.")?;
+    state.app_get(key).map(|rv| rv.0)
+}
+
+/// Overwrite a freshly-built seed with the bound persisted value.
+fn apply_bound(init: &mut WidgetState, v: &serde_json::Value) {
+    match init {
+        WidgetState::TextInput(t) => {
+            if let Some(s) = v.as_str() {
+                *t = TextInputState::with_text(s);
+            } else if let Some(n) = v.as_f64() {
+                *t = TextInputState::with_text(n.to_string());
+            }
+        }
+        WidgetState::Toggle { on } => {
+            if let Some(b) = v.as_bool() {
+                *on = b;
+            }
+        }
+        WidgetState::Select { value, .. } | WidgetState::Radio { value, .. } => {
+            if let Some(s) = v.as_str() {
+                *value = Some(s.to_owned());
+            }
+        }
+        WidgetState::Tabs { active, .. } => {
+            if let Some(s) = v.as_str() {
+                *active = Some(s.to_owned());
+            }
+        }
+        WidgetState::Slider { value, .. } => {
+            if let Some(n) = v.as_f64() {
+                *value = n;
+            }
+        }
+    }
+}
+
 fn bool_default(v: &Option<BoolOrExpression>) -> bool {
     matches!(v, Some(BoolOrExpression::Bool(true)))
 }
@@ -186,11 +254,18 @@ mod tests {
         serde_json::from_str(json).unwrap()
     }
 
+    /// Fresh, empty state graph for tests that don't care about
+    /// bound-value read-back.
+    fn empty_state() -> StateGraph {
+        StateGraph::new(std::rc::Rc::new(crate::signal::scheduler::Scheduler::new()))
+    }
+
     #[test]
     fn text_input_seeds_from_value_and_persists_edits() {
         let mut store = WidgetStateStore::default();
+        let state = empty_state();
         let n = node(r#"{"type":"text_input","id":"i","value":"hi"}"#);
-        match store.get_or_init(&n).unwrap() {
+        match store.get_or_init(&n, &state).unwrap() {
             WidgetState::TextInput(st) => assert_eq!(st.text(), "hi"),
             _ => panic!(),
         }
@@ -198,7 +273,7 @@ mod tests {
         if let Some(WidgetState::TextInput(st)) = store.get_mut("i") {
             st.insert_str("!", 0);
         }
-        match store.get_or_init(&n).unwrap() {
+        match store.get_or_init(&n, &state).unwrap() {
             WidgetState::TextInput(st) => assert_eq!(st.text(), "hi!"),
             _ => panic!(),
         }
@@ -207,8 +282,9 @@ mod tests {
     #[test]
     fn number_input_seeds_text_without_trailing_zero() {
         let mut store = WidgetStateStore::default();
+        let state = empty_state();
         let n = node(r#"{"type":"number_input","id":"n","value":3}"#);
-        match store.get_or_init(&n).unwrap() {
+        match store.get_or_init(&n, &state).unwrap() {
             WidgetState::TextInput(st) => assert_eq!(st.text(), "3"),
             _ => panic!(),
         }
@@ -217,55 +293,94 @@ mod tests {
     #[test]
     fn toggle_and_select_and_radio_and_slider_and_tabs_seed() {
         let mut store = WidgetStateStore::default();
+        let state = empty_state();
         let sw = node(r#"{"type":"switch","id":"s","checked":true}"#);
         assert!(matches!(
-            store.get_or_init(&sw),
+            store.get_or_init(&sw, &state),
             Some(WidgetState::Toggle { on: true })
         ));
         let sel = node(r#"{"type":"select","id":"sel","value":"a"}"#);
         assert!(
-            matches!(store.get_or_init(&sel), Some(WidgetState::Select { value, .. }) if value.as_deref() == Some("a"))
+            matches!(store.get_or_init(&sel, &state), Some(WidgetState::Select { value, .. }) if value.as_deref() == Some("a"))
         );
         let rg = node(r#"{"type":"radio_group","id":"rg","value":"b"}"#);
         assert!(
-            matches!(store.get_or_init(&rg), Some(WidgetState::Radio { value, .. }) if value.as_deref() == Some("b"))
+            matches!(store.get_or_init(&rg, &state), Some(WidgetState::Radio { value, .. }) if value.as_deref() == Some("b"))
         );
         let sl = node(r#"{"type":"slider","id":"sl","min":10,"max":20}"#);
         assert!(
-            matches!(store.get_or_init(&sl), Some(WidgetState::Slider { value, .. }) if (*value - 10.0).abs() < f64::EPSILON)
+            matches!(store.get_or_init(&sl, &state), Some(WidgetState::Slider { value, .. }) if (*value - 10.0).abs() < f64::EPSILON)
         );
         let tb = node(r#"{"type":"tabs","id":"tb","value":"one"}"#);
         assert!(
-            matches!(store.get_or_init(&tb), Some(WidgetState::Tabs { active, .. }) if active.as_deref() == Some("one"))
+            matches!(store.get_or_init(&tb, &state), Some(WidgetState::Tabs { active, .. }) if active.as_deref() == Some("one"))
         );
     }
 
     #[test]
     fn progress_and_non_widget_have_no_state() {
         let mut store = WidgetStateStore::default();
+        let state = empty_state();
         let pg = node(r#"{"type":"progress","id":"pg","value":40}"#);
-        assert!(store.get_or_init(&pg).is_none());
+        assert!(store.get_or_init(&pg, &state).is_none());
         let frame = node(r#"{"type":"frame","id":"f"}"#);
-        assert!(store.get_or_init(&frame).is_none());
+        assert!(store.get_or_init(&frame, &state).is_none());
     }
 
     #[test]
     fn get_or_init_reseeds_when_node_type_changes_at_same_id() {
         let mut store = WidgetStateStore::default();
-        store.get_or_init(&node(r#"{"type":"text_input","id":"x","value":"hi"}"#));
+        let state = empty_state();
+        store.get_or_init(
+            &node(r#"{"type":"text_input","id":"x","value":"hi"}"#),
+            &state,
+        );
         // Same id reused as a switch after a doc swap: state must re-seed
         // to the new variant, not hand back stale TextInput state.
-        let st = store.get_or_init(&node(r#"{"type":"switch","id":"x","checked":true}"#));
+        let st = store.get_or_init(
+            &node(r#"{"type":"switch","id":"x","checked":true}"#),
+            &state,
+        );
         assert!(matches!(st, Some(WidgetState::Toggle { on: true })));
     }
 
     #[test]
     fn retain_ids_drops_dead_entries() {
         let mut store = WidgetStateStore::default();
-        store.get_or_init(&node(r#"{"type":"text_input","id":"keep"}"#));
-        store.get_or_init(&node(r#"{"type":"text_input","id":"drop"}"#));
+        let state = empty_state();
+        store.get_or_init(&node(r#"{"type":"text_input","id":"keep"}"#), &state);
+        store.get_or_init(&node(r#"{"type":"text_input","id":"drop"}"#), &state);
         store.retain_ids(&|id| id == "keep");
         assert!(store.get_mut("keep").is_some());
         assert!(store.get_mut("drop").is_none());
+    }
+
+    #[test]
+    fn bound_widget_seeds_from_app_state_when_present() {
+        let state = empty_state();
+        state.app_set("email", serde_json::json!("persisted@x.y"));
+        let n: PenNode = serde_json::from_str(
+            r#"{"type":"text_input","id":"email-input","value":"authored",
+                "bindings":{"bind:value":"$state.email"}}"#,
+        )
+        .unwrap();
+        let mut store = WidgetStateStore::default();
+        match store.get_or_init(&n, &state).unwrap() {
+            WidgetState::TextInput(t) => assert_eq!(t.text(), "persisted@x.y"),
+            other => panic!("unexpected variant {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unbound_widget_seeds_from_authored_props() {
+        let state = empty_state();
+        let n: PenNode =
+            serde_json::from_str(r#"{"type":"text_input","id":"plain","value":"authored"}"#)
+                .unwrap();
+        let mut store = WidgetStateStore::default();
+        match store.get_or_init(&n, &state).unwrap() {
+            WidgetState::TextInput(t) => assert_eq!(t.text(), "authored"),
+            other => panic!("unexpected variant {other:?}"),
+        }
     }
 }

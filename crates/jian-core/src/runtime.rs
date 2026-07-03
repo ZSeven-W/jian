@@ -619,7 +619,7 @@ impl Runtime {
         let Some(nd) = doc.tree.nodes.get(node) else {
             return false;
         };
-        match self.widget_states.get_or_init(&nd.schema) {
+        match self.widget_states.get_or_init(&nd.schema, &self.state) {
             Some(st) => f(st),
             None => false,
         }
@@ -887,7 +887,7 @@ impl Runtime {
     fn focused_text_state(&mut self) -> Option<&mut crate::text_input::TextInputState> {
         let target = self.focus.current()?;
         let node = self.document.as_ref()?.tree.nodes.get(target)?;
-        match self.widget_states.get_or_init(&node.schema)? {
+        match self.widget_states.get_or_init(&node.schema, &self.state)? {
             crate::widget_state::WidgetState::TextInput(st) => Some(st),
             _ => None,
         }
@@ -1512,8 +1512,12 @@ mod tests {
         use crate::gesture::pointer::Modifiers;
         let mut rt = Runtime::new_from_document(
             serde_json::from_str::<PenDocument>(
+                // `choice` is deliberately NOT declared in the document
+                // state schema: bound keys are created on first write
+                // (sync_widget_binding). A declared key would exist at
+                // mount and its persisted value would override the
+                // authored `value:"a"` seed (bind:value read-back).
                 r#"{"version":"1.1","formatVersion":"1.1",
-                  "state":{"choice":{"type":"string","default":""}},
                   "children":[
                     {"type":"frame","id":"root","children":[
                       {"type":"select","id":"se","value":"a",
