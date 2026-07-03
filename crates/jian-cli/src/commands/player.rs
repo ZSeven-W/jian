@@ -215,7 +215,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // StateGraph from the canonical snapshot. A raw `.op` falls
     // through to the original load path with both AOT slots `None`.
     let LoadedSource {
-        schema,
+        mut schema,
         initial_layout,
         default_state,
         expressions,
@@ -246,6 +246,29 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
             expressions: None,
         }
     };
+
+    // Screen projection: a marked multi-screen design collapses to a
+    // navigable app (entry screen at pages[0]); unmarked docs keep the
+    // classic single-page path (`project_screens` returns None).
+    let mut screen_nav: Option<(
+        std::rc::Rc<jian_core::screens::ScreenRouter>,
+        jian_core::screens::ScreenTable,
+    )> = None;
+    if let Some((normalized, proj_warnings)) =
+        jian_ops_schema::screen_projection::project_screens(&schema)
+    {
+        for w in &proj_warnings {
+            eprintln!("jian player: {w}");
+        }
+        let table = jian_core::screens::ScreenTable::from_document(normalized.clone())
+            .expect("normalized doc always carries routes");
+        let router = std::rc::Rc::new(jian_core::screens::ScreenRouter::new(
+            table.entry_path(),
+            table.paths(),
+        ));
+        schema = normalized;
+        screen_nav = Some((router, table));
+    }
 
     // Title priority: --title > schema.app.name > file stem > "Jian".
     let title = args
@@ -363,7 +386,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     startup_report
         .merge_into(stage1_report)
         .map_err(|e| anyhow!("{e}"))?;
-    let rt = bootstrap
+    let mut rt = bootstrap
         .take_runtime()
         .ok_or_else(|| anyhow!("data-path bootstrap did not produce a runtime"))?;
     // Plan 19 D1: pack-supplied AOT default-state overlays the
@@ -396,6 +419,15 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     }
     let hidden_bboxes = bootstrap.take_hidden_bboxes();
 
+    // Install the screen router on the runtime BEFORE the host takes
+    // ownership — `rt.nav` must already point at the `ScreenRouter` so
+    // the frame hook installed below (which reconciles against it every
+    // `RedrawRequested`) observes the same navigation state the mounted
+    // screen's buttons dispatch into via `nav.push` / `nav.pop`.
+    if let Some((router, _)) = screen_nav.as_ref() {
+        rt.nav = router.clone();
+    }
+
     // `--dpi`'s clap value_parser already filters out 0 / negative /
     // NaN / Inf, so the host-side fallback is just a straight pass-through.
     let cfg = HostConfig {
@@ -414,6 +446,29 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         .with_deeplink_queue(deeplink_queue);
     if let Some(bboxes) = hidden_bboxes {
         host = host.with_pending_hidden_bboxes(bboxes);
+    }
+    if let Some((router, table)) = screen_nav {
+        let mut current = table.entry_path().to_owned();
+        let size = (w, h); // the resolved window size from above
+        host = host.with_frame_hook(Box::new(move |rt: &mut jian_core::Runtime| {
+            match jian_core::screens::reconcile_screens(rt, &router, &table, &mut current) {
+                Ok(outcome) => {
+                    for r in outcome.rejections {
+                        eprintln!(
+                            "jian player: unknown route `{}` ({}) ignored",
+                            r.path, r.verb
+                        );
+                    }
+                    if outcome.switched.is_some() {
+                        if let Err(e) = rt.build_layout(size) {
+                            eprintln!("jian player: relayout after screen switch failed: {e}");
+                        }
+                        rt.rebuild_spatial();
+                    }
+                }
+                Err(e) => eprintln!("jian player: screen reconcile failed: {e}"),
+            }
+        }));
     }
     let host = install_updater_from_doc(host);
 

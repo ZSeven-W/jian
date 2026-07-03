@@ -50,6 +50,11 @@ pub type MenuHandler = Box<dyn FnMut(&str, &mut Runtime) -> MenuOutcome>;
 /// `$vars.*` to disk via the runtime's existing services.
 pub type ShutdownHook = Box<dyn FnOnce(&mut Runtime)>;
 
+/// Type alias for the pre-paint hook fired once per `RedrawRequested`,
+/// before the frame paints. Screen-routing hosts install their
+/// `reconcile_screens` pass here (see [`DesktopHost::with_frame_hook`]).
+pub type FrameHook = Box<dyn FnMut(&mut Runtime)>;
+
 /// Helper: a [`MenuHandler`] that handles `app.quit` (returns
 /// `MenuOutcome::Quit`) and routes everything else to a user-supplied
 /// closure. Hosts that just want to add a few custom items don't have
@@ -79,6 +84,11 @@ pub struct DesktopHost {
     /// menu clicks on the floor — useful for headless / single-window
     /// apps that haven't wired UI semantics yet.
     pub menu_handler: Option<MenuHandler>,
+    /// Invoked once per `RedrawRequested`, BEFORE the frame paints.
+    /// Screen-routing hosts install their reconcile pass here: all
+    /// event sources' visible effects funnel through redraw, so a
+    /// pre-paint hook provably runs before presentation.
+    pub frame_hook: Option<FrameHook>,
     /// Last-chance callback fired right before the run loop exits.
     /// Hosts that persist `$state.*` / `$vars.*` to disk install a
     /// hook here so a Cmd-Q / window-close doesn't lose unsaved
@@ -254,6 +264,7 @@ impl DesktopHost {
             },
             reload_rx: None,
             menu_handler: None,
+            frame_hook: None,
             shutdown_hook: None,
             updater: None,
             #[cfg(feature = "mcp")]
@@ -284,6 +295,7 @@ impl DesktopHost {
             config,
             reload_rx: None,
             menu_handler: None,
+            frame_hook: None,
             shutdown_hook: None,
             updater: None,
             #[cfg(feature = "mcp")]
@@ -352,6 +364,16 @@ impl DesktopHost {
     /// default Quit semantic without writing a match arm yourself.
     pub fn with_menu_handler(mut self, handler: MenuHandler) -> Self {
         self.menu_handler = Some(handler);
+        self
+    }
+
+    /// Install a hook that fires once per `RedrawRequested`, before the
+    /// frame paints. Screen-routing hosts (`jian player` on a marked
+    /// multi-screen doc) install their `reconcile_screens` pass here so
+    /// navigation state syncs to the runtime before every presentation.
+    /// Idempotent — calling more than once replaces the previous hook.
+    pub fn with_frame_hook(mut self, hook: FrameHook) -> Self {
+        self.frame_hook = Some(hook);
         self
     }
 

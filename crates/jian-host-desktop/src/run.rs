@@ -680,6 +680,9 @@ impl ApplicationHandler for RunApp {
                 return;
             }
             WindowEvent::RedrawRequested => {
+                if let Some(hook) = self.host.frame_hook.as_mut() {
+                    hook(&mut self.host.runtime);
+                }
                 self.redraw(event_loop);
                 return;
             }
