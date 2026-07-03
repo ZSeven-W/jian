@@ -25,7 +25,7 @@ use slotmap::SecondaryMap;
 use std::rc::Rc;
 use taffy::prelude::*;
 
-/// Per-node measurer context — only populated for Text leaves so the
+/// Per-node measurer context — populated for text-like leaves so the
 /// Taffy callback can hand styled segments off to a `MeasureBackend`.
 /// `runs` owns its own strings so the context outlives the schema
 /// borrow taffy's tree expects.
@@ -34,6 +34,16 @@ pub struct TextMeasure {
     pub runs: Vec<OwnedRun>,
     pub line_height: f32, // multiplier; 0.0 → 1.3 default
     pub growth: TextGrowth,
+    pub input_chrome: Option<InputChromeMeasure>,
+}
+
+/// Static input anatomy used by text_input / number_input / select
+/// fit-content measurement. Values intentionally match the scene
+/// painter's input inset constants: pad 8, icon box 20.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputChromeMeasure {
+    pub leading_icon: bool,
+    pub trailing_icon: bool,
 }
 
 /// Mirror of `jian_ops_schema::node::TextGrowth` re-exported into
@@ -62,6 +72,9 @@ pub struct OwnedRun {
     pub font_style: FontStyleKind,
     pub letter_spacing: f32,
 }
+
+const INPUT_PAD_X: f32 = 8.0;
+const INPUT_ICON_BOX: f32 = 20.0;
 
 impl OwnedRun {
     fn as_styled(&self) -> StyledRun<'_> {
@@ -340,9 +353,67 @@ impl Default for LayoutEngine {
 /// diverge from the renderer (which uses ParagraphBuilder
 /// `push_style` per segment under the textlayout feature).
 fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
-    use jian_ops_schema::node::{text::TextContent, PenNode};
+    use jian_ops_schema::node::{base::NumberOrExpression, text::TextContent, PenNode};
+
+    fn plain_input_measure(text: String, leading_icon: bool, trailing_icon: bool) -> TextMeasure {
+        TextMeasure {
+            runs: vec![OwnedRun {
+                text,
+                font_family: None,
+                font_size: 14.0,
+                font_weight: 400,
+                font_style: FontStyleKind::Normal,
+                letter_spacing: 0.0,
+            }],
+            line_height: 0.0,
+            growth: TextGrowth::Auto,
+            input_chrome: Some(InputChromeMeasure {
+                leading_icon,
+                trailing_icon,
+            }),
+        }
+    }
+
     let PenNode::Text(t) = n else {
-        return None;
+        return match n {
+            PenNode::TextInput(input) => {
+                let text = input
+                    .value
+                    .clone()
+                    .or_else(|| input.placeholder.clone())
+                    .unwrap_or_default();
+                Some(plain_input_measure(
+                    text,
+                    input.leading_icon.is_some(),
+                    input.trailing_icon.is_some(),
+                ))
+            }
+            PenNode::NumberInput(input) => {
+                let text = input
+                    .value
+                    .as_ref()
+                    .and_then(|value| match value {
+                        NumberOrExpression::Number(n) => Some(format!("{n}")),
+                        NumberOrExpression::Expression(_) => None,
+                    })
+                    .or_else(|| input.placeholder.clone())
+                    .unwrap_or_default();
+                Some(plain_input_measure(
+                    text,
+                    input.leading_icon.is_some(),
+                    input.trailing_icon.is_some(),
+                ))
+            }
+            PenNode::Select(select) => {
+                let text = select
+                    .value
+                    .clone()
+                    .or_else(|| select.placeholder.clone())
+                    .unwrap_or_default();
+                Some(plain_input_measure(text, false, true))
+            }
+            _ => None,
+        };
     };
     let node_size = t.font_size.map(|v| v as f32).unwrap_or(14.0);
     let node_weight = resolve_weight(t.font_weight.as_ref());
@@ -407,6 +478,7 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
         runs,
         line_height,
         growth,
+        input_chrome: None,
     })
 }
 
@@ -506,11 +578,29 @@ fn measure_text_for_taffy(
         max_width,
     };
     let res = backend.measure(&req);
+    let (measured_width, measured_height) = if let Some(chrome) = tm.input_chrome {
+        let left = if chrome.leading_icon {
+            INPUT_PAD_X + INPUT_ICON_BOX + INPUT_PAD_X
+        } else {
+            INPUT_PAD_X
+        };
+        let right = if chrome.trailing_icon {
+            INPUT_PAD_X + INPUT_ICON_BOX + INPUT_PAD_X
+        } else {
+            INPUT_PAD_X
+        };
+        (
+            left + res.width + right,
+            res.height.max(INPUT_ICON_BOX) + INPUT_PAD_X * 2.0,
+        )
+    } else {
+        (res.width, res.height)
+    };
     let width = match known.width {
         Some(w) => w,
-        None => res.width,
+        None => measured_width,
     };
-    let height = known.height.unwrap_or(res.height);
+    let height = known.height.unwrap_or(measured_height);
     Size { width, height }
 }
 
@@ -617,5 +707,112 @@ mod preload_tests {
         engine.preload_initial(&snapshot(&[("a", [50.0, 60.0, 70.0, 80.0])]), &tree);
         let key_a = tree.get("a").unwrap();
         assert_eq!(engine.node_rect(key_a), Some(rect(50.0, 60.0, 70.0, 80.0)));
+    }
+
+    fn compute_single_child(child: PenNode) -> Rect {
+        let root = frame_node("root", vec![child]);
+        let mut tree = NodeTree::new();
+        tree.insert_subtree(root, None);
+        let mut engine = LayoutEngine::new();
+        let roots = engine.build(&tree).expect("taffy build");
+        let root_id = *roots.first().expect("root id");
+        engine.compute(root_id, (400.0, 100.0)).expect("compute");
+        let key = tree.get("input").expect("input key");
+        engine.node_rect(key).expect("input rect")
+    }
+
+    fn text_input_node(value: serde_json::Value) -> PenNode {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn fit_content_text_input_with_leading_icon_measures_input_anatomy() {
+        use measure::{EstimateBackend, MeasureBackend, MeasureRequest, StyledRun};
+
+        let input = text_input_node(json!({
+            "type":"text_input",
+            "id":"input",
+            "width":"fit_content",
+            "height":"fit_content",
+            "placeholder":"Search",
+            "leadingIcon":"search",
+            "fontSize":14
+        }));
+        let rect = compute_single_child(input);
+        let run = StyledRun {
+            text: "Search",
+            font_family: None,
+            font_size: 14.0,
+            font_weight: 400,
+            font_style: FontStyleKind::Normal,
+            letter_spacing: 0.0,
+        };
+        let text = EstimateBackend.measure(&MeasureRequest {
+            runs: &[run],
+            line_height: 0.0,
+            max_width: None,
+        });
+
+        assert!(
+            rect.size.width >= text.width + 36.0,
+            "leading-icon text_input should reserve 36px chrome plus text width, got {}",
+            rect.size.width
+        );
+        assert!(
+            rect.size.height >= 36.0,
+            "text_input height should reserve vertical padding and icon box, got {}",
+            rect.size.height
+        );
+    }
+
+    #[test]
+    fn fit_content_text_input_without_icon_measures_horizontal_padding() {
+        use measure::{EstimateBackend, MeasureBackend, MeasureRequest, StyledRun};
+
+        let input = text_input_node(json!({
+            "type":"text_input",
+            "id":"input",
+            "width":"fit_content",
+            "height":"fit_content",
+            "placeholder":"Find",
+            "fontSize":14
+        }));
+        let rect = compute_single_child(input);
+        let run = StyledRun {
+            text: "Find",
+            font_family: None,
+            font_size: 14.0,
+            font_weight: 400,
+            font_style: FontStyleKind::Normal,
+            letter_spacing: 0.0,
+        };
+        let text = EstimateBackend.measure(&MeasureRequest {
+            runs: &[run],
+            line_height: 0.0,
+            max_width: None,
+        });
+
+        assert!(
+            (rect.size.width - (text.width + 16.0)).abs() <= 0.5,
+            "plain text_input should measure exactly 16px horizontal padding plus text width, got {} vs text {}",
+            rect.size.width,
+            text.width
+        );
+    }
+
+    #[test]
+    fn numeric_sized_text_input_keeps_authored_size() {
+        let input = text_input_node(json!({
+            "type":"text_input",
+            "id":"input",
+            "width":120,
+            "height":44,
+            "placeholder":"A much longer placeholder",
+            "leadingIcon":"search",
+            "fontSize":14
+        }));
+        let rect = compute_single_child(input);
+        assert_eq!(rect.size.width, 120.0);
+        assert_eq!(rect.size.height, 44.0);
     }
 }
