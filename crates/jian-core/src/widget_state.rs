@@ -166,6 +166,13 @@ impl WidgetStateStore {
 /// The node's `bind:value` target as an app-scope key (`$state.<key>`
 /// binds into app scope — see `Runtime::sync_bound_value`), when the
 /// state graph currently holds a value for it.
+///
+/// Once the bound key exists in app scope — whether from a declared
+/// document-state default seeded at load, or a prior write — the state
+/// graph is the source of truth for the widget's seed. This applies to
+/// the FIRST mount as much as to re-mounts after `replace_document`:
+/// a declared default deliberately wins over a conflicting authored
+/// widget prop.
 fn bound_app_value(node: &PenNode, state: &StateGraph) -> Option<serde_json::Value> {
     let bindings = match node {
         PenNode::TextInput(n) => n.bindings.as_ref(),
@@ -367,6 +374,36 @@ mod tests {
         let mut store = WidgetStateStore::default();
         match store.get_or_init(&n, &state).unwrap() {
             WidgetState::TextInput(t) => assert_eq!(t.text(), "persisted@x.y"),
+            other => panic!("unexpected variant {other:?}"),
+        }
+    }
+
+    #[test]
+    fn declared_state_default_overrides_authored_value_at_first_mount() {
+        // Crux semantics, locked as INTENDED: when a document DECLARES
+        // a state key with a default, the loader seeds app scope at
+        // load — so a bound widget's very first mount seeds from that
+        // declared default, NOT from its conflicting authored prop.
+        // State graph is the source of truth once the key exists.
+        let rt = crate::Runtime::new_from_document(
+            serde_json::from_str::<jian_ops_schema::document::PenDocument>(
+                r#"{"version":"1.1","formatVersion":"1.1",
+                  "state":{"choice":{"type":"string","default":"b"}},
+                  "children":[
+                    {"type":"frame","id":"root","children":[
+                      {"type":"select","id":"se","value":"a",
+                       "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}],
+                       "bindings":{"bind:value":"$state.choice"}}]}]}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let doc = rt.document.as_ref().unwrap();
+        let key = doc.tree.get("se").unwrap();
+        let schema = doc.tree.nodes[key].schema.clone();
+        let mut store = WidgetStateStore::default();
+        match store.get_or_init(&schema, &rt.state).unwrap() {
+            WidgetState::Select { value, .. } => assert_eq!(value.as_deref(), Some("b")),
             other => panic!("unexpected variant {other:?}"),
         }
     }
