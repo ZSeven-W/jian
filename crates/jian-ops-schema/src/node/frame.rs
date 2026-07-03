@@ -35,6 +35,11 @@ pub struct FrameNode {
     pub gestures: Option<crate::gestures::GestureOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::navigation::NavigationRoute>,
+    /// Screen marker: this top-level frame is one screen of the app,
+    /// mounted at the given route path ("/" = entry). Consumed only by
+    /// the screen-projection pass; ignored elsewhere. Additive 1.x.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -89,4 +94,25 @@ pub struct RectangleNode {
     pub gestures: Option<crate::gestures::GestureOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::navigation::NavigationRoute>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_screen_marker_roundtrip() {
+        let json = r#"{"id":"f1","screen":"/checkout"}"#;
+        let f: FrameNode = serde_json::from_str(json).unwrap();
+        assert_eq!(f.screen.as_deref(), Some("/checkout"));
+        assert_eq!(serde_json::to_string(&f).unwrap(), json);
+    }
+
+    #[test]
+    fn frame_without_screen_serializes_without_key() {
+        let f: FrameNode = serde_json::from_str(r#"{"id":"f1"}"#).unwrap();
+        assert_eq!(f.screen, None);
+        // Canonical serialization of an unmarked frame must not grow a key.
+        assert!(!serde_json::to_string(&f).unwrap().contains("screen"));
+    }
 }

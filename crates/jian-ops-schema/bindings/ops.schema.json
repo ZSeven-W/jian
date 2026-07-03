@@ -357,6 +357,13 @@
                 }
               ]
             },
+            "screen": {
+              "description": "Screen marker: this top-level frame is one screen of the app, mounted at the given route path (\"/\" = entry). Consumed only by the screen-projection pass; ignored elsewhere. Additive 1.x.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "id": {
               "type": "string"
             },
