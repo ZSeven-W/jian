@@ -135,6 +135,16 @@ pub fn collect_draws_with_widgets(
 /// double-offset. This walker is the single seam that turns the
 /// authored root origin into an actual draw-position translation,
 /// applied uniformly to the whole subtree below `root`.
+///
+/// KNOWN LIMITATION: only *draws* are translated. The spatial index
+/// and pointer dispatch (`Runtime::rebuild_spatial` /
+/// `dispatch_pointer` / slider scrub) still hit-test root-relative
+/// `node_rect`s by the same contract (external consumers such as
+/// OpenPencil translate root offsets themselves — offset-aware
+/// runtime hit-testing would double-translate for them). A live
+/// multi-root document with non-zero authored root offsets therefore
+/// draws offset but hit-tests unoffset in jian-host-desktop; the fix
+/// belongs at the host pointer-translation seam (tracked follow-up).
 fn root_offset_for(
     doc: &crate::document::RuntimeDocument,
     root: crate::document::NodeKey,
