@@ -62,6 +62,10 @@ pub struct PenDocument {
     /// absent on documents that never authored one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub design_md: Option<crate::design_md::DesignMdSpec>,
+
+    /// Code-to-design conversion ledger.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion: Option<crate::conversion::ConversionSpec>,
 }
 
 #[cfg(test)]

@@ -15,16 +15,16 @@ export type Action = { [key in string]?: JsonValue };
 
 export type AlignItems = "start" | "center" | "end" | "stretch";
 
-export type AppConfig = { name: string, version: string, id: string, entry: string | null, capabilities: Array<Capability> | null, theme: string | null, orientation: Orientation | null, backgroundColor: string | null, icon: string | null, 
+export type AppConfig = { name: string, version: string, id: string, entry: string | null, capabilities: Array<Capability> | null, theme: string | null, orientation: Orientation | null, backgroundColor: string | null, icon: string | null,
 /**
  * C19 splash-frame config.
  */
-splash: SplashConfig | null, 
+splash: SplashConfig | null,
 /**
  * C18 ASP web handshake postMessage origin allowlist.
  * Only consulted by the web host; strict match; no wildcards.
  */
-aspAllowedOrigins: Array<string> | null, 
+aspAllowedOrigins: Array<string> | null,
 /**
  * Auto-update backend descriptor — same idea as `app.icon`:
  * the schema declares the source of truth (which release feed
@@ -60,28 +60,45 @@ export type Capability = "storage" | "network" | "camera" | "microphone" | "loca
  */
 export type CheckboxNode = { width: SizingBehavior | null, height: SizingBehavior | null, checked: BoolOrExpression | null, label: string | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
+export type ConversionEntry = { kind: ConversionKind,
 /**
- * Container props — shared by Frame/Group/Rectangle.
- * `children` is NOT included here because PenNode children are recursively
- * defined in node/mod.rs to avoid circular module dependency. Each concrete
- * node type that has children declares it explicitly via `children: Option<Vec<PenNode>>`.
+ * Caller-stable key, e.g. "src/Button.tsx#Button" or "route:/settings".
  */
-export type ContainerProps = { width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null, cornerRadius: CornerRadius | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, };
+key: string, sourcePath: string | null,
+/**
+ * Content fingerprint of the source unit; used for incremental conversion.
+ */
+sourceHash: string | null,
+/**
+ * Master frame id (component) or screen frame id. None for token entries.
+ */
+nodeId: string | null,
+/**
+ * Source-node id to document-node id mapping for idempotent reruns.
+ */
+nodeIds: { [key in string]?: string } | null, };
+
+export type ConversionKind = "token" | "component" | "screen";
+
+/**
+ * Ledger of code-to-design conversion units.
+ */
+export type ConversionSpec = { entries: Array<ConversionEntry>, };
 
 export type CornerRadius = number | [number, number, number, number];
 
 /**
  * One named colour from the design-md colour palette.
  */
-export type DesignMdColor = { 
+export type DesignMdColor = {
 /**
  * Human label, e.g. "Primary".
  */
-name: string, 
+name: string,
 /**
  * `#RRGGBB` hex value.
  */
-hex: string, 
+hex: string,
 /**
  * How the colour is used, e.g. "buttons and links".
  */
@@ -92,7 +109,7 @@ role: string, };
  *
  * [`PenDocument`]: crate::document::PenDocument
  */
-export type DesignMdSpec = { 
+export type DesignMdSpec = {
 /**
  * Original markdown source — kept verbatim for round-trip fidelity.
  */
@@ -101,7 +118,7 @@ raw: string, projectName: string | null, visualTheme: string | null, colorPalett
 /**
  * Typography guidance from the design-md typography section.
  */
-export type DesignMdTypography = { fontFamily: string | null, headings: string | null, body: string | null, 
+export type DesignMdTypography = { fontFamily: string | null, headings: string | null, body: string | null,
 /**
  * Free-form scale description — usually the whole section text.
  */
@@ -135,19 +152,19 @@ export type FontWeight = number | string;
  */
 export type FrameNode = { children: Array<PenNode> | null, imageSearchQuery: string | null, reusable: boolean | null, slot: Array<string> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null, cornerRadius: CornerRadius | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, };
 
-export type GestureOverrides = { 
+export type GestureOverrides = {
 /**
  * When true, this node and its subtree bypass the Arena and receive raw pointer events.
  */
-rawPointer: boolean | null, disabled: Expression | null, scrollBehavior: ScrollBehavior | null, 
+rawPointer: boolean | null, disabled: Expression | null, scrollBehavior: ScrollBehavior | null,
 /**
  * Override drag threshold in logical pixels (default 8).
  */
-dragThreshold: number | null, 
+dragThreshold: number | null,
 /**
  * Override long-press duration in ms (default 500).
  */
-longPressDuration: number | null, 
+longPressDuration: number | null,
 /**
  * Author-explicit Tab-traversal opt-in.
  *
@@ -197,6 +214,21 @@ export type LogicAbi = string;
 export type LogicModuleRef = { id: string, source: string, integrity: string | null, abi: LogicAbi, capabilities: Array<Capability> | null, };
 
 /**
+ * Uniform-grid mesh gradient (v1). A `rows`×`cols` lattice of
+ * `MeshVertexStop`s is Gouraud-interpolated across the node's
+ * round-rect. Mirrors the sibling gradient bodies for the shared
+ * `explain`/`opacity`/`blend_mode` tail.
+ */
+export type MeshGradientBody = { rows: number, cols: number, stops: Array<MeshVertexStop>, explain: string | null, opacity: number | null, blendMode: BlendMode | null, };
+
+/**
+ * A single vertex of a `MeshGradient` grid. `row`/`col` are 0-based
+ * indices into a `rows`×`cols` lattice; `color` is the Gouraud-shaded
+ * colour anchored at that vertex.
+ */
+export type MeshVertexStop = { row: number, col: number, color: string, };
+
+/**
  * Declarative per-node navigation: clicking the node pushes/replaces/pops a route.
  * Equivalent to `events.on_tap = [{"push": "..."}]` but more editor-discoverable.
  */
@@ -209,15 +241,15 @@ export type NodeLifecycleHooks = { onMount: Array<Action> | null, onUnmount: Arr
  * `slider`; `value` two-way binds via `bindings.bind:value`. When
  * omitted, `min`/`max`/`step` default to none/none/1 at runtime.
  */
-export type NumberInputNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+export type NumberInputNode = { width: SizingBehavior | null, height: SizingBehavior | null,
 /**
  * Placeholder shown when `value` is empty.
  */
-placeholder: string | null, value: NumberOrExpression | null, 
+placeholder: string | null, value: NumberOrExpression | null,
 /**
  * Lucide glyph drawn at the left content edge. See `TextInputNode`.
  */
-leadingIcon: string | null, 
+leadingIcon: string | null,
 /**
  * Lucide glyph drawn at the right content edge. See `TextInputNode`.
  */
@@ -236,51 +268,49 @@ export type PageLifecycleHooks = { onEnter: Array<Action> | null, onLeave: Array
 
 export type PathNode = { iconId: string | null, d: string | null, anchors: Array<PenPathAnchor> | null, closed: boolean | null, width: SizingBehavior | null, height: SizingBehavior | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
-export type PenDocument = { 
+export type PenDocument = {
 /**
  * Document format version stored in files since v0.x. Always present.
  */
-version: string, name: string | null, 
+version: string, name: string | null,
 /**
  * Wire shape: axis-name → ordered theme names. Frozen from v0.x.
  */
-themes: { [key in string]?: Array<string> } | null, variables: { [key in string]?: VariableDefinition } | null, pages: Array<PenPage> | null, 
+themes: { [key in string]?: Array<string> } | null, variables: { [key in string]?: VariableDefinition } | null, pages: Array<PenPage> | null,
 /**
  * Default-on-deserialize so a multi-page document that carries only
  * `pages` (no top-level `children`) still loads — the TS web app's
  * whole-document sync (`document.post.ts`) accepts `{version, pages}`
  * without a `children` array. Always serialized (even empty `[]`).
  */
-children: Array<PenNode>, 
+children: Array<PenNode>,
 /**
  * "1.0" when any v1 extension is present; undefined ⇒ legacy v0.x.
  */
-formatVersion: string | null, 
+formatVersion: string | null,
 /**
  * App id (reverse-DNS). Required when `app` is set; otherwise optional.
  */
-id: string | null, app: AppConfig | null, routes: RoutesConfig | null, state: { [key in string]?: StateEntry } | null, lifecycle: AppLifecycleHooks | null, logicModules: Array<LogicModuleRef> | null, 
+id: string | null, app: AppConfig | null, routes: RoutesConfig | null, state: { [key in string]?: StateEntry } | null, lifecycle: AppLifecycleHooks | null, logicModules: Array<LogicModuleRef> | null,
 /**
  * Per-document design-system brief (the "design.md"). Optional —
  * absent on documents that never authored one.
  */
-designMd: DesignMdSpec | null, };
+designMd: DesignMdSpec | null,
+/**
+ * Code-to-design conversion ledger.
+ */
+conversion: ConversionSpec | null, };
 
 export type PenEffect = { "type": "blur" } & BlurBody | { "type": "background_blur" } & BlurBody | { "type": "shadow" } & ShadowBody;
 
-export type PenFill = { "type": "solid" } & SolidFillBody | { "type": "linear_gradient" } & LinearGradientBody | { "type": "radial_gradient" } & RadialGradientBody | { "type": "image" } & ImageFillBody;
+export type PenFill = { "type": "solid" } & SolidFillBody | { "type": "linear_gradient" } & LinearGradientBody | { "type": "radial_gradient" } & RadialGradientBody | { "type": "mesh_gradient" } & MeshGradientBody | { "type": "shader" } & ShaderFillBody | { "type": "image" } & ImageFillBody;
 
 /**
  * Union of all concrete node types.
  * Tag is the JSON `"type"` field.
  */
 export type PenNode = { "type": "frame" } & FrameNode | { "type": "group" } & GroupNode | { "type": "rectangle" } & RectangleNode | { "type": "ellipse" } & EllipseNode | { "type": "line" } & LineNode | { "type": "polygon" } & PolygonNode | { "type": "path" } & PathNode | { "type": "text" } & TextNode | { "type": "text_input" } & TextInputNode | { "type": "image" } & ImageNode | { "type": "icon_font" } & IconFontNode | { "type": "text_area" } & TextAreaNode | { "type": "select" } & SelectNode | { "type": "switch" } & SwitchNode | { "type": "checkbox" } & CheckboxNode | { "type": "slider" } & SliderNode | { "type": "radio_group" } & RadioGroupNode | { "type": "number_input" } & NumberInputNode | { "type": "progress" } & ProgressNode | { "type": "tabs" } & TabsNode | { "type": "ref" } & RefNode;
-
-/**
- * Shared fields across all node types.
- * Note: concrete nodes use `#[serde(flatten)]` to embed `PenNodeBase`.
- */
-export type PenNodeBase = { id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
 export type PenPage = { id: string, name: string, children: Array<PenNode>, state: { [key in string]?: StateEntry } | null, lifecycle: PageLifecycleHooks | null, };
 
@@ -310,7 +340,7 @@ export type RadialGradientBody = { cx: number | null, cy: number | null, radius:
  * Single-choice radio group. Renders one radio per `option`; the
  * selected option `value` two-way binds via `bindings.bind:value`.
  */
-export type RadioGroupNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+export type RadioGroupNode = { width: SizingBehavior | null, height: SizingBehavior | null,
 /**
  * Currently selected option `value`.
  */
@@ -320,7 +350,7 @@ export type RectangleNode = { children: Array<PenNode> | null, state: { [key in 
 
 export type RefNode = { ref: string, descendants: { [key in string]?: JsonValue } | null, children: Array<PenNode> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null, theme: { [key in string]?: string } | null, };
 
-export type RouteSpec = { pageId: string, preload: boolean | null, guards: Array<Action> | null, 
+export type RouteSpec = { pageId: string, preload: boolean | null, guards: Array<Action> | null,
 /**
  * Path-parameter type declarations (v1.0 additive — 2026-04-24).
  * Keys correspond to `:param` placeholders in the route path
@@ -339,11 +369,11 @@ export type ScrollBehavior = "auto" | "contain" | "none";
  * Dropdown select. The runtime pops an option list; the selected
  * option `value` two-way binds via `bindings.bind:value`.
  */
-export type SelectNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+export type SelectNode = { width: SizingBehavior | null, height: SizingBehavior | null,
 /**
  * Shown when no option is selected.
  */
-placeholder: string | null, 
+placeholder: string | null,
 /**
  * Currently selected option `value`.
  */
@@ -358,27 +388,27 @@ export type SemanticAction = { name: string, label: string, handler: Array<Actio
 
 export type SemanticRole = "button" | "link" | "image" | "text" | "heading" | "input" | "list" | "list_item" | "header" | "nav" | "main" | "dialog" | "alert";
 
-export type SemanticsMeta = { role: SemanticRole | null, label: string | null, hint: string | null, liveRegion: LiveRegion | null, disabled: Expression | null, actions: Array<SemanticAction> | null, 
+export type SemanticsMeta = { role: SemanticRole | null, label: string | null, hint: string | null, liveRegion: LiveRegion | null, disabled: Expression | null, actions: Array<SemanticAction> | null,
 /**
  * Author-stable override for the auto-derived AI action name.
  * When set, the resulting action name is `<scope>.<aiName>`
  * without the auto `_<hash4>` suffix and survives slug recomputes
  * across builds. See `2026-04-24-ai-action-surface.md` §3.3-3.4.
  */
-aiName: string | null, 
+aiName: string | null,
 /**
  * Tool description shown to external AI agents. Overrides the
  * auto-generated default; lets authors steer what a model "sees"
  * without changing visible UI text.
  */
-aiDescription: string | null, 
+aiDescription: string | null,
 /**
  * `true` permanently hides the node's derived action from the AI
  * surface (StaticHidden). Defaults to `false`. ConfirmGated /
  * StateGated availability are decided dynamically and do **not**
  * require this flag — see ai-action-surface.md §4.
  */
-aiHidden: boolean | null, 
+aiHidden: boolean | null,
 /**
  * Historical `aiName` values still accepted by `execute_action`
  * for transparent migration after a rename. Aliases are honoured
@@ -386,6 +416,38 @@ aiHidden: boolean | null,
  * not surfaced by `list_available_actions`. See §9.
  */
 aiAliases: Array<string> | null, };
+
+/**
+ * Native SkSL shader fill (v1). The `sksl` source is stored RAW and is
+ * treated as untrusted: the renderer entrypoint is the SkSL signature
+ * `half4 main(float2 fragCoord)`. On compile failure the backend
+ * degrades to a visible solid fill (the first `color` uniform, else
+ * mid-gray) and never panics. Mirrors the sibling gradient bodies for
+ * the shared `opacity`/`blend_mode` tail.
+ *
+ * Pencil-flavoured WebGL-GLSL import is an explicit follow-up, NOT v1;
+ * v1 expects SkSL (Skia's GLSL dialect) verbatim.
+ */
+export type ShaderFillBody = {
+/**
+ * RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.
+ */
+sksl: string,
+/**
+ * Optional named-uniform map (`float` / `vec*` / `color`). A
+ * shader may declare none; absent or empty both mean "no uniforms".
+ */
+uniforms: { [key in string]?: ShaderUniformValue } | null, explain: string | null, opacity: number | null, blendMode: BlendMode | null, };
+
+/**
+ * One named uniform value bound into an SkSL shader fill via
+ * `RuntimeShaderBuilder` at paint time. `untagged` so the wire form is
+ * the bare JSON scalar/array the author wrote — a number is a `float`,
+ * a number array is a `vec2`/`vec3`/`vec4`, and a hex string is a
+ * `color` mapped to a `vec4` (premultiplied RGBA). The named-uniforms
+ * map on `ShaderFillBody` is optional; a shader may take none.
+ */
+export type ShaderUniformValue = number | Array<number> | string;
 
 export type ShadowBody = { inner: boolean | null, offsetX: number, offsetY: number, blur: number, spread: number, color: string, };
 
@@ -438,15 +500,15 @@ export type SwitchNode = { width: SizingBehavior | null, height: SizingBehavior 
  * two-way binds via `bindings.bind:value`; only the active panel is
  * painted at runtime.
  */
-export type TabsNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+export type TabsNode = { width: SizingBehavior | null, height: SizingBehavior | null,
 /**
  * Tab bar entries; `value` keys the active tab, `label` is shown.
  */
-tabs: Array<SelectOption> | null, 
+tabs: Array<SelectOption> | null,
 /**
  * Currently active tab `value`.
  */
-value: string | null, 
+value: string | null,
 /**
  * Panel subtrees, one per tab (parallel to `tabs` by index).
  */
@@ -460,23 +522,23 @@ export type TextAlignVertical = "top" | "middle" | "bottom";
  * Multi-line writable text input. Like `text_input` but wraps and
  * scrolls vertically; two-way binds via `bindings.bind:value`.
  */
-export type TextAreaNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+export type TextAreaNode = { width: SizingBehavior | null, height: SizingBehavior | null,
 /**
  * Placeholder shown when `value` is empty.
  */
-placeholder: string | null, 
+placeholder: string | null,
 /**
  * Initial value. Two-way binding lives on `bindings.bind:value`.
  */
-value: string | null, 
+value: string | null,
 /**
  * Lucide glyph drawn at the left content edge. See `TextInputNode`.
  */
-leadingIcon: string | null, 
+leadingIcon: string | null,
 /**
  * Lucide glyph drawn at the right content edge. See `TextInputNode`.
  */
-trailingIcon: string | null, 
+trailingIcon: string | null,
 /**
  * Visible-line window before the content scrolls (chat-style).
  */
@@ -493,24 +555,24 @@ export type TextGrowth = "auto" | "fixed-width" | "fixed-width-height";
  * selection-painter wiring lands in the desktop host (Plan 8) once
  * the gesture arena gains `Focus` recognizers.
  */
-export type TextInputNode = { width: SizingBehavior | null, height: SizingBehavior | null, 
+export type TextInputNode = { width: SizingBehavior | null, height: SizingBehavior | null,
 /**
  * Placeholder shown when `value` is empty. Static text — author
  * `bindings.placeholder` if it needs to react to state.
  */
-placeholder: string | null, 
+placeholder: string | null,
 /**
  * Initial value. Two-way binding lives on `bindings.bind:value`,
  * which derive lifts into a `set_*` action and the runtime keeps
  * in sync with the state graph.
  */
-value: string | null, 
+value: string | null,
 /**
  * Lucide glyph drawn at the left content edge (e.g. `mail`, `lock`).
  * The painter insets the text/caret past it so the whole box stays
  * one interactive node. `None` = no leading icon.
  */
-leadingIcon: string | null, 
+leadingIcon: string | null,
 /**
  * Lucide glyph drawn at the right content edge (e.g. `eye` for a
  * password reveal). Decorative in Phase 1 (no toggle behaviour).

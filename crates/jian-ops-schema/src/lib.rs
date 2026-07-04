@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod compat;
+pub mod conversion;
 pub mod design_md;
 pub mod document;
 pub mod error;

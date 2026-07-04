@@ -127,6 +127,17 @@
           "type": "null"
         }
       ]
+    },
+    "conversion": {
+      "description": "Code-to-design conversion ledger.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ConversionSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "definitions": {
@@ -8131,6 +8142,72 @@
           ]
         }
       }
+    },
+    "ConversionSpec": {
+      "description": "Ledger of code-to-design conversion units.",
+      "type": "object",
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ConversionEntry"
+          }
+        }
+      }
+    },
+    "ConversionEntry": {
+      "type": "object",
+      "required": [
+        "key",
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/ConversionKind"
+        },
+        "key": {
+          "description": "Caller-stable key, e.g. \"src/Button.tsx#Button\" or \"route:/settings\".",
+          "type": "string"
+        },
+        "sourcePath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceHash": {
+          "description": "Content fingerprint of the source unit; used for incremental conversion.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodeId": {
+          "description": "Master frame id (component) or screen frame id. None for token entries.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodeIds": {
+          "description": "Source-node id to document-node id mapping for idempotent reruns.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ConversionKind": {
+      "type": "string",
+      "enum": [
+        "token",
+        "component",
+        "screen"
+      ]
     }
   }
 }
