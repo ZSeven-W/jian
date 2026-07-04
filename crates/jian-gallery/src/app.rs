@@ -216,7 +216,7 @@ impl GalleryApp {
             let (label, variant, enabled) = specs[i];
             Button {
                 label,
-                icon_d: None,
+                icon_paths: None,
                 variant,
                 enabled,
                 hovered: self.hover == GalleryHit::Button(i),
@@ -257,7 +257,7 @@ impl GalleryApp {
             .map_or("Select", String::as_str);
         Button {
             label: selected_label,
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Outline,
             enabled: true,
             hovered: self.hover == GalleryHit::SelectAnchor,
@@ -268,7 +268,7 @@ impl GalleryApp {
 
         Button {
             label: "Open menu",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Outline,
             enabled: true,
             hovered: self.hover == GalleryHit::MenuTrigger,
@@ -299,7 +299,7 @@ impl GalleryApp {
 
         Button {
             label: "Open dialog",
-            icon_d: None,
+            icon_paths: None,
             variant: ButtonVariant::Primary,
             enabled: true,
             hovered: self.hover == GalleryHit::DialogButton,
