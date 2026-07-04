@@ -794,6 +794,19 @@ pub struct SceneStroke {
     /// Optional per-side stroke widths in `[top, right, bottom, left]`
     /// order. `None` means the uniform `width` applies to every side.
     pub sides: Option<[f32; 4]>,
+    /// Where the stroke band sits relative to the node edge. Figma's
+    /// default is INSIDE; painters that only stroke centered adjust
+    /// the rect by half a width per [`SceneStrokeAlign`].
+    pub align: SceneStrokeAlign,
+}
+
+/// Stroke band placement relative to the node edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SceneStrokeAlign {
+    Inside,
+    #[default]
+    Center,
+    Outside,
 }
 
 /// Fill paint mode for a [`SceneNode`]. Mirrors
