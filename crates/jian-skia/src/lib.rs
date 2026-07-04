@@ -49,7 +49,10 @@ pub mod surface;
 
 pub use backend::SkiaBackend;
 #[cfg(feature = "textlayout")]
-pub use bundled_fonts::register_bundled_fonts;
+pub use bundled_fonts::{
+    generation as font_generation, list_families, register_bundled_fonts, register_imported_font,
+    remove_imported_font, FamilyMeta, FontBlob, FontSource,
+};
 #[cfg(feature = "textlayout")]
 pub use font_resolve::{
     FontResolver, FontSegment, ResolvedTypeface, SYNTHETIC_BOLD_WIDTH_FACTOR, SYNTHETIC_ITALIC_SKEW,

@@ -22,6 +22,7 @@ use skia_safe::{
     textlayout::{FontCollection, ParagraphBuilder, ParagraphStyle, TextStyle},
     FontMgr, FontStyle,
 };
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::font_resolve::FontResolver;
@@ -53,8 +54,9 @@ const DEFAULT_PAINT_LINE_HEIGHT: f32 = 1.2;
 /// every supported platform; hosts that bundle their own typefaces
 /// can build via [`SkiaMeasure::with_font_manager`].
 pub struct SkiaMeasure {
-    font_collection: Rc<FontCollection>,
+    font_collection: RefCell<Rc<FontCollection>>,
     font_resolver: FontResolver,
+    built_generation: Cell<u64>,
 }
 
 impl SkiaMeasure {
@@ -66,20 +68,32 @@ impl SkiaMeasure {
     /// Use a host-supplied `FontMgr` — for example one that wraps a
     /// `TypefaceFontProvider` populated with bundled `.ttf` blobs.
     pub fn with_font_manager(font_mgr: FontMgr) -> Self {
+        // Read the generation BEFORE building the collection so an import
+        // landing mid-construction is caught by the next `refresh_if_stale`
+        // rather than recorded as already-applied against a stale
+        // collection (see the same reasoning in `FontResolver`).
+        let built_generation = crate::bundled_fonts::generation();
         let font_resolver = FontResolver::new(font_mgr);
-        let mut fc = FontCollection::new();
-        fc.set_default_font_manager(font_resolver.ordered_font_manager(), None);
-        // Measure against the host's bundled design fonts too, so a
-        // family the system lacks shapes with the right metrics here —
-        // otherwise `fit_content` heights are computed from fallback
-        // glyphs and every text block lands at the wrong height.
-        if let Some(provider) = crate::bundled_fonts::bundled_provider() {
-            fc.set_asset_font_manager(Some(provider.into()));
-        }
+        let fc = build_collection(&font_resolver);
         Self {
-            font_collection: Rc::new(fc),
+            font_collection: RefCell::new(Rc::new(fc)),
             font_resolver,
+            built_generation: Cell::new(built_generation),
         }
+    }
+
+    /// Rebuild the cached `FontCollection` when the font registry
+    /// generation has advanced (a runtime import/removal), so an
+    /// already-open document re-measures with the new faces instead of
+    /// returning stale widths. Cheap atomic check on the common path.
+    fn refresh_if_stale(&self) {
+        let current = crate::bundled_fonts::generation();
+        if current == self.built_generation.get() {
+            return;
+        }
+        let fc = build_collection(&self.font_resolver);
+        *self.font_collection.borrow_mut() = Rc::new(fc);
+        self.built_generation.set(current);
     }
 
     fn resolved_natural_width(&self, req: &MeasureRequest<'_>) -> f32 {
@@ -111,6 +125,21 @@ impl SkiaMeasure {
         }
         max_line_width.max(line_width + letter_spacing_width(line_chars, line_spacing))
     }
+}
+
+/// Build a `FontCollection` whose default manager orders imported →
+/// system → bundled → Roboto (via the resolver), with imported + bundled
+/// faces also registered as an asset fallback so a system-missing family
+/// still shapes with the right metrics here — otherwise `fit_content`
+/// heights are computed from fallback glyphs and every text block lands
+/// at the wrong height.
+fn build_collection(font_resolver: &FontResolver) -> FontCollection {
+    let mut fc = FontCollection::new();
+    fc.set_default_font_manager(font_resolver.ordered_font_manager(), None);
+    if let Some(provider) = crate::bundled_fonts::asset_provider() {
+        fc.set_asset_font_manager(Some(provider.into()));
+    }
+    fc
 }
 
 fn letter_spacing_width(chars: usize, spacing: f32) -> f32 {
@@ -154,12 +183,13 @@ impl MeasureBackend for SkiaMeasure {
                 baseline: 0.0,
             };
         }
+        self.refresh_if_stale();
 
         // ParagraphStyle is a per-paragraph default container;
         // line_height is applied per TextStyle below so individual
         // runs can opt in/out independently.
         let style = ParagraphStyle::new();
-        let mut builder = ParagraphBuilder::new(&style, (*self.font_collection).clone());
+        let mut builder = ParagraphBuilder::new(&style, (**self.font_collection.borrow()).clone());
 
         for run in req.runs {
             let mut ts = TextStyle::new();

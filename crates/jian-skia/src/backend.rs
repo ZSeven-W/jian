@@ -402,11 +402,12 @@ fn draw_text_paragraph(canvas: &skia_safe::Canvas, run: &jian_core::render::Text
     };
     use skia_safe::FontMgr;
 
-    // Asset manager carries the host's bundled design fonts (if any),
-    // so a family the system lacks still resolves here instead of
-    // silently falling back to the platform default.
+    // Asset manager carries the host's imported + bundled design fonts
+    // (if any), so a family the system lacks still resolves here instead
+    // of silently falling back to the platform default. Rebuilt fresh
+    // per call, so a runtime font import is picked up immediately.
     let font_provider =
-        crate::bundled_fonts::bundled_provider().unwrap_or_else(TypefaceFontProvider::new);
+        crate::bundled_fonts::asset_provider().unwrap_or_else(TypefaceFontProvider::new);
     let mut collection = FontCollection::new();
     collection.set_default_font_manager(FontMgr::new(), None);
     collection.set_asset_font_manager(Some(font_provider.clone().into()));

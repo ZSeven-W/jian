@@ -5,7 +5,10 @@
 //! typeface for the same family / weight / character tuple. This
 //! resolver owns that policy and caches the per-character result.
 
-use std::{cell::RefCell, collections::HashMap};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
 
 use skia_safe::{
     font_style::{Slant, Weight, Width},
@@ -58,11 +61,18 @@ struct FontKey {
 }
 
 /// Shared typeface resolver for Skia-backed text paths.
+///
+/// The bundled + imported managers are rebuilt lazily whenever the
+/// process-global font registry advances its generation, so a runtime
+/// font import takes effect on the next resolve without reconstructing
+/// the resolver.
 pub struct FontResolver {
     system_mgr: FontMgr,
-    bundled_mgr: Option<FontMgr>,
+    bundled_mgr: RefCell<Option<FontMgr>>,
+    imported_mgr: RefCell<Option<FontMgr>>,
     default_typeface: Option<Typeface>,
     cache: RefCell<FontResolverCache>,
+    built_generation: Cell<u64>,
 }
 
 impl FontResolver {
@@ -72,22 +82,52 @@ impl FontResolver {
     }
 
     pub fn with_default_typeface(font_mgr: FontMgr, default_typeface: Option<Typeface>) -> Self {
+        // Read the generation BEFORE building the providers. If an import
+        // lands between here and the build, the providers are already
+        // fresh and `built_generation` is merely stale-low, so the next
+        // `refresh_if_stale` rebuilds (harmlessly redundant). Reading it
+        // AFTER the build would record a new generation against old
+        // providers — a permanent miss until the next mutation.
+        let built_generation = crate::bundled_fonts::generation();
         let bundled_mgr = crate::bundled_fonts::bundled_provider().map(Into::into);
+        let imported_mgr = crate::bundled_fonts::imported_provider().map(Into::into);
         Self {
             system_mgr: font_mgr,
-            bundled_mgr,
+            bundled_mgr: RefCell::new(bundled_mgr),
+            imported_mgr: RefCell::new(imported_mgr),
             default_typeface,
             cache: RefCell::new(FontResolverCache::default()),
+            built_generation: Cell::new(built_generation),
         }
     }
 
-    /// Build an ordered manager for Skia Paragraph shaping. Direct
-    /// resolver calls still make explicit source decisions so they
-    /// can report the synthetic-bold branch.
+    /// Rebuild the bundled + imported managers and drop the per-char
+    /// cache when the registry generation has advanced since we last
+    /// built. Cheap (one atomic load) on the common no-change path.
+    fn refresh_if_stale(&self) {
+        let current = crate::bundled_fonts::generation();
+        if current == self.built_generation.get() {
+            return;
+        }
+        *self.bundled_mgr.borrow_mut() = crate::bundled_fonts::bundled_provider().map(Into::into);
+        *self.imported_mgr.borrow_mut() = crate::bundled_fonts::imported_provider().map(Into::into);
+        self.cache.borrow_mut().chars.clear();
+        self.built_generation.set(current);
+    }
+
+    /// Build an ordered manager for Skia Paragraph shaping. Imported
+    /// fonts come first (a deliberate override), then system, then the
+    /// app's bundled fonts, then the Roboto default. Direct resolver
+    /// calls still make explicit source decisions so they can report the
+    /// synthetic-bold branch.
     pub fn ordered_font_manager(&self) -> FontMgr {
+        self.refresh_if_stale();
         let mut ordered = OrderedFontMgr::new();
+        if let Some(imported) = &*self.imported_mgr.borrow() {
+            ordered.append(imported.clone());
+        }
         ordered.append(self.system_mgr.clone());
-        if let Some(bundled) = &self.bundled_mgr {
+        if let Some(bundled) = &*self.bundled_mgr.borrow() {
             ordered.append(bundled.clone());
         }
         let mut default_provider = skia_safe::textlayout::TypefaceFontProvider::new();
@@ -105,6 +145,7 @@ impl FontResolver {
         weight: u16,
         italic: bool,
     ) -> Option<ResolvedTypeface> {
+        self.refresh_if_stale();
         let family = primary_font_family(family);
         let key = FontKey {
             family: family.clone(),
@@ -190,10 +231,17 @@ impl FontResolver {
     ) -> Option<ResolvedTypeface> {
         let style = font_style_for(weight, italic);
         if let Some(family) = family {
+            // Imported fonts win over a same-named system font — the user
+            // imported this deliberately.
+            if let Some(imported) = &*self.imported_mgr.borrow() {
+                if let Some(typeface) = family_typeface_covering(imported, family, style, c) {
+                    return Some(resolved(typeface, weight, italic));
+                }
+            }
             if let Some(typeface) = family_typeface_covering(&self.system_mgr, family, style, c) {
                 return Some(resolved(typeface, weight, italic));
             }
-            if let Some(bundled) = &self.bundled_mgr {
+            if let Some(bundled) = &*self.bundled_mgr.borrow() {
                 if let Some(typeface) = family_typeface_covering(bundled, family, style, c) {
                     return Some(resolved(typeface, weight, italic));
                 }
