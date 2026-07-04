@@ -142,9 +142,16 @@ fn styled_segments_fan_out_into_runs() {
 }
 
 #[test]
-fn text_growth_auto_wraps_to_available() {
-    // Default (`auto`) text wraps when the available width is too
-    // narrow, growing the row's height instead of the column's.
+fn text_growth_auto_never_wraps() {
+    // Default (`auto`) text reports its natural single-line extent
+    // and does NOT wrap to the container, even when the column is
+    // much narrower than the content. This is Pencil render-parity
+    // (commit 78e4a7915): wrapping `auto` to the container split
+    // single-line labels onto two lines while the painter (which
+    // honours `text_wrap = false` for `auto`) still drew one line,
+    // so every section holding `auto` text grew taller than
+    // Pencil's. Designs that want wrapping author `fixed-width`
+    // (see `text_growth_fixed_width_honours_authored_width` below).
     let doc = build(
         r##"{
       "version":"0.8.0",
@@ -163,13 +170,13 @@ fn text_growth_auto_wraps_to_available() {
     eng.compute(roots[0], (800.0, 600.0)).unwrap();
     let para = eng.node_rect(doc.tree.get("para").unwrap()).unwrap();
     assert!(
-        para.size.width <= 80.0 + 0.5,
-        "auto wrap must respect column budget, got width={}",
+        para.size.width > 200.0,
+        "auto must report natural extent regardless of the column budget, got width={}",
         para.size.width,
     );
     assert!(
-        para.size.height > 16.0 * 1.4,
-        "wrapped text should occupy 2+ rows, got height={}",
+        para.size.height < 16.0 * 1.4 + 0.5,
+        "auto must stay single-line, got height={}",
         para.size.height,
     );
 }
