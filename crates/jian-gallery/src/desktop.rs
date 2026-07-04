@@ -260,17 +260,17 @@ impl ApplicationHandler for DesktopGallery {
                 self.app.scroll_at(self.cursor, dy, self.viewport());
                 self.request_redraw();
             }
-            winit::event::WindowEvent::KeyboardInput { event, .. } => {
-                if event.state == ElementState::Pressed {
-                    match event.logical_key {
-                        Key::Named(NamedKey::Backspace) => self.app.backspace(self.now_ms()),
-                        Key::Character(ref s) if !s.is_empty() => {
-                            self.app.type_text(s.as_str(), self.now_ms());
-                        }
-                        _ => {}
+            winit::event::WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Pressed =>
+            {
+                match event.logical_key {
+                    Key::Named(NamedKey::Backspace) => self.app.backspace(self.now_ms()),
+                    Key::Character(ref s) if !s.is_empty() => {
+                        self.app.type_text(s.as_str(), self.now_ms());
                     }
-                    self.request_redraw();
+                    _ => {}
                 }
+                self.request_redraw();
             }
             winit::event::WindowEvent::Touch(touch) => {
                 let phase = match touch.phase {

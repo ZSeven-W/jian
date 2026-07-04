@@ -264,6 +264,7 @@ fn font_style(weight: u16, italic: bool) -> FontStyle {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_text_with_fallback(
     canvas: &skia_safe::Canvas,
     text: &str,

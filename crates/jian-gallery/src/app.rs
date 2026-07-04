@@ -383,12 +383,10 @@ impl GalleryApp {
         }
         match hit {
             GalleryHit::SelectAnchor => self.toggle_select(),
-            GalleryHit::SelectRow(row) => {
-                if row < self.select_labels.len() {
-                    self.selected_index = row;
-                    self.select_state.open = false;
-                    self.select_state.pressed = None;
-                }
+            GalleryHit::SelectRow(row) if row < self.select_labels.len() => {
+                self.selected_index = row;
+                self.select_state.open = false;
+                self.select_state.pressed = None;
             }
             GalleryHit::MenuTrigger => self.open_menu(Point2D::new(
                 point.x,
