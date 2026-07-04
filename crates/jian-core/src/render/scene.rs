@@ -49,7 +49,16 @@ pub fn collect_draws(
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
         let offset = root_offset_for(doc, root);
-        walk(doc, layout, root, offset, None, None, &mut out, &mut visited);
+        walk(
+            doc,
+            layout,
+            root,
+            offset,
+            None,
+            None,
+            &mut out,
+            &mut visited,
+        );
     }
     out
 }
@@ -238,7 +247,16 @@ fn walk(
     }
 
     for &child in &node.children {
-        walk(doc, layout, child, root_offset, state, widgets, out, visited);
+        walk(
+            doc,
+            layout,
+            child,
+            root_offset,
+            state,
+            widgets,
+            out,
+            visited,
+        );
     }
 }
 

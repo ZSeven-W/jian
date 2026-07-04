@@ -46,12 +46,10 @@ impl ScreenRouter {
         if self.known.contains(path) {
             true
         } else {
-            self.rejections
-                .borrow_mut()
-                .push(RejectedNav {
-                    verb,
-                    path: path.to_owned(),
-                });
+            self.rejections.borrow_mut().push(RejectedNav {
+                verb,
+                path: path.to_owned(),
+            });
             false
         }
     }
@@ -139,7 +137,11 @@ impl ScreenTable {
     /// Index of the path's synthetic page inside the normalized doc.
     pub fn page_index(&self, path: &str) -> Option<usize> {
         let page_id = self.routes.get(path)?;
-        self.doc.pages.as_ref()?.iter().position(|p| &p.id == page_id)
+        self.doc
+            .pages
+            .as_ref()?
+            .iter()
+            .position(|p| &p.id == page_id)
     }
 
     /// Single-page document for mounting `path`'s screen.
@@ -271,13 +273,16 @@ mod tests {
     fn go_center(rt: &crate::Runtime) -> (f32, f32) {
         let key = rt.document.as_ref().unwrap().tree.get("go").unwrap();
         let r = rt.layout.node_rect(key).expect("go button laid out");
-        (r.min_x() + r.size.width / 2.0, r.min_y() + r.size.height / 2.0)
+        (
+            r.min_x() + r.size.width / 2.0,
+            r.min_y() + r.size.height / 2.0,
+        )
     }
 
     #[test]
     fn reconcile_switches_screen_and_preserves_app_state() {
-        use crate::gesture::pointer::{PointerEvent, PointerPhase};
         use crate::geometry::point;
+        use crate::gesture::pointer::{PointerEvent, PointerPhase};
         use std::rc::Rc;
 
         let doc = two_screen_doc();
