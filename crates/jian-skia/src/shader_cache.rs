@@ -55,10 +55,7 @@ impl ShaderCache {
         if let Some(hit) = self.effects.get(&key) {
             return hit.clone();
         }
-        let compiled = match RuntimeEffect::make_for_shader(sksl, None) {
-            Ok(effect) => Some(effect),
-            Err(_msg) => None,
-        };
+        let compiled = RuntimeEffect::make_for_shader(sksl, None).ok();
         self.compile_count += 1;
         self.effects.insert(key, compiled.clone());
         compiled
