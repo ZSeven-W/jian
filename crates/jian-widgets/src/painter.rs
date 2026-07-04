@@ -192,6 +192,16 @@ pub trait Painter {
         self.fill_round_rect(rect, radius, color);
     }
 
+    /// Begin a Gaussian-blur layer: subsequent draws are captured into
+    /// an offscreen layer that is blurred by `sigma` (px) when the
+    /// matching [`Painter::restore`] pops it. `sigma <= 0` is a plain
+    /// [`Painter::save`]. Backends without layer-filter support fall
+    /// back to `save` (no blur) so callers stay balanced.
+    fn push_blur_layer(&mut self, sigma: f32) {
+        let _ = sigma;
+        self.save();
+    }
+
     fn fill_oval(&mut self, bounds: Rect, color: Color) {
         let radius = bounds.size.x.min(bounds.size.y) / 2.0;
         self.fill_round_rect(bounds, radius, color);

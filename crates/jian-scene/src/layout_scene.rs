@@ -179,11 +179,22 @@ pub struct SceneShader {
     pub fallback: Color,
 }
 
-/// A visual effect painted with a [`SceneNode`]. v1 ships drop
-/// shadow (what the property panel's effects section needs).
+/// Gaussian layer blur — blurs the node's own rendered content
+/// (`LayerBlur`, Figma's "Layer blur"). `radius` is the CSS-style
+/// blur radius in doc px; the painter converts it to a Skia sigma
+/// (`radius / 2`) and applies it as a save-layer image filter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlurEffect {
+    pub radius: f32,
+}
+
+/// A visual effect painted with a [`SceneNode`]. Ships drop shadow
+/// plus a Gaussian layer blur.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Effect {
     DropShadow(DropShadow),
+    /// Blur the node's own content (Figma "Layer blur").
+    Blur(BlurEffect),
 }
 
 /// A paint-only, layout-resolved render scene.
