@@ -182,7 +182,16 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
 
 /// Extract `x`, `y` from a `PenNodeBase` — `(x, y)` pair if either is
 /// present, `None` if neither.
-fn explicit_position(n: &jian_ops_schema::node::PenNode) -> Option<(f32, f32)> {
+///
+/// `pub(crate)` (not just a `node_to_style` implementation detail):
+/// the scene walker (`render::scene`) also reads this to translate a
+/// document ROOT's whole subtree by its authored origin. Taffy has no
+/// containing block for a root node, so the `Position::Absolute` inset
+/// this function drives is honoured for children but silently dropped
+/// for roots — `node_rect` intentionally stays root-relative (a
+/// contract OpenPencil depends on), so the root offset is applied at
+/// the scene/draw layer instead. See `render::scene::root_offset_for`.
+pub(crate) fn explicit_position(n: &jian_ops_schema::node::PenNode) -> Option<(f32, f32)> {
     let base = node_base(n)?;
     match (base.x, base.y) {
         (None, None) => None,

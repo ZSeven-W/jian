@@ -48,7 +48,8 @@ pub fn collect_draws(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, root, None, None, &mut out, &mut visited);
+        let offset = root_offset_for(doc, root);
+        walk(doc, layout, root, offset, None, None, &mut out, &mut visited);
     }
     out
 }
@@ -67,7 +68,17 @@ pub fn collect_draws_with_state(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, root, Some(state), None, &mut out, &mut visited);
+        let offset = root_offset_for(doc, root);
+        walk(
+            doc,
+            layout,
+            root,
+            offset,
+            Some(state),
+            None,
+            &mut out,
+            &mut visited,
+        );
     }
     out
 }
@@ -96,10 +107,12 @@ pub fn collect_draws_with_widgets(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
+        let offset = root_offset_for(doc, root);
         walk(
             doc,
             layout,
             root,
+            offset,
             Some(state),
             Some(ctx),
             &mut out,
@@ -109,11 +122,36 @@ pub fn collect_draws_with_widgets(
     out
 }
 
+/// Authored `(x, y)` on a document ROOT, `(0.0, 0.0)` when unset.
+///
+/// `taffy` computes every document root as an independent tree with no
+/// containing block, so `Position::Absolute` insets driven by
+/// `layout::resolve::node_to_style` (from the same `x`/`y` schema
+/// fields) are honoured for *children* but silently ignored for a
+/// root itself — `LayoutEngine::node_rect` therefore reports every
+/// root at a root-relative `(0, 0)` regardless of its authored
+/// origin. That's intentional: `node_rect` must stay root-relative so
+/// OpenPencil (which applies each root's offset itself) doesn't
+/// double-offset. This walker is the single seam that turns the
+/// authored root origin into an actual draw-position translation,
+/// applied uniformly to the whole subtree below `root`.
+fn root_offset_for(
+    doc: &crate::document::RuntimeDocument,
+    root: crate::document::NodeKey,
+) -> (f32, f32) {
+    doc.tree
+        .nodes
+        .get(root)
+        .and_then(|node| crate::layout::resolve::explicit_position(&node.schema))
+        .unwrap_or((0.0, 0.0))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,
     key: crate::document::NodeKey,
+    root_offset: (f32, f32),
     state: Option<&crate::state::StateGraph>,
     widgets: Option<&WidgetRenderCtx>,
     out: &mut Vec<DrawOp>,
@@ -128,7 +166,19 @@ fn walk(
     let Some(node) = doc.tree.nodes.get(key) else {
         return;
     };
-    let r = layout.node_rect(key);
+    // `node_rect` is root-relative by contract (see `root_offset_for`);
+    // translate by the enclosing root's authored origin here, uniformly
+    // across the whole subtree, so descendants keep their correct
+    // relative position within the root while the root itself lands at
+    // its authored `(x, y)` instead of always at `(0, 0)`.
+    let r = layout.node_rect(key).map(|r| {
+        rect(
+            r.origin.x + root_offset.0,
+            r.origin.y + root_offset.1,
+            r.size.width,
+            r.size.height,
+        )
+    });
     let mut json = serde_json::to_value(&node.schema).ok();
 
     let mut overrides = BindingOverrides::default();
@@ -178,7 +228,7 @@ fn walk(
     }
 
     for &child in &node.children {
-        walk(doc, layout, child, state, widgets, out, visited);
+        walk(doc, layout, child, root_offset, state, widgets, out, visited);
     }
 }
 
@@ -1882,6 +1932,49 @@ mod tests {
         assert!(
             text_ops >= 2,
             "live text_area should wrap into multiple Text ops, got {text_ops}"
+        );
+    }
+
+    #[test]
+    fn root_authored_offset_translates_its_whole_subtree() {
+        // Two document ROOTS (not children of a shared frame) each author
+        // an explicit x/y. taffy has no containing block for a root, so
+        // `Position::Absolute` insets on a root are dropped by
+        // `LayoutEngine::node_rect` (by design — `node_rect` must stay
+        // root-relative for OpenPencil, which applies each root's offset
+        // itself). The scene walker is the one seam that must place each
+        // root's subtree at its authored origin before it's drawn.
+        let rt = doc_with(
+            r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"rectangle", "id":"a", "x":0, "y":0,
+                     "width":50, "height":50,
+                     "fill":[{ "type":"solid", "color":"#ff0000" }] },
+                   { "type":"rectangle", "id":"b", "x":140, "y":20,
+                     "width":50, "height":50,
+                     "fill":[{ "type":"solid", "color":"#00ff00" }] }
+                 ]}"##,
+        );
+        let ops = collect_draws(rt.document.as_ref().unwrap(), &rt.layout);
+        assert_eq!(ops.len(), 2);
+        let rects: Vec<crate::geometry::Rect> = ops
+            .iter()
+            .map(|op| match op {
+                DrawOp::Rect { rect, .. } => *rect,
+                other => panic!("expected Rect, got {:?}", other),
+            })
+            .collect();
+        assert_eq!(
+            rects[0].origin,
+            point(0.0, 0.0),
+            "root 'a' has no authored offset, draws at the origin"
+        );
+        assert_eq!(
+            rects[1].origin,
+            point(140.0, 20.0),
+            "root 'b' authors x=140,y=20 — its subtree must draw at that origin, \
+             not collapse onto root 'a' at (0,0)"
         );
     }
 }
