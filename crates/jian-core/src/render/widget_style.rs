@@ -39,10 +39,10 @@ pub struct InteractionState {
 
 /// Pick the authored override for the highest-priority active state:
 /// disabled > pressed > hover > focused.
-pub fn active_override<'a>(
-    states: Option<&'a WidgetStates>,
+pub fn active_override(
+    states: Option<&WidgetStates>,
     s: InteractionState,
-) -> Option<&'a StyleOverride> {
+) -> Option<&StyleOverride> {
     let st = states?;
     if s.disabled {
         if let Some(o) = st.disabled.as_ref() {
