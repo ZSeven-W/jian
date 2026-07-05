@@ -125,6 +125,39 @@ pub fn register_bundled_fonts(blobs: Vec<Vec<u8>>) {
     bump_generation();
 }
 
+/// Font metadata extracted from raw bytes *without* mutating the
+/// registry. Lets a caller (e.g. the desktop `FontStore`) validate a
+/// file and learn its `(family, style, weight, hash)` — enough to name
+/// the persisted file + index entry — so it can commit the file to disk
+/// BEFORE calling [`register_imported_font`]. Registering first would
+/// leave a live-but-unpersisted font in the process registry if the
+/// subsequent disk write failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedFontMeta {
+    pub family: String,
+    pub style: FontStyleKind,
+    pub weight: u16,
+    pub hash: u64,
+}
+
+/// Validate + parse imported font bytes without touching the registry.
+/// Returns `None` when the bytes are not a font skia can parse or the
+/// face has no family name (same rejection as [`register_imported_font`]).
+/// The `hash` matches what `register_imported_font` computes for the same
+/// bytes, so a file named by this hash lines up with the later blob.
+pub fn parse_imported_font_meta(bytes: &[u8]) -> Option<ImportedFontMeta> {
+    let (family, style, weight) = parse_face_meta(bytes)?;
+    if family.is_empty() {
+        return None;
+    }
+    Some(ImportedFontMeta {
+        family,
+        style,
+        weight,
+        hash: content_hash(bytes),
+    })
+}
+
 /// Register a user-imported font face. Parses family/style/weight from
 /// the bytes; dedups on `(family, style, weight)` with last-import-wins.
 ///
