@@ -142,7 +142,9 @@ pub fn parse_inline(line: &str) -> Vec<MdRun> {
         let mut best: Option<(usize, usize, MdRun)> = None;
         let mut consider = |m: Option<(usize, usize, MdRun)>| {
             if let Some((start, end, run)) = m {
-                if best.as_ref().is_none_or(|(b, _, _)| start < *b) {
+                // `map_or(true, …)` not `is_none_or` — the latter is stable
+                // only since 1.82, above the crate's 1.78 MSRV (clippy CI gate).
+                if best.as_ref().map_or(true, |(b, _, _)| start < *b) {
                     best = Some((start, end, run));
                 }
             }
