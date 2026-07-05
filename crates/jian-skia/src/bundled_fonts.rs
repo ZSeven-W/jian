@@ -297,6 +297,16 @@ pub fn asset_provider() -> Option<TypefaceFontProvider> {
 
 fn provider_for(source: FontSource) -> Option<TypefaceFontProvider> {
     let guard = registry().read().expect("font registry poisoned");
+    // Bail out BEFORE touching skia when nothing of this source is
+    // registered. Constructing a `FontMgr` (DirectWrite on Windows) has real
+    // cost and, from parallel test-worker threads, can crash — and a
+    // `FontResolver` builds a bundled + imported provider on every
+    // construction (e.g. every `NativeBackend::new`), so the empty case is
+    // the common one. The old `OnceLock` `bundled_provider` returned `None`
+    // here too; keep that.
+    if !guard.fonts.iter().any(|f| f.source == source) {
+        return None;
+    }
     let mgr = FontMgr::new();
     let mut provider = TypefaceFontProvider::new();
     let mut any = false;
