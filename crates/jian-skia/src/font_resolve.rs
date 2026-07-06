@@ -77,28 +77,36 @@ pub struct FontResolver {
 
 impl FontResolver {
     pub fn new(font_mgr: FontMgr) -> Self {
-        let default_typeface = font_mgr.legacy_make_typeface(None, FontStyle::default());
-        Self::with_default_typeface(font_mgr, default_typeface)
+        // `legacy_make_typeface` hits DirectWrite on Windows; serialize it
+        // (reentrant — `with_default_typeface` re-locks harmlessly).
+        crate::font_lock::with_font_lock(|| {
+            let default_typeface = font_mgr.legacy_make_typeface(None, FontStyle::default());
+            Self::with_default_typeface(font_mgr, default_typeface)
+        })
     }
 
     pub fn with_default_typeface(font_mgr: FontMgr, default_typeface: Option<Typeface>) -> Self {
-        // Read the generation BEFORE building the providers. If an import
-        // lands between here and the build, the providers are already
-        // fresh and `built_generation` is merely stale-low, so the next
-        // `refresh_if_stale` rebuilds (harmlessly redundant). Reading it
-        // AFTER the build would record a new generation against old
-        // providers — a permanent miss until the next mutation.
-        let built_generation = crate::bundled_fonts::generation();
-        let bundled_mgr = crate::bundled_fonts::bundled_provider().map(Into::into);
-        let imported_mgr = crate::bundled_fonts::imported_provider().map(Into::into);
-        Self {
-            system_mgr: font_mgr,
-            bundled_mgr: RefCell::new(bundled_mgr),
-            imported_mgr: RefCell::new(imported_mgr),
-            default_typeface,
-            cache: RefCell::new(FontResolverCache::default()),
-            built_generation: Cell::new(built_generation),
-        }
+        // Serialize provider construction with all other DirectWrite work
+        // (reentrant under a locked measure/build path).
+        crate::font_lock::with_font_lock(|| {
+            // Read the generation BEFORE building the providers. If an import
+            // lands between here and the build, the providers are already
+            // fresh and `built_generation` is merely stale-low, so the next
+            // `refresh_if_stale` rebuilds (harmlessly redundant). Reading it
+            // AFTER the build would record a new generation against old
+            // providers — a permanent miss until the next mutation.
+            let built_generation = crate::bundled_fonts::generation();
+            let bundled_mgr = crate::bundled_fonts::bundled_provider().map(Into::into);
+            let imported_mgr = crate::bundled_fonts::imported_provider().map(Into::into);
+            Self {
+                system_mgr: font_mgr,
+                bundled_mgr: RefCell::new(bundled_mgr),
+                imported_mgr: RefCell::new(imported_mgr),
+                default_typeface,
+                cache: RefCell::new(FontResolverCache::default()),
+                built_generation: Cell::new(built_generation),
+            }
+        })
     }
 
     /// Rebuild the bundled + imported managers and drop the per-char
@@ -156,7 +164,12 @@ impl FontResolver {
         if let Some(cached) = self.cache.borrow().chars.get(&key) {
             return cached.clone();
         }
-        let resolved = self.resolve_uncached(family.as_deref(), c, weight, italic);
+        // Cache miss → `match_family_style_character` (DirectWrite system font
+        // scan on Windows). Serialize just this call so the per-char cached
+        // fast path above stays lock-free.
+        let resolved = crate::font_lock::with_font_lock(|| {
+            self.resolve_uncached(family.as_deref(), c, weight, italic)
+        });
         self.cache.borrow_mut().chars.insert(key, resolved.clone());
         resolved
     }
@@ -203,19 +216,24 @@ impl FontResolver {
         weight: u16,
         italic: bool,
     ) -> f32 {
-        let mut width = 0.0_f32;
-        for segment in self.segment_text(text, family, weight, italic) {
-            let mut font = Font::new(&segment.typeface, font_size);
-            if segment.synthetic_italic {
-                font.set_skew_x(SYNTHETIC_ITALIC_SKEW);
+        // Serialize segmentation (resolves system typefaces via DirectWrite)
+        // + glyph-advance measurement with all other font work. Reentrant, so
+        // this is a no-op re-lock when called from within `SkiaMeasure`.
+        crate::font_lock::with_font_lock(|| {
+            let mut width = 0.0_f32;
+            for segment in self.segment_text(text, family, weight, italic) {
+                let mut font = Font::new(&segment.typeface, font_size);
+                if segment.synthetic_italic {
+                    font.set_skew_x(SYNTHETIC_ITALIC_SKEW);
+                }
+                let (mut advance, _) = font.measure_str(&segment.text, None);
+                if segment.synthetic_bold {
+                    advance *= SYNTHETIC_BOLD_WIDTH_FACTOR;
+                }
+                width += advance;
             }
-            let (mut advance, _) = font.measure_str(&segment.text, None);
-            if segment.synthetic_bold {
-                advance *= SYNTHETIC_BOLD_WIDTH_FACTOR;
-            }
-            width += advance;
-        }
-        width
+            width
+        })
     }
 
     pub fn cache_len(&self) -> usize {

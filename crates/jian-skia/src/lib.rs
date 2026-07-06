@@ -36,6 +36,9 @@ pub mod backend;
 pub mod bundled_fonts;
 pub mod color;
 pub mod convert;
+// Always compiled (not `textlayout`-gated): the non-textlayout paint path
+// (`backend::draw_text`) also creates a `FontMgr` and must serialize with it.
+pub mod font_lock;
 #[cfg(feature = "textlayout")]
 pub mod font_resolve;
 pub mod icons;
@@ -54,6 +57,7 @@ pub use bundled_fonts::{
     register_imported_font, remove_imported_font, FamilyMeta, FontBlob, FontSource,
     ImportedFontMeta,
 };
+pub use font_lock::with_font_lock;
 #[cfg(feature = "textlayout")]
 pub use font_resolve::{
     FontResolver, FontSegment, ResolvedTypeface, SYNTHETIC_BOLD_WIDTH_FACTOR, SYNTHETIC_ITALIC_SKEW,

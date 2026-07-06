@@ -97,32 +97,40 @@ pub fn register_bundled_fonts(blobs: Vec<Vec<u8>>) {
     if blobs.is_empty() {
         return;
     }
-    let reg = registry();
-    {
-        let guard = reg.read().expect("font registry poisoned");
-        if guard.fonts.iter().any(|f| f.source == FontSource::Bundled) {
-            return; // first call wins
+    // Global lock order: `font_lock` OUTER, registry INNER — the same order the
+    // measure/paint path uses (it holds `font_lock` then reads the registry via
+    // `asset_provider`). Taking the registry first here and `font_lock` second
+    // (inside `parse_face_meta`) would be the reverse order and could deadlock
+    // ABBA against a concurrent measure. `font_lock` is reentrant, so the
+    // `parse_face_meta` calls below re-lock harmlessly.
+    crate::font_lock::with_font_lock(|| {
+        let reg = registry();
+        {
+            let guard = reg.read().expect("font registry poisoned");
+            if guard.fonts.iter().any(|f| f.source == FontSource::Bundled) {
+                return; // first call wins
+            }
         }
-    }
-    let mut guard = reg.write().expect("font registry poisoned");
-    // Re-check under the write lock in case of a race.
-    if guard.fonts.iter().any(|f| f.source == FontSource::Bundled) {
-        return;
-    }
-    for bytes in blobs {
-        let (family, style, weight) =
-            parse_face_meta(&bytes).unwrap_or_else(|| (String::new(), FontStyleKind::Normal, 400));
-        guard.fonts.push(FontBlob {
-            family,
-            style,
-            weight,
-            hash: content_hash(&bytes),
-            source: FontSource::Bundled,
-            bytes: Arc::new(bytes),
-        });
-    }
-    drop(guard);
-    bump_generation();
+        let mut guard = reg.write().expect("font registry poisoned");
+        // Re-check under the write lock in case of a race.
+        if guard.fonts.iter().any(|f| f.source == FontSource::Bundled) {
+            return;
+        }
+        for bytes in blobs {
+            let (family, style, weight) = parse_face_meta(&bytes)
+                .unwrap_or_else(|| (String::new(), FontStyleKind::Normal, 400));
+            guard.fonts.push(FontBlob {
+                family,
+                style,
+                weight,
+                hash: content_hash(&bytes),
+                source: FontSource::Bundled,
+                bytes: Arc::new(bytes),
+            });
+        }
+        drop(guard);
+        bump_generation();
+    });
 }
 
 /// Font metadata extracted from raw bytes *without* mutating the
@@ -167,46 +175,50 @@ pub fn parse_imported_font_meta(bytes: &[u8]) -> Option<ImportedFontMeta> {
 /// bytes-equal tiebreak, so a `u64` hash collision can never silently
 /// drop a distinct font.
 pub fn register_imported_font(bytes: Vec<u8>) -> Result<FontBlob, String> {
-    let (family, style, weight) =
-        parse_face_meta(&bytes).ok_or_else(|| "not a valid ttf/otf font file".to_string())?;
-    if family.is_empty() {
-        return Err("font file has no family name".to_string());
-    }
-    let hash = content_hash(&bytes);
-    let mut guard = registry().write().expect("font registry poisoned");
-
-    if let Some(existing) = guard.fonts.iter().find(|f| {
-        f.source == FontSource::Imported
-            && f.family == family
-            && f.style == style
-            && f.weight == weight
-    }) {
-        // Same face key + byte-identical file → nothing changed.
-        if existing.hash == hash && existing.bytes.as_slice() == bytes.as_slice() {
-            return Ok(existing.clone());
+    // Global lock order: `font_lock` OUTER, registry INNER (see
+    // `register_bundled_fonts`). `parse_face_meta` below re-locks reentrantly.
+    crate::font_lock::with_font_lock(|| {
+        let (family, style, weight) =
+            parse_face_meta(&bytes).ok_or_else(|| "not a valid ttf/otf font file".to_string())?;
+        if family.is_empty() {
+            return Err("font file has no family name".to_string());
         }
-    }
+        let hash = content_hash(&bytes);
+        let mut guard = registry().write().expect("font registry poisoned");
 
-    let blob = FontBlob {
-        family: family.clone(),
-        style,
-        weight,
-        hash,
-        source: FontSource::Imported,
-        bytes: Arc::new(bytes),
-    };
-    // Replace any existing face with the same key (last-import-wins),
-    // else append.
-    guard.fonts.retain(|f| {
-        !(f.source == FontSource::Imported
-            && f.family == family
-            && f.style == style
-            && f.weight == weight)
-    });
-    guard.fonts.push(blob.clone());
-    drop(guard);
-    bump_generation();
-    Ok(blob)
+        if let Some(existing) = guard.fonts.iter().find(|f| {
+            f.source == FontSource::Imported
+                && f.family == family
+                && f.style == style
+                && f.weight == weight
+        }) {
+            // Same face key + byte-identical file → nothing changed.
+            if existing.hash == hash && existing.bytes.as_slice() == bytes.as_slice() {
+                return Ok(existing.clone());
+            }
+        }
+
+        let blob = FontBlob {
+            family: family.clone(),
+            style,
+            weight,
+            hash,
+            source: FontSource::Imported,
+            bytes: Arc::new(bytes),
+        };
+        // Replace any existing face with the same key (last-import-wins),
+        // else append.
+        guard.fonts.retain(|f| {
+            !(f.source == FontSource::Imported
+                && f.family == family
+                && f.style == style
+                && f.weight == weight)
+        });
+        guard.fonts.push(blob.clone());
+        drop(guard);
+        bump_generation();
+        Ok(blob)
+    })
 }
 
 /// Remove every imported face of `family` (remove targets the whole
@@ -269,61 +281,77 @@ pub fn imported_provider() -> Option<TypefaceFontProvider> {
 /// the ordered default manager). Returns `None` when nothing at all is
 /// registered.
 pub fn asset_provider() -> Option<TypefaceFontProvider> {
-    let guard = registry().read().expect("font registry poisoned");
-    if guard.fonts.is_empty() {
-        return None;
-    }
-    let mgr = FontMgr::new();
-    let mut provider = TypefaceFontProvider::new();
-    let ordered = guard
-        .fonts
-        .iter()
-        .filter(|f| f.source == FontSource::Imported)
-        .chain(
-            guard
-                .fonts
-                .iter()
-                .filter(|f| f.source == FontSource::Bundled),
-        );
-    let mut any = false;
-    for blob in ordered {
-        if let Some(tf) = mgr.new_from_data(&blob.bytes, None) {
-            provider.register_typeface(tf, None);
-            any = true;
+    // Global lock order: `font_lock` OUTER, registry INNER (see
+    // `register_bundled_fonts`). Reentrant under a locked build/measure path.
+    crate::font_lock::with_font_lock(|| {
+        let guard = registry().read().expect("font registry poisoned");
+        if guard.fonts.is_empty() {
+            return None;
         }
-    }
-    any.then_some(provider)
+        let mgr = FontMgr::new();
+        let mut provider = TypefaceFontProvider::new();
+        let ordered = guard
+            .fonts
+            .iter()
+            .filter(|f| f.source == FontSource::Imported)
+            .chain(
+                guard
+                    .fonts
+                    .iter()
+                    .filter(|f| f.source == FontSource::Bundled),
+            );
+        let mut any = false;
+        for blob in ordered {
+            if let Some(tf) = mgr.new_from_data(&blob.bytes, None) {
+                provider.register_typeface(tf, None);
+                any = true;
+            }
+        }
+        any.then_some(provider)
+    })
 }
 
 fn provider_for(source: FontSource) -> Option<TypefaceFontProvider> {
-    let guard = registry().read().expect("font registry poisoned");
-    // Bail out BEFORE touching skia when nothing of this source is
-    // registered. Constructing a `FontMgr` (DirectWrite on Windows) has real
-    // cost and, from parallel test-worker threads, can crash — and a
-    // `FontResolver` builds a bundled + imported provider on every
-    // construction (e.g. every `NativeBackend::new`), so the empty case is
-    // the common one. The old `OnceLock` `bundled_provider` returned `None`
-    // here too; keep that.
-    if !guard.fonts.iter().any(|f| f.source == source) {
-        return None;
-    }
-    let mgr = FontMgr::new();
-    let mut provider = TypefaceFontProvider::new();
-    let mut any = false;
-    for blob in guard.fonts.iter().filter(|f| f.source == source) {
-        if let Some(tf) = mgr.new_from_data(&blob.bytes, None) {
-            provider.register_typeface(tf, None);
-            any = true;
+    // Global lock order: `font_lock` OUTER, registry INNER (see
+    // `register_bundled_fonts`). Reentrant under a locked build/measure path.
+    crate::font_lock::with_font_lock(|| {
+        let guard = registry().read().expect("font registry poisoned");
+        // Bail out BEFORE touching skia when nothing of this source is
+        // registered. Constructing a `FontMgr` (DirectWrite on Windows) has
+        // real cost and, under concurrent access, can crash — and a
+        // `FontResolver` builds a bundled + imported provider on every
+        // construction (e.g. every `NativeBackend::new`), so the empty case is
+        // the common one. The old `OnceLock` `bundled_provider` returned `None`
+        // here too; keep that.
+        if !guard.fonts.iter().any(|f| f.source == source) {
+            return None;
         }
-    }
-    any.then_some(provider)
+        let mgr = FontMgr::new();
+        let mut provider = TypefaceFontProvider::new();
+        let mut any = false;
+        for blob in guard.fonts.iter().filter(|f| f.source == source) {
+            if let Some(tf) = mgr.new_from_data(&blob.bytes, None) {
+                provider.register_typeface(tf, None);
+                any = true;
+            }
+        }
+        any.then_some(provider)
+    })
 }
 
 /// Extract `(family, style, weight)` from raw font bytes via skia. Returns
 /// `None` when the bytes are not a font skia can parse.
 fn parse_face_meta(bytes: &[u8]) -> Option<(String, FontStyleKind, u16)> {
-    let mgr = FontMgr::new();
-    let typeface = mgr.new_from_data(bytes, None)?;
+    // `FontMgr::new()` is DirectWrite on Windows; serialize with all other
+    // font work (reentrant when called from within a locked build path).
+    crate::font_lock::with_font_lock(|| {
+        let mgr = FontMgr::new();
+        let typeface = mgr.new_from_data(bytes, None)?;
+        parse_face_meta_inner(&typeface)
+    })
+}
+
+fn parse_face_meta_inner(typeface: &skia_safe::Typeface) -> Option<(String, FontStyleKind, u16)> {
     let family = typeface.family_name();
     let fs = typeface.font_style();
     let weight = (*fs.weight()).clamp(1, 1000) as u16;

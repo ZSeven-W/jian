@@ -284,13 +284,19 @@ fn draw_canvas(
 }
 
 fn draw_text(canvas: &skia_safe::Canvas, run: &jian_core::render::TextRun) {
-    #[cfg(feature = "textlayout")]
-    {
-        if draw_text_paragraph(canvas, run) {
-            return;
+    // Both shaping paths below build a `FontMgr` (DirectWrite on Windows) and
+    // match system typefaces; serialize the whole draw with every other
+    // DirectWrite user so a concurrent measure/paint on another thread can't
+    // segfault. Reentrant, so nesting under a locked caller is a no-op.
+    crate::font_lock::with_font_lock(|| {
+        #[cfg(feature = "textlayout")]
+        {
+            if draw_text_paragraph(canvas, run) {
+                return;
+            }
         }
-    }
-    draw_text_singleline(canvas, run);
+        draw_text_singleline(canvas, run);
+    });
 }
 
 /// Single-line shaping path (no `textlayout`). Splits on `\n`, runs

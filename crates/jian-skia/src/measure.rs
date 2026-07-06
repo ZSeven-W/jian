@@ -62,24 +62,29 @@ pub struct SkiaMeasure {
 impl SkiaMeasure {
     /// Use the platform's default `FontMgr` (system fonts).
     pub fn new() -> Self {
-        Self::with_font_manager(FontMgr::default())
+        // `FontMgr::default()` touches DirectWrite on Windows; serialize it
+        // with all other font work (reentrant — `with_font_manager` re-locks
+        // harmlessly).
+        crate::font_lock::with_font_lock(|| Self::with_font_manager(FontMgr::default()))
     }
 
     /// Use a host-supplied `FontMgr` — for example one that wraps a
     /// `TypefaceFontProvider` populated with bundled `.ttf` blobs.
     pub fn with_font_manager(font_mgr: FontMgr) -> Self {
-        // Read the generation BEFORE building the collection so an import
-        // landing mid-construction is caught by the next `refresh_if_stale`
-        // rather than recorded as already-applied against a stale
-        // collection (see the same reasoning in `FontResolver`).
-        let built_generation = crate::bundled_fonts::generation();
-        let font_resolver = FontResolver::new(font_mgr);
-        let fc = build_collection(&font_resolver);
-        Self {
-            font_collection: RefCell::new(Rc::new(fc)),
-            font_resolver,
-            built_generation: Cell::new(built_generation),
-        }
+        crate::font_lock::with_font_lock(|| {
+            // Read the generation BEFORE building the collection so an import
+            // landing mid-construction is caught by the next `refresh_if_stale`
+            // rather than recorded as already-applied against a stale
+            // collection (see the same reasoning in `FontResolver`).
+            let built_generation = crate::bundled_fonts::generation();
+            let font_resolver = FontResolver::new(font_mgr);
+            let fc = build_collection(&font_resolver);
+            Self {
+                font_collection: RefCell::new(Rc::new(fc)),
+                font_resolver,
+                built_generation: Cell::new(built_generation),
+            }
+        })
     }
 
     /// Rebuild the cached `FontCollection` when the font registry
@@ -183,6 +188,17 @@ impl MeasureBackend for SkiaMeasure {
                 baseline: 0.0,
             };
         }
+        // Serialize the whole shape/measure against every other DirectWrite
+        // user (a paint pass, another thread's measure) — skia's Windows font
+        // backend segfaults under concurrent access. Reentrant, so the
+        // `refresh_if_stale` → `build_collection` → `asset_provider` nesting
+        // below is fine.
+        crate::font_lock::with_font_lock(|| self.measure_locked(req))
+    }
+}
+
+impl SkiaMeasure {
+    fn measure_locked(&self, req: &MeasureRequest<'_>) -> MeasureResult {
         self.refresh_if_stale();
 
         // ParagraphStyle is a per-paragraph default container;
