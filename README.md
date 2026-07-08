@@ -1,5 +1,7 @@
 <div align="center">
 
+  <img src="./assets/logo.png" alt="Jian logo" width="128" />
+
 # Jian · 简
 
 ### *One `.op` file. A native window. AI in the loop. Pure Rust.*
