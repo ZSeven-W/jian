@@ -5,7 +5,7 @@
 //! font enumeration / paragraph shaping from multiple threads. In production
 //! this happens whenever one thread measures a layout while another paints or
 //! measures on its own — e.g. the CLI standard-mode design route runs
-//! `run_design_worker` → `editor_state_to_layout_scene` → [`SkiaMeasure`] off
+//! `run_design_worker` → `editor_state_to_layout_scene` → `SkiaMeasure` off
 //! the UI thread while the UI thread keeps painting. A single global lock
 //! around every font / measure / draw entry keeps DirectWrite effectively
 //! single-threaded.
@@ -22,7 +22,7 @@
 //! Native-only: `jian-skia` is never compiled for wasm (the browser renders
 //! through CanvasKit), so `Mutex` / `thread_local` are always available.
 //!
-//! [`SkiaMeasure`]: crate::measure::SkiaMeasure
+//! `SkiaMeasure`: crate::measure::SkiaMeasure
 
 use std::cell::Cell;
 use std::sync::Mutex;

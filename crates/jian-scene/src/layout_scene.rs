@@ -5,7 +5,7 @@
 //! current canvas pixel-for-pixel, WITHOUT depending on the editor's
 //! `Document` (which mixes in selection / chat / history / UI state).
 //!
-//! Distinctions from [`op_editor_core::EditorState`]:
+//! Distinctions from `op_editor_core::EditorState`:
 //!
 //! - **No editor state.** `LayoutScene` carries no `selected`,
 //!   `tool`, `viewport`, `chat`, `history`, `components`, `ui`. The

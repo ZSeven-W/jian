@@ -802,7 +802,7 @@ fn clamp_visible_lines(json: &Value, lines: &[String]) -> Vec<String> {
     }
 }
 
-/// Live render of a text widget driven by its runtime [`TextInputState`]
+/// Live render of a text widget driven by its runtime [`crate::text_input::TextInputState`]
 /// (typed text, blinking caret, selection) rather than the schema's
 /// static `value`. Used by preview mode via [`collect_draws_with_widgets`].
 /// Caret + selection only paint when the node is focused.

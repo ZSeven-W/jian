@@ -181,7 +181,10 @@ jobs:
         with:
           key: textlayout-${{ matrix.target }}
       - run: cargo build -p jian-skia --features textlayout --target ${{ matrix.target }}
-      - run: cargo test  -p jian-skia --features textlayout --target ${{ matrix.target }}
+      - if: runner.os != 'Windows'
+        run: cargo test -p jian-skia --features textlayout --target ${{ matrix.target }}
+      - if: runner.os == 'Windows'
+        run: cargo test -p jian-skia --features textlayout --target ${{ matrix.target }} -- --test-threads=1
 
   # Plan 18 ASP feature-gate matrix. The default-features `test`
   # job above doesn't exercise `dev-asp` / `prod-asp`, so the prod

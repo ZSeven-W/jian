@@ -76,7 +76,7 @@ fn role_to_kind(role: &str) -> Option<WidgetKind> {
 }
 
 /// Every `base.role` string the promote table honours — derived from
-/// [`ROLE_TABLE`], so downstream skill/prompt parity tests can never
+/// `ROLE_TABLE`, so downstream skill/prompt parity tests can never
 /// drift from the actual lookup.
 pub fn promotable_roles() -> impl Iterator<Item = &'static str> {
     ROLE_TABLE.iter().map(|(role, _)| *role)
@@ -474,7 +474,7 @@ pub fn promote_document(doc: &mut PenDocument) -> Vec<PromoteNote> {
 
 /// Promote explicitly marked frames in a flat forest (slice of top-level nodes).
 ///
-/// Thin public wrapper over [`promote_in_slice`] for callers that already hold
+/// Thin public wrapper over `promote_in_slice` for callers that already hold
 /// a `Vec<PenNode>` forest without a full [`PenDocument`] context — e.g. the
 /// AI orchestrator's generated-subtree pipeline. Recurses into child containers
 /// exactly as [`promote_document`] does.
