@@ -3,7 +3,7 @@
 //! container is divided into N equal cells; the active cell paints a raised
 //! pill, inactive cells paint muted text (hovered inactive brightens).
 
-use crate::{Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{HorizontalAlign, Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 const FONT_FAMILY: &str = "Inter";
 const CONTAINER_RADIUS: f32 = 6.0;
@@ -71,19 +71,13 @@ impl Tabs<'_> {
             if label.is_empty() {
                 continue;
             }
-            let text_w = p.measure_text(label, FONT_SIZE);
-            let origin = Point2D::new(
-                cell.origin.x + (cell.size.x - text_w) / 2.0,
-                crate::centered_text_baseline_y(cell, FONT_SIZE),
-            );
-            let layout = TextLayout::single_run(
-                label,
-                FONT_FAMILY,
-                FONT_SIZE,
-                text_color.to_jian(),
-                Point2D::new(0.0, 0.0),
-            );
-            p.draw_text(&layout, origin);
+            TextBox::new(label)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(FONT_SIZE)
+                .with_color(text_color)
+                .with_horizontal_align(HorizontalAlign::Center)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(p, cell);
         }
     }
 
@@ -126,10 +120,11 @@ impl Tabs<'_> {
 
     /// Paint a content-width strip at precomputed `rects` (from `content_rects`).
     /// The active tab is emphasized per `style`; an inactive hovered tab gets a
-    /// `button_hover` wash. The label sits at `leading_pad` from each rect's
-    /// left; when `chevron_on_active` the active tab gets a trailing chevron-down
-    /// (a tab that is also a dropdown trigger). `font_size <= 0` → density-free
-    /// default. The caller clips/culls (e.g. a scrolling band) around this call.
+    /// `button_hover` wash. The label is centered inside a content box inset by
+    /// `leading_pad`; when `chevron_on_active` the active tab reserves trailing
+    /// room for a chevron-down (a tab that is also a dropdown trigger).
+    /// `font_size <= 0` → density-free default. The caller clips/culls (e.g. a
+    /// scrolling band) around this call.
     #[allow(clippy::too_many_arguments)]
     pub fn paint_content(
         &self,
@@ -163,18 +158,24 @@ impl Tabs<'_> {
             };
             if let Some(label) = self.labels.get(i) {
                 if !label.is_empty() {
-                    let origin = Point2D::new(
+                    let trailing = if is_active && chevron_on_active {
+                        13.0
+                    } else {
+                        leading_pad
+                    };
+                    let label_rect = Rect::xywh(
                         r.origin.x + leading_pad,
-                        crate::centered_text_baseline_y(*r, fs),
+                        r.origin.y,
+                        (r.size.x - leading_pad - trailing).max(0.0),
+                        r.size.y,
                     );
-                    let layout = TextLayout::single_run(
-                        label,
-                        FONT_FAMILY,
-                        fs,
-                        color.to_jian(),
-                        Point2D::new(0.0, 0.0),
-                    );
-                    p.draw_text(&layout, origin);
+                    TextBox::new(label)
+                        .with_font_family(FONT_FAMILY)
+                        .with_font_size(fs)
+                        .with_color(color)
+                        .with_horizontal_align(HorizontalAlign::Center)
+                        .with_vertical_align(VerticalAlign::Center)
+                        .paint(p, label_rect);
                 }
             }
             if is_active && chevron_on_active {

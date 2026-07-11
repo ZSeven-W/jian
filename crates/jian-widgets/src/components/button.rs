@@ -1,4 +1,4 @@
-use crate::{Color, Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{Color, HorizontalAlign, Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 const RADIUS: f32 = 6.0;
 const ICON_LABEL_GAP: f32 = 6.0;
@@ -76,7 +76,8 @@ impl Button<'_> {
             text_color = text_color.with_alpha(0.5);
         }
 
-        let label_width = p.measure_text(self.label, font_size);
+        let label_width =
+            p.measure_text_family_styled(self.label, font_size, FONT_FAMILY, 400, false);
         let icon_size = font_size + 3.0;
         let has_icon = self.icon_paths.is_some();
         let has_label = !self.label.is_empty();
@@ -86,28 +87,54 @@ impl Button<'_> {
         } else {
             0.0
         };
-        let total_width = icon_width + gap + label_width;
-        let mut x = rect.origin.x + (rect.size.x - total_width).max(0.0) / 2.0;
+        let available_width = rect.size.x.max(0.0);
+        let label_box_width = label_width.min((available_width - icon_width - gap).max(0.0));
+        let visible_gap = if has_icon && label_box_width > 0.0 {
+            gap
+        } else {
+            0.0
+        };
+        let visible_width = icon_width + visible_gap + label_box_width;
+        let mut x = rect.origin.x + (available_width - visible_width) / 2.0;
+
+        p.save();
+        p.clip_rect(rect);
 
         if let Some(paths) = self.icon_paths {
             let top_left = Point2D::new(x, rect.origin.y + (rect.size.y - icon_size) / 2.0);
             for d in paths {
                 p.stroke_svg_path(d, top_left, icon_size, text_color, 1.75);
             }
-            x += icon_size + gap;
+            x += icon_size + visible_gap;
         }
 
-        if has_label {
-            let text_origin = Point2D::new(x, crate::centered_text_baseline_y(rect, font_size));
-            let layout = TextLayout::single_run(
-                self.label,
-                FONT_FAMILY,
-                font_size,
-                text_color.to_jian(),
-                Point2D::new(0.0, 0.0),
+        if label_box_width > 0.0 {
+            let label_center = x + label_box_width / 2.0;
+            let safe_left = if has_icon {
+                x - visible_gap
+            } else {
+                rect.origin.x
+            };
+            let safe_right = rect.origin.x + available_width;
+            let half_width = (label_center - safe_left)
+                .min(safe_right - label_center)
+                .max(0.0);
+            let label_rect = Rect::xywh(
+                label_center - half_width,
+                rect.origin.y,
+                half_width * 2.0,
+                rect.size.y,
             );
-            p.draw_text(&layout, text_origin);
+            TextBox::new(self.label)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(font_size)
+                .with_color(text_color)
+                .with_horizontal_align(HorizontalAlign::Center)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(p, label_rect);
         }
+
+        p.restore();
     }
 
     pub fn hit(rect: Rect, point: Point2D) -> bool {
@@ -258,10 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn label_sits_on_the_centered_baseline_not_top_left() {
-        // Painter::draw_text is BASELINE-relative; the label y must be the
-        // centered baseline (center + font_size*0.35), NOT the (h - fs)/2
-        // top-left form — else text rides ~font_size too high in host chrome.
+    fn label_uses_a_top_left_origin_centered_in_the_control() {
         let t = Tokens::dark();
         let rect = Rect::xywh(0.0, 0.0, 80.0, 30.0);
         let mut p = CapturePainter::default();
@@ -276,9 +300,7 @@ mod tests {
         }
         .paint(&mut p, rect, &t);
         let (_, origin, _) = p.texts().next().expect("label should be painted");
-        assert!((origin.y - crate::centered_text_baseline_y(rect, 13.0)).abs() < 0.01);
-        // And it must be well below the wrong top-left position.
-        assert!(origin.y > rect.origin.y + (rect.size.y - 13.0) / 2.0 + 5.0);
+        assert!((origin.y - (rect.origin.y + (rect.size.y - 13.0) / 2.0)).abs() < 0.01);
     }
 
     #[test]
