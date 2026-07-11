@@ -74,16 +74,19 @@ impl FeedbackSink for DesktopFeedback {
 #[async_trait(?Send)]
 impl AsyncFeedback for DesktopFeedback {
     async fn confirm(&self, title: &str, message: &str) -> bool {
-        // `MessageDialog::show()` returns a `MessageDialogResult`
-        // describing which button the user picked. `Yes` / `Ok` map to
-        // confirm; anything else (Cancel, dismissed via Esc, No) is a
-        // rejection.
-        let result = MessageDialog::new()
-            .set_level(MessageLevel::Info)
-            .set_title(title)
-            .set_description(message)
-            .set_buttons(MessageButtons::YesNo)
-            .show();
+        let title = title.to_owned();
+        let message = message.to_owned();
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        std::thread::spawn(move || {
+            let result = MessageDialog::new()
+                .set_level(MessageLevel::Info)
+                .set_title(title)
+                .set_description(message)
+                .set_buttons(MessageButtons::YesNo)
+                .show();
+            let _ = sender.send(result);
+        });
+        let result = receiver.await.unwrap_or(MessageDialogResult::Cancel);
         matches!(
             result,
             MessageDialogResult::Yes | MessageDialogResult::Ok | MessageDialogResult::Custom(_)
