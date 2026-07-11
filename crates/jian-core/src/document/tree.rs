@@ -69,6 +69,17 @@ impl NodeTree {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
+
+    /// Stable pre-order traversal derived from explicit child links.
+    pub fn keys_top_down(&self) -> Vec<NodeKey> {
+        let mut ordered = Vec::with_capacity(self.nodes.len());
+        let mut stack: Vec<NodeKey> = self.roots.iter().rev().copied().collect();
+        while let Some(key) = stack.pop() {
+            ordered.push(key);
+            stack.extend(self.nodes[key].children.iter().rev().copied());
+        }
+        ordered
+    }
 }
 
 impl Default for NodeTree {
@@ -165,5 +176,21 @@ mod tests {
         let r2 = t.get("r2").unwrap();
         assert_eq!(t.nodes[r1].parent, Some(root));
         assert_eq!(t.nodes[r2].parent, Some(root));
+    }
+
+    #[test]
+    fn keys_top_down_is_explicit_parent_before_child_order() {
+        let mut tree = NodeTree::new();
+        let root = tree.insert_subtree(
+            frame(
+                "root",
+                vec![frame("nested", vec![rect("leaf")]), rect("peer")],
+            ),
+            None,
+        );
+        let nested = tree.get("nested").unwrap();
+        let leaf = tree.get("leaf").unwrap();
+        let peer = tree.get("peer").unwrap();
+        assert_eq!(tree.keys_top_down(), vec![root, nested, leaf, peer]);
     }
 }

@@ -111,7 +111,7 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
         c.height.as_ref(),
         Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
     );
-    let mut style = Style {
+    Style {
         display: Display::Flex,
         size: Size {
             width: resolve_sizing(c.width.as_ref()),
@@ -131,9 +131,7 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
             height: gap_lp,
         },
         ..Default::default()
-    };
-    apply_limits(&mut style, &c.limits);
-    style
+    }
 }
 
 /// Map optional authored bounds onto taffy's min/max dimensions.
@@ -174,7 +172,7 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             ..Default::default()
         },
         _ => {
-            let (w, h, limits) = leaf_size_and_limits(n);
+            let (w, h, _) = leaf_size_and_limits(n);
             // A fixed (Number) leaf must not be flex-shrunk below its size:
             // TS sums fixed sizes and shares only the remainder among
             // fill_container, whereas taffy's default `flex_shrink = 1`
@@ -184,18 +182,14 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             // flex-share its row, so squares keep their size (matches TS).
             let fixed = matches!(w, Some(SizingBehavior::Number(_)))
                 && matches!(h, Some(SizingBehavior::Number(_)));
-            let mut style = Style {
+            Style {
                 size: Size {
                     width: resolve_sizing(w),
                     height: resolve_sizing(h),
                 },
                 flex_shrink: if fixed { 0.0 } else { 1.0 },
                 ..Default::default()
-            };
-            if let Some(limits) = limits {
-                apply_limits(&mut style, limits);
             }
-            style
         }
     };
     if let Some((x, y)) = explicit_position(n) {
@@ -206,6 +200,19 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             right: LengthPercentageAuto::Auto,
             bottom: LengthPercentageAuto::Auto,
         };
+    }
+    style
+}
+
+/// Responsive style conversion: legacy conversion plus sanitized min/max bounds.
+pub(crate) fn node_to_style_responsive(
+    node: &jian_ops_schema::node::PenNode,
+    warnings: &mut Vec<String>,
+) -> Style {
+    let mut style = node_to_style(node);
+    if let (Some(base), Some(limits)) = (node_base(node), node_limits(node)) {
+        let limits = limits.sanitized(&base.id, warnings);
+        apply_limits(&mut style, &limits);
     }
     style
 }
@@ -256,6 +263,34 @@ fn node_base(
         PenNode::Tabs(t) => &t.base,
         _ => return None,
     })
+}
+
+fn node_limits(
+    node: &jian_ops_schema::node::PenNode,
+) -> Option<&jian_ops_schema::sizing::SizeLimits> {
+    use jian_ops_schema::node::PenNode;
+    match node {
+        PenNode::Frame(node) => Some(&node.container.limits),
+        PenNode::Group(node) => Some(&node.container.limits),
+        PenNode::Rectangle(node) => Some(&node.container.limits),
+        PenNode::Text(node) => Some(&node.limits),
+        PenNode::TextInput(node) => Some(&node.limits),
+        PenNode::IconFont(node) => Some(&node.limits),
+        PenNode::Image(node) => Some(&node.limits),
+        PenNode::Ellipse(node) => Some(&node.limits),
+        PenNode::Path(node) => Some(&node.limits),
+        PenNode::Polygon(node) => Some(&node.limits),
+        PenNode::TextArea(node) => Some(&node.limits),
+        PenNode::Select(node) => Some(&node.limits),
+        PenNode::Switch(node) => Some(&node.limits),
+        PenNode::Checkbox(node) => Some(&node.limits),
+        PenNode::Slider(node) => Some(&node.limits),
+        PenNode::RadioGroup(node) => Some(&node.limits),
+        PenNode::NumberInput(node) => Some(&node.limits),
+        PenNode::Progress(node) => Some(&node.limits),
+        PenNode::Tabs(node) => Some(&node.limits),
+        PenNode::Line(_) | PenNode::Ref(_) => None,
+    }
 }
 
 fn leaf_size_and_limits(
@@ -446,12 +481,36 @@ mod tests {
     }
 
     #[test]
-    fn limits_map_to_taffy_min_max() {
+    fn legacy_style_ignores_limits() {
         let container: ContainerProps =
             serde_json::from_str(r#"{"width":100,"minWidth":50,"maxHeight":40}"#).unwrap();
         let style = container_to_style(&container);
+        assert_eq!(style.min_size.width, Dimension::Auto);
+        assert_eq!(style.max_size.height, Dimension::Auto);
+        assert_eq!(style.max_size.width, Dimension::Auto);
+    }
+
+    #[test]
+    fn responsive_style_maps_sanitized_limits() {
+        let node: jian_ops_schema::node::PenNode = serde_json::from_str(
+            r#"{"type":"rectangle","id":"n","width":100,"minWidth":50,"maxHeight":40}"#,
+        )
+        .unwrap();
+        let mut warnings = Vec::new();
+        let style = node_to_style_responsive(&node, &mut warnings);
         assert_eq!(style.min_size.width, length(50.0));
         assert_eq!(style.max_size.height, length(40.0));
-        assert_eq!(style.max_size.width, Dimension::Auto);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn responsive_style_drops_negative_limits_with_warning() {
+        let node: jian_ops_schema::node::PenNode =
+            serde_json::from_str(r#"{"type":"rectangle","id":"n","width":100,"minWidth":-5}"#)
+                .unwrap();
+        let mut warnings = Vec::new();
+        let style = node_to_style_responsive(&node, &mut warnings);
+        assert_eq!(style.min_size.width, Dimension::Auto);
+        assert_eq!(warnings.len(), 1);
     }
 }

@@ -43,12 +43,11 @@ impl ReferenceTable {
                 .parent
                 .map(|parent| numeric_size(&tree.nodes[parent].schema))
                 .unwrap_or((None, None));
-            let mut limit_warnings = Vec::new();
+            let mut ignored_limit_warnings = Vec::new();
             let limits = node_limits(&data.schema)
                 .copied()
                 .unwrap_or_default()
-                .sanitized(&base.id, &mut limit_warnings);
-            lints.extend(limit_warnings);
+                .sanitized(&base.id, &mut ignored_limit_warnings);
 
             let mut axis = |name: &str,
                             pos: f32,
@@ -321,6 +320,20 @@ mod tests {
         assert!(child.h.is_none());
         assert!(child.v.is_some());
         assert_eq!(lints.len(), 1);
+    }
+
+    #[test]
+    fn negative_node_or_parent_size_is_ineligible_per_axis() {
+        let tree = tree_from_json(
+            r#"{"type":"frame","id":"p","width":400,"height":-1,
+                "children":[{"type":"rectangle","id":"c","x":10,"y":10,
+                "width":-5,"height":50,"constraints":{"h":"right","v":"bottom"}}]}"#,
+        );
+        let (table, lints) = ReferenceTable::build(&tree);
+        let child = table.get(tree.get("c").unwrap()).unwrap();
+        assert!(child.h.is_none());
+        assert!(child.v.is_none());
+        assert_eq!(lints.len(), 2);
     }
 
     #[test]

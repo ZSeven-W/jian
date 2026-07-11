@@ -16,6 +16,7 @@
 pub mod constraints;
 pub mod measure;
 pub mod resolve;
+mod responsive;
 
 use crate::document::{NodeKey, NodeTree};
 use crate::error::{CoreError, CoreResult};
@@ -107,17 +108,12 @@ pub struct LayoutEngine {
     pub(crate) reference: Option<constraints::ReferenceTable>,
     pub(crate) constraint_lints: Vec<String>,
     pub(crate) node_order: Vec<NodeKey>,
-    pub(crate) overrides: SecondaryMap<NodeKey, ResolvedBox>,
+    pub(crate) overrides: SecondaryMap<NodeKey, responsive::ResolvedBox>,
     pub(crate) compute_count: usize,
+    pub(crate) bound_hit: bool,
+    pub(crate) root_owner: SecondaryMap<NodeKey, NodeKey>,
+    pub(crate) base_styles: SecondaryMap<NodeKey, Style>,
     origin_normalized: HashSet<NodeKey>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct ResolvedBox {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
 }
 
 impl LayoutEngine {
@@ -141,6 +137,9 @@ impl LayoutEngine {
             node_order: Vec::new(),
             overrides: SecondaryMap::new(),
             compute_count: 0,
+            bound_hit: false,
+            root_owner: SecondaryMap::new(),
+            base_styles: SecondaryMap::new(),
             origin_normalized: HashSet::new(),
         }
     }
@@ -160,6 +159,14 @@ impl LayoutEngine {
 
     /// Build a taffy tree mirroring the NodeTree. Returns the root NodeIds.
     pub fn build(&mut self, doc_tree: &NodeTree) -> CoreResult<Vec<NodeId>> {
+        self.build_with_mode(doc_tree, false)
+    }
+
+    fn build_with_mode(
+        &mut self,
+        doc_tree: &NodeTree,
+        responsive: bool,
+    ) -> CoreResult<Vec<NodeId>> {
         // A real taffy compute supersedes any preload snapshot —
         // post-compute `node_rect` reads must come from taffy, not
         // stale AOT geometry. Plan 19 D1.
@@ -172,15 +179,29 @@ impl LayoutEngine {
         self.node_order.clear();
         self.overrides = SecondaryMap::new();
         self.compute_count = 0;
+        self.bound_hit = false;
+        self.root_owner = SecondaryMap::new();
+        self.base_styles = SecondaryMap::new();
         self.origin_normalized.clear();
+        self.node_order = doc_tree.keys_top_down();
+        for &root in &doc_tree.roots {
+            let mut stack = vec![root];
+            while let Some(key) = stack.pop() {
+                self.root_owner.insert(key, root);
+                stack.extend(doc_tree.nodes[key].children.iter().rev().copied());
+            }
+        }
 
         // Pass 1: create a taffy node for each doc node. `node_to_style`
         // handles both containers (Frame/Group/Rectangle) and leaves
         // (Text / IconFont / Image / …) so leaf sizes propagate into
         // flex measurements.
         for (key, data) in doc_tree.nodes.iter() {
-            self.node_order.push(key);
-            let mut style = resolve::node_to_style(&data.schema);
+            let mut style = if responsive {
+                resolve::node_to_style_responsive(&data.schema, &mut self.constraint_lints)
+            } else {
+                resolve::node_to_style(&data.schema)
+            };
             // Direction-aware flex_shrink: a child whose MAIN-AXIS size is a
             // fixed Number must not be shrunk below it. `node_to_style` only
             // pins fully-fixed squares (both axes Number); here, with the parent
@@ -198,6 +219,7 @@ impl LayoutEngine {
                 // instead of collapsing on an indefinite-height parent.
                 resolve::apply_fill_container_axes(&mut style, &data.schema, parent_horizontal);
             }
+            self.base_styles.insert(key, style.clone());
             let ctx = text_measure_for(&data.schema);
             let id = self
                 .tree
@@ -229,11 +251,11 @@ impl LayoutEngine {
         doc_tree: &NodeTree,
         responsive: bool,
     ) -> CoreResult<Vec<NodeId>> {
-        let roots = self.build(doc_tree)?;
+        let roots = self.build_with_mode(doc_tree, responsive)?;
         if responsive {
             let (reference, lints) = constraints::ReferenceTable::build(doc_tree);
             self.reference = Some(reference);
-            self.constraint_lints = lints;
+            self.constraint_lints.extend(lints);
         }
         Ok(roots)
     }
@@ -258,160 +280,6 @@ impl LayoutEngine {
                 Size::ZERO
             })
             .map_err(|e| CoreError::Layout(e.to_string()))
-    }
-
-    /// Compute, resolve responsive constraints top-down, and recompute as needed.
-    pub fn compute_responsive(&mut self, root: NodeId, viewport: (f32, f32)) -> CoreResult<()> {
-        const COMPUTE_BOUND: usize = 3;
-        self.overrides = SecondaryMap::new();
-        self.compute(root, viewport)?;
-        self.compute_count = 1;
-        if self.reference.is_none() {
-            return Ok(());
-        }
-
-        for _ in 0..(COMPUTE_BOUND - 1) {
-            if !self.resolve_walk()? {
-                return Ok(());
-            }
-            self.apply_overrides()?;
-            self.compute(root, viewport)?;
-            self.compute_count += 1;
-        }
-        if self.resolve_walk()? {
-            #[cfg(debug_assertions)]
-            eprintln!("constraint loop hit the {COMPUTE_BOUND}-compute bound; last compute stands");
-        }
-        Ok(())
-    }
-
-    fn resolve_walk(&mut self) -> CoreResult<bool> {
-        let reference = self
-            .reference
-            .as_ref()
-            .expect("responsive compute requires a reference table");
-        let mut effective: SecondaryMap<NodeKey, (f32, f32)> = SecondaryMap::new();
-        let mut changed = false;
-
-        for &key in &self.node_order {
-            let node_id = self.map[key];
-            let layout = self
-                .tree
-                .layout(node_id)
-                .map_err(|error| CoreError::Layout(error.to_string()))?;
-            let mut resolved = ResolvedBox {
-                x: layout.location.x,
-                y: layout.location.y,
-                width: layout.size.width,
-                height: layout.size.height,
-            };
-            let Some(&parent_key) = self.parent.get(key) else {
-                effective.insert(key, (resolved.width, resolved.height));
-                continue;
-            };
-            let (parent_width, parent_height) =
-                effective.get(parent_key).copied().unwrap_or_else(|| {
-                    let parent_layout = self.tree.layout(self.map[parent_key]).unwrap();
-                    (parent_layout.size.width, parent_layout.size.height)
-                });
-            let Some(node_ref) = reference.get(key) else {
-                effective.insert(key, (resolved.width, resolved.height));
-                continue;
-            };
-            let mut constrained = false;
-            if let Some(axis) = node_ref.h {
-                let clamp_hits = axis.max.is_some_and(|max| axis.size > max)
-                    || axis.min.is_some_and(|min| axis.size < min);
-                if (parent_width - axis.parent_size).abs() > f32::EPSILON || clamp_hits {
-                    let (x, width) =
-                        constraints::resolve_axis(node_ref.h_kind, &axis, parent_width);
-                    resolved.x = x;
-                    resolved.width = width;
-                    constrained = true;
-                }
-            }
-            if let Some(axis) = node_ref.v {
-                let clamp_hits = axis.max.is_some_and(|max| axis.size > max)
-                    || axis.min.is_some_and(|min| axis.size < min);
-                if (parent_height - axis.parent_size).abs() > f32::EPSILON || clamp_hits {
-                    let (y, height) = constraints::resolve_axis(
-                        constraints::vertical_as_h(node_ref.v_kind),
-                        &axis,
-                        parent_height,
-                    );
-                    resolved.y = y;
-                    resolved.height = height;
-                    constrained = true;
-                }
-            }
-            effective.insert(key, (resolved.width, resolved.height));
-            if constrained && self.overrides.get(key) != Some(&resolved) {
-                self.overrides.insert(key, resolved);
-                changed = true;
-            }
-        }
-        Ok(changed)
-    }
-
-    fn apply_overrides(&mut self) -> CoreResult<()> {
-        for (key, resolved) in &self.overrides {
-            let node_id = self.map[key];
-            let mut style = self
-                .tree
-                .style(node_id)
-                .map_err(|error| CoreError::Layout(error.to_string()))?
-                .clone();
-            style.position = Position::Absolute;
-            style.inset.left = length(resolved.x);
-            style.inset.top = length(resolved.y);
-            style.size.width = length(resolved.width);
-            style.size.height = length(resolved.height);
-            self.tree
-                .set_style(node_id, style)
-                .map_err(|error| CoreError::Layout(error.to_string()))?;
-        }
-        Ok(())
-    }
-
-    pub fn last_compute_count(&self) -> usize {
-        self.compute_count
-    }
-
-    pub fn override_root_for_viewport(
-        &mut self,
-        root: NodeKey,
-        viewport: (f32, f32),
-    ) -> CoreResult<()> {
-        let node_id = self.map[root];
-        let mut style = self
-            .tree
-            .style(node_id)
-            .map_err(|error| CoreError::Layout(error.to_string()))?
-            .clone();
-        style.position = Position::Relative;
-        style.inset = taffy::geometry::Rect {
-            left: auto(),
-            right: auto(),
-            top: auto(),
-            bottom: auto(),
-        };
-        style.size.width = length(viewport.0);
-        style.size.height = length(viewport.1);
-        style.min_size = Size::auto();
-        style.max_size = Size::auto();
-        self.tree
-            .set_style(node_id, style)
-            .map_err(|error| CoreError::Layout(error.to_string()))?;
-        self.origin_normalized.insert(root);
-        Ok(())
-    }
-
-    pub fn is_origin_normalized(&self, root: NodeKey) -> bool {
-        self.origin_normalized.contains(&root)
-    }
-
-    pub fn constraint_lints(&self) -> &[String] {
-        &self.constraint_lints
     }
 
     /// Plan 19 D1 cold-start: load pre-computed first-frame rects from
@@ -806,335 +674,4 @@ fn measure_text_for_taffy(
 }
 
 #[cfg(test)]
-mod preload_tests {
-    use super::*;
-    use jian_ops_schema::node::PenNode;
-    use jian_ops_schema::pack::initial_layout::{InitialLayoutSnapshot, PackedRect};
-    use jian_ops_schema::pack::manifest::DefaultViewport;
-    use serde_json::json;
-    use std::collections::BTreeMap;
-
-    fn rect_node(id: &str) -> PenNode {
-        serde_json::from_value(json!({"type":"rectangle","id":id})).unwrap()
-    }
-
-    fn frame_node(id: &str, children: Vec<PenNode>) -> PenNode {
-        let mut v = json!({"type":"frame","id":id});
-        v["children"] = serde_json::Value::Array(
-            children
-                .into_iter()
-                .map(|c| serde_json::to_value(c).unwrap())
-                .collect(),
-        );
-        serde_json::from_value(v).unwrap()
-    }
-
-    fn snapshot(pairs: &[(&str, [f32; 4])]) -> InitialLayoutSnapshot {
-        let mut rects = BTreeMap::new();
-        for (id, [x, y, w, h]) in pairs {
-            rects.insert(
-                (*id).to_string(),
-                PackedRect {
-                    x: *x,
-                    y: *y,
-                    w: *w,
-                    h: *h,
-                },
-            );
-        }
-        InitialLayoutSnapshot {
-            viewport: DefaultViewport {
-                width: 800.0,
-                height: 600.0,
-            },
-            rects,
-        }
-    }
-
-    #[test]
-    fn explicit_height_multiline_text_measure_rejects_pixel_like_line_height() {
-        let text: PenNode = serde_json::from_value(json!({
-            "type":"text",
-            "id":"label",
-            "width":180,
-            "height":52,
-            "textGrowth":"fixed-width-height",
-            "content":"First line\nSecond line",
-            "fontSize":14,
-            "lineHeight":17
-        }))
-        .unwrap();
-
-        let measure = text_measure_for(&text).expect("text measure");
-        assert_eq!(
-            measure.line_height, 0.0,
-            "explicit box height must not make pixel-like lineHeight a multiplier"
-        );
-        assert_eq!(measure.runs[0].text, "First line\nSecond line");
-    }
-
-    #[test]
-    fn preload_serves_node_rect_without_compute() {
-        let mut tree = NodeTree::new();
-        tree.insert_subtree(
-            frame_node("root", vec![rect_node("a"), rect_node("b")]),
-            None,
-        );
-        let snap = snapshot(&[
-            ("a", [10.0, 20.0, 100.0, 50.0]),
-            ("b", [10.0, 80.0, 100.0, 50.0]),
-        ]);
-        let mut engine = LayoutEngine::new();
-        let n = engine.preload_initial(&snap, &tree);
-        assert_eq!(n, 2);
-        assert!(engine.has_preload());
-
-        let key_a = tree.get("a").unwrap();
-        let key_b = tree.get("b").unwrap();
-        assert_eq!(engine.node_rect(key_a), Some(rect(10.0, 20.0, 100.0, 50.0)));
-        assert_eq!(engine.node_rect(key_b), Some(rect(10.0, 80.0, 100.0, 50.0)));
-    }
-
-    #[test]
-    fn preload_drops_ids_absent_from_doc() {
-        let mut tree = NodeTree::new();
-        tree.insert_subtree(rect_node("a"), None);
-        let snap = snapshot(&[("a", [1.0, 2.0, 3.0, 4.0]), ("ghost", [9.0, 9.0, 9.0, 9.0])]);
-        let mut engine = LayoutEngine::new();
-        // Only the doc-resident id resolves; "ghost" is silently
-        // dropped (newer doc, older pack — not a panic case).
-        assert_eq!(engine.preload_initial(&snap, &tree), 1);
-    }
-
-    #[test]
-    fn build_clears_preload() {
-        let mut tree = NodeTree::new();
-        tree.insert_subtree(rect_node("a"), None);
-        let snap = snapshot(&[("a", [1.0, 2.0, 3.0, 4.0])]);
-        let mut engine = LayoutEngine::new();
-        engine.preload_initial(&snap, &tree);
-        assert!(engine.has_preload());
-
-        // A real taffy compute supersedes the preload.
-        let _ = engine.build(&tree).expect("taffy build");
-        assert!(!engine.has_preload());
-    }
-
-    #[test]
-    fn preload_replaces_prior_snapshot() {
-        let mut tree = NodeTree::new();
-        tree.insert_subtree(rect_node("a"), None);
-
-        let mut engine = LayoutEngine::new();
-        engine.preload_initial(&snapshot(&[("a", [1.0, 2.0, 3.0, 4.0])]), &tree);
-        engine.preload_initial(&snapshot(&[("a", [50.0, 60.0, 70.0, 80.0])]), &tree);
-        let key_a = tree.get("a").unwrap();
-        assert_eq!(engine.node_rect(key_a), Some(rect(50.0, 60.0, 70.0, 80.0)));
-    }
-
-    fn compute_single_child(child: PenNode) -> Rect {
-        let root = frame_node("root", vec![child]);
-        let mut tree = NodeTree::new();
-        tree.insert_subtree(root, None);
-        let mut engine = LayoutEngine::new();
-        let roots = engine.build(&tree).expect("taffy build");
-        let root_id = *roots.first().expect("root id");
-        engine.compute(root_id, (400.0, 100.0)).expect("compute");
-        let key = tree.get("input").expect("input key");
-        engine.node_rect(key).expect("input rect")
-    }
-
-    fn text_input_node(value: serde_json::Value) -> PenNode {
-        serde_json::from_value(value).unwrap()
-    }
-
-    #[test]
-    fn fit_content_text_input_with_leading_icon_measures_input_anatomy() {
-        use measure::{EstimateBackend, MeasureBackend, MeasureRequest, StyledRun};
-
-        let input = text_input_node(json!({
-            "type":"text_input",
-            "id":"input",
-            "width":"fit_content",
-            "height":"fit_content",
-            "placeholder":"Search",
-            "leadingIcon":"search",
-            "fontSize":14
-        }));
-        let rect = compute_single_child(input);
-        let run = StyledRun {
-            text: "Search",
-            font_family: None,
-            font_size: 14.0,
-            font_weight: 400,
-            font_style: FontStyleKind::Normal,
-            letter_spacing: 0.0,
-        };
-        let text = EstimateBackend.measure(&MeasureRequest {
-            runs: &[run],
-            line_height: 0.0,
-            max_width: None,
-        });
-
-        assert!(
-            rect.size.width >= text.width + 36.0,
-            "leading-icon text_input should reserve 36px chrome plus text width, got {}",
-            rect.size.width
-        );
-        assert!(
-            rect.size.height >= 36.0,
-            "text_input height should reserve vertical padding and icon box, got {}",
-            rect.size.height
-        );
-    }
-
-    #[test]
-    fn fit_content_text_input_without_icon_measures_horizontal_padding() {
-        use measure::{EstimateBackend, MeasureBackend, MeasureRequest, StyledRun};
-
-        let input = text_input_node(json!({
-            "type":"text_input",
-            "id":"input",
-            "width":"fit_content",
-            "height":"fit_content",
-            "placeholder":"Find",
-            "fontSize":14
-        }));
-        let rect = compute_single_child(input);
-        let run = StyledRun {
-            text: "Find",
-            font_family: None,
-            font_size: 14.0,
-            font_weight: 400,
-            font_style: FontStyleKind::Normal,
-            letter_spacing: 0.0,
-        };
-        let text = EstimateBackend.measure(&MeasureRequest {
-            runs: &[run],
-            line_height: 0.0,
-            max_width: None,
-        });
-
-        assert!(
-            (rect.size.width - (text.width + 16.0)).abs() <= 0.5,
-            "plain text_input should measure exactly 16px horizontal padding plus text width, got {} vs text {}",
-            rect.size.width,
-            text.width
-        );
-    }
-
-    #[test]
-    fn numeric_sized_text_input_keeps_authored_size() {
-        let input = text_input_node(json!({
-            "type":"text_input",
-            "id":"input",
-            "width":120,
-            "height":44,
-            "placeholder":"A much longer placeholder",
-            "leadingIcon":"search",
-            "fontSize":14
-        }));
-        let rect = compute_single_child(input);
-        assert_eq!(rect.size.width, 120.0);
-        assert_eq!(rect.size.height, 44.0);
-    }
-}
-
-#[cfg(test)]
-mod responsive_tests {
-    use super::*;
-    use jian_ops_schema::node::PenNode;
-
-    fn setup(json: &str, viewport: (f32, f32)) -> (NodeTree, LayoutEngine, NodeId) {
-        let root: PenNode = serde_json::from_str(json).unwrap();
-        let mut doc = NodeTree::new();
-        doc.insert_subtree(root, None);
-        let mut engine = LayoutEngine::new();
-        let root_id = engine.build_responsive(&doc, true).unwrap()[0];
-        let mut style = engine.tree.style(root_id).unwrap().clone();
-        style.size = Size {
-            width: length(viewport.0),
-            height: length(viewport.1),
-        };
-        engine.tree.set_style(root_id, style).unwrap();
-        (doc, engine, root_id)
-    }
-
-    #[test]
-    fn compute_responsive_stretch_reflows_fill_child() {
-        let (doc, mut engine, root) = setup(
-            r#"{"type":"frame","id":"root","width":400,"height":300,"children":[
-                {"type":"frame","id":"panel","x":20,"y":0,"width":360,"height":100,
-                "constraints":{"h":"left_right","v":"top"},"layout":"vertical",
-                "children":[{"type":"rectangle","id":"fill","width":"fill_container","height":40}]}]}"#,
-            (600.0, 300.0),
-        );
-        engine.compute_responsive(root, (600.0, 300.0)).unwrap();
-        assert_eq!(
-            engine
-                .node_rect(doc.get("panel").unwrap())
-                .unwrap()
-                .size
-                .width,
-            560.0
-        );
-        assert_eq!(
-            engine
-                .node_rect(doc.get("fill").unwrap())
-                .unwrap()
-                .size
-                .width,
-            560.0
-        );
-    }
-
-    #[test]
-    fn compute_responsive_injects_position_only_change() {
-        let (doc, mut engine, root) = setup(
-            r#"{"type":"frame","id":"root","width":400,"height":300,"children":[
-                {"type":"rectangle","id":"btn","x":300,"y":10,"width":80,"height":40,
-                "constraints":{"h":"right","v":"top"}}]}"#,
-            (600.0, 300.0),
-        );
-        engine.compute_responsive(root, (600.0, 300.0)).unwrap();
-        let rect = engine.node_rect(doc.get("btn").unwrap()).unwrap();
-        assert_eq!((rect.origin.x, rect.size.width), (500.0, 80.0));
-    }
-
-    #[test]
-    fn compute_responsive_reanchors_own_clamp_and_nested_chain_in_two_computes() {
-        let (doc, mut engine, root) = setup(
-            r#"{"type":"frame","id":"root","width":400,"height":300,"children":[
-                {"type":"frame","id":"panel","x":20,"y":0,"width":360,"height":100,
-                "constraints":{"h":"left_right","v":"top"},"children":[
-                    {"type":"rectangle","id":"inner","x":340,"y":0,"width":20,"height":20,
-                    "maxWidth":15,"constraints":{"h":"right","v":"top"}}]}]}"#,
-            (600.0, 300.0),
-        );
-        engine.compute_responsive(root, (600.0, 300.0)).unwrap();
-        let inner = engine.node_rect(doc.get("inner").unwrap()).unwrap();
-        // Inner resolves to x=545 within the panel; node_rect is absolute,
-        // so it includes the panel's authored x=20.
-        assert_eq!((inner.origin.x, inner.size.width), (565.0, 15.0));
-        assert_eq!(engine.last_compute_count(), 2);
-    }
-
-    #[test]
-    fn legacy_compute_leaves_constraints_inert() {
-        let root: PenNode = serde_json::from_str(
-            r#"{"type":"frame","id":"root","width":400,"height":300,"children":[
-                {"type":"rectangle","id":"c","x":80,"y":0,"width":30,"height":10,
-                "constraints":{"h":"right","v":"top"}}]}"#,
-        )
-        .unwrap();
-        let mut doc = NodeTree::new();
-        doc.insert_subtree(root, None);
-        let mut engine = LayoutEngine::new();
-        let root = engine.build(&doc).unwrap()[0];
-        engine.compute(root, (600.0, 300.0)).unwrap();
-        assert_eq!(
-            engine.node_rect(doc.get("c").unwrap()).unwrap().origin.x,
-            80.0
-        );
-    }
-}
+mod preload_tests;

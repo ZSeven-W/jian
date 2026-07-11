@@ -106,6 +106,18 @@ mod tests {
     }
 
     #[test]
+    fn non_finite_limits_sanitize_to_none_with_warning() {
+        let limits = SizeLimits {
+            max_height: Some(f64::INFINITY),
+            ..SizeLimits::default()
+        };
+        let mut warnings = Vec::new();
+        let sanitized = limits.sanitized("n1", &mut warnings);
+        assert!(sanitized.max_height.is_none());
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
     fn container_props_carry_limits_and_stay_bit_identical_without() {
         use crate::node::container::ContainerProps;
 

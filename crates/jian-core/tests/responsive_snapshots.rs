@@ -82,6 +82,29 @@ fn non_responsive_documents_are_bit_identical() {
     }
 }
 
+#[test]
+fn non_responsive_document_ignores_authored_min_max_fields() {
+    let with_limits = r#"{"version":"1.1","children":[
+        {"type":"frame","id":"root","width":100,"height":100,"children":[
+            {"type":"rectangle","id":"c","width":30,"height":10,"minWidth":80}]}]}"#;
+    let without_limits = r#"{"version":"1.1","children":[
+        {"type":"frame","id":"root","width":100,"height":100,"children":[
+            {"type":"rectangle","id":"c","width":30,"height":10}]}]}"#;
+    let layout = |source: &str| {
+        let schema = load_str(source).unwrap().value;
+        let mut runtime = Runtime::new_from_document(schema).unwrap();
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        rect_bits(&runtime)
+    };
+    assert_eq!(layout(with_limits), layout(without_limits));
+
+    let explicitly_false = with_limits.replace(
+        r#""version":"1.1""#,
+        r#""version":"1.1","responsive":false"#,
+    );
+    assert_eq!(layout(&explicitly_false), layout(without_limits));
+}
+
 fn responsive_rects(width: f32, height: f32) -> BTreeMap<String, [f32; 4]> {
     let source = std::fs::read_to_string(format!(
         "{}/tests/fixtures/responsive_all_constraints.json",

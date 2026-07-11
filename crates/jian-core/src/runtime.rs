@@ -291,7 +291,6 @@ impl Runtime {
 
     pub fn build_layout(&mut self, available: (f32, f32)) -> CoreResult<()> {
         let doc = self.document.as_ref().expect("no document loaded");
-        self.viewport.size = size(available.0, available.1);
         let responsive = doc.schema.is_responsive();
         let roots = self.layout.build_responsive(&doc.tree, responsive)?;
         if !responsive {
@@ -318,11 +317,7 @@ impl Runtime {
                 .override_root_for_viewport(root_key, available)?;
         }
         for root in roots {
-            if viewport_root.is_some_and(|key| self.layout.map[key] == root) {
-                self.layout.compute_responsive(root, available)?;
-            } else {
-                self.layout.compute(root, available)?;
-            }
+            self.layout.compute_responsive(root, available)?;
         }
         Ok(())
     }
@@ -2535,5 +2530,91 @@ mod tests {
         let key = runtime.document.as_ref().unwrap().tree.get("root").unwrap();
         assert_eq!(runtime.layout.node_rect(key).unwrap().size.width, 400.0);
         assert!(!runtime.layout.is_origin_normalized(key));
+    }
+
+    #[test]
+    fn responsive_constraints_run_when_first_root_is_not_a_frame() {
+        let document: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","formatVersion":"1.2","responsive":true,"children":[
+                {"type":"text","id":"heading","content":"Heading"},
+                {"type":"frame","id":"root","width":100,"height":100,"children":[
+                    {"type":"rectangle","id":"c","x":80,"y":0,"width":30,"height":10,
+                    "maxWidth":20,"constraints":{"h":"right","v":"top"}}]}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(document).unwrap();
+        runtime.build_layout((800.0, 600.0)).unwrap();
+        let key = runtime.document.as_ref().unwrap().tree.get("c").unwrap();
+        let rect = runtime.layout.node_rect(key).unwrap();
+        assert_eq!((rect.origin.x, rect.size.width), (90.0, 20.0));
+    }
+
+    #[test]
+    fn non_responsive_build_does_not_mutate_runtime_viewport() {
+        let document: PenDocument = serde_json::from_str(
+            r#"{"version":"1.1","children":[
+                {"type":"frame","id":"root","width":400,"height":300}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(document).unwrap();
+        runtime.build_layout((123.0, 456.0)).unwrap();
+        assert_eq!(
+            (runtime.viewport.size.width, runtime.viewport.size.height),
+            (800.0, 600.0)
+        );
+    }
+
+    #[test]
+    fn responsive_origin_normalization_aligns_scene_and_hit_test() {
+        let document: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","formatVersion":"1.2","responsive":true,"children":[
+                {"type":"frame","id":"root","x":50,"y":60,"width":100,"height":100,
+                "children":[{"type":"rectangle","id":"child","x":10,"y":10,
+                "width":20,"height":20}]}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(document).unwrap();
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        runtime.rebuild_spatial();
+        let child = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("child")
+            .unwrap();
+        let rect = runtime.layout.node_rect(child).unwrap();
+        assert_eq!((rect.origin.x, rect.origin.y), (10.0, 10.0));
+        assert!(runtime
+            .spatial
+            .hit(crate::geometry::point(15.0, 15.0))
+            .contains(&child));
+        assert!(!runtime
+            .spatial
+            .hit(crate::geometry::point(65.0, 75.0))
+            .contains(&child));
+    }
+
+    #[test]
+    fn projected_screen_root_is_viewport_sized() {
+        let source: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","formatVersion":"1.2","responsive":true,"children":[
+                {"type":"frame","id":"screen","screen":"/","x":50,"y":60,
+                "width":400,"height":300}]}"#,
+        )
+        .unwrap();
+        let (projected, _) = jian_ops_schema::screen_projection::project_screens(&source).unwrap();
+        let mut runtime = Runtime::new_from_document(projected).unwrap();
+        runtime.build_layout((320.0, 480.0)).unwrap();
+        let root = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("screen")
+            .unwrap();
+        let rect = runtime.layout.node_rect(root).unwrap();
+        assert_eq!((rect.size.width, rect.size.height), (320.0, 480.0));
+        assert!(runtime.layout.is_origin_normalized(root));
     }
 }
