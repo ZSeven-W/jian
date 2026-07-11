@@ -45,6 +45,7 @@ impl Selection {
 pub struct Composition {
     pub text: String,
     pub cursor: usize,
+    pub region: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -245,6 +246,7 @@ impl TextInputState {
         self.composition = Some(Composition {
             text: text.into(),
             cursor,
+            region: None,
         });
         self.touch(now_ms);
     }
@@ -253,9 +255,38 @@ impl TextInputState {
         self.composition = None;
     }
 
+    pub fn set_composing_region(&mut self, start: usize, end: usize) {
+        let start = prev_char_boundary(&self.text, start.min(end));
+        let end = prev_char_boundary(&self.text, start.max(end));
+        if let Some(composition) = &mut self.composition {
+            composition.region = Some((start, end));
+        } else {
+            let text = self.text[start..end].to_owned();
+            self.composition = Some(Composition {
+                cursor: text.len(),
+                text,
+                region: Some((start, end)),
+            });
+        }
+        self.selection = Selection::caret(start);
+    }
+
+    pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str, now_ms: u64) {
+        let start = prev_char_boundary(&self.text, start.min(end));
+        let end = prev_char_boundary(&self.text, start.max(end));
+        self.text.replace_range(start..end, replacement);
+        self.selection = Selection::caret(start + replacement.len());
+        self.select_all = false;
+        self.touch(now_ms);
+    }
+
     pub fn commit_composition(&mut self, now_ms: u64) {
         if let Some(c) = self.composition.take() {
-            self.insert_str(&c.text, now_ms);
+            if let Some((start, end)) = c.region {
+                self.replace_range(start, end, &c.text, now_ms);
+            } else {
+                self.insert_str(&c.text, now_ms);
+            }
         }
     }
 }
@@ -377,4 +408,22 @@ mod tests {
         assert_eq!(next_char_boundary("设", 1), "设".len());
         assert_eq!(next_char_boundary("", 5), 0);
     }
+}
+#[test]
+fn composing_region_commit_replaces_durable_range() {
+    let mut state = TextInputState::with_text("abcdef");
+    state.set_composition("XY", 2, 0);
+    state.set_composing_region(2, 5);
+    state.commit_composition(1);
+    assert_eq!(state.text(), "abXYf");
+    assert_eq!(state.caret(), 4);
+}
+
+#[test]
+fn replace_range_clamps_to_utf8_boundaries() {
+    let mut state = TextInputState::with_text("a设计z");
+    state.replace_range(2, 6, "X", 0);
+    assert_eq!(state.text(), "aX计z");
+    state.replace_range(1, 2, "", 1);
+    assert_eq!(state.text(), "a计z");
 }
