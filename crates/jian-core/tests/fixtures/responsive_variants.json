@@ -1,0 +1,10 @@
+{
+  "version": "1.2",
+  "responsive": true,
+  "children": [
+    {"type":"frame","id":"home-d","screen":"/","width":1280,"height":720,"children":[{"type":"text_input","id":"field","value":"desktop"}]},
+    {"type":"frame","id":"home-m","screen":"/","breakpoint":{"minWidth":0,"maxWidth":480},"width":320,"height":640,"children":[{"type":"text_input","id":"field","value":"mobile"}]},
+    {"type":"frame","id":"home-t","screen":"/","breakpoint":{"minWidth":481,"maxWidth":1024},"width":768,"height":720,"children":[{"type":"text_input","id":"field","value":"tablet"}]},
+    {"type":"frame","id":"only-m","screen":"/only","breakpoint":{"maxWidth":600},"width":390,"height":640}
+  ]
+}
