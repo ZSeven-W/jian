@@ -187,7 +187,12 @@ impl LayoutEngine {
         for &root in &doc_tree.roots {
             let mut stack = vec![root];
             while let Some(key) = stack.pop() {
-                self.root_owner.insert(key, root);
+                // First owner wins; a duplicate cross-root child or cycle
+                // is malformed input — skip instead of looping/overwriting.
+                if self.root_owner.insert(key, root).is_some() {
+                    debug_assert!(false, "node reachable from multiple roots or cycle");
+                    continue;
+                }
                 stack.extend(doc_tree.nodes[key].children.iter().rev().copied());
             }
         }

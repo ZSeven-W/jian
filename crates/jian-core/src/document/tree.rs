@@ -9,7 +9,7 @@
 //!   SlotKey           → { parent, children, kind, schema_ref }
 
 use jian_ops_schema::node::PenNode;
-use slotmap::{new_key_type, SlotMap};
+use slotmap::{new_key_type, SecondaryMap, SlotMap};
 use std::collections::BTreeMap;
 
 new_key_type! { pub struct NodeKey; }
@@ -71,10 +71,18 @@ impl NodeTree {
     }
 
     /// Stable pre-order traversal derived from explicit child links.
+    /// Guards against malformed child links (cycles / duplicate
+    /// cross-root children): each key is emitted at most once, so a
+    /// corrupt tree degrades to a partial order instead of looping.
     pub fn keys_top_down(&self) -> Vec<NodeKey> {
         let mut ordered = Vec::with_capacity(self.nodes.len());
+        let mut visited: SecondaryMap<NodeKey, ()> = SecondaryMap::new();
         let mut stack: Vec<NodeKey> = self.roots.iter().rev().copied().collect();
         while let Some(key) = stack.pop() {
+            if visited.insert(key, ()).is_some() {
+                debug_assert!(false, "NodeTree child links form a cycle or duplicate");
+                continue;
+            }
             ordered.push(key);
             stack.extend(self.nodes[key].children.iter().rev().copied());
         }
