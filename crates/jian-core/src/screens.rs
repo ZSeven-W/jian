@@ -106,6 +106,7 @@ pub struct ScreenTable {
     doc: PenDocument,
     routes: BTreeMap<String, String>, // path -> synthetic page id
     entry: String,
+    variants: jian_ops_schema::screen_projection::ScreenVariantTable,
 }
 
 impl ScreenTable {
@@ -123,7 +124,17 @@ impl ScreenTable {
             doc,
             routes,
             entry: cfg.entry,
+            variants: Default::default(),
         })
+    }
+
+    pub fn from_projected(
+        doc: PenDocument,
+        variants: jian_ops_schema::screen_projection::ScreenVariantTable,
+    ) -> Option<Self> {
+        let mut table = Self::from_document(doc)?;
+        table.variants = variants;
+        Some(table)
     }
 
     pub fn entry_path(&self) -> &str {
@@ -132,6 +143,23 @@ impl ScreenTable {
 
     pub fn paths(&self) -> Vec<String> {
         self.routes.keys().cloned().collect()
+    }
+
+    pub fn page_for(&self, path: &str, viewport_width: f32) -> Option<&str> {
+        let Some(variants) = self.variants.0.get(path) else {
+            return self.routes.get(path).map(String::as_str);
+        };
+        variants
+            .ranged
+            .iter()
+            .find(|entry| {
+                let min = entry.range.min_width.unwrap_or(0.0) as f32;
+                let max = entry.range.max_width.unwrap_or(f64::INFINITY) as f32;
+                min <= viewport_width && viewport_width <= max
+            })
+            .map_or(Some(variants.default_page_id.as_str()), |entry| {
+                Some(entry.page_id.as_str())
+            })
     }
 
     /// Index of the path's synthetic page inside the normalized doc.
@@ -208,6 +236,25 @@ pub fn reconcile_screens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_for_selects_inclusive_breakpoint_variants() {
+        let source: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,"children":[
+              {"type":"frame","id":"home","screen":"/home"},
+              {"type":"frame","id":"home-m","screen":"/home","breakpoint":{"minWidth":0,"maxWidth":480}},
+              {"type":"frame","id":"home-t","screen":"/home","breakpoint":{"minWidth":480.5,"maxWidth":1024}}]}"#,
+        )
+        .unwrap();
+        let (projected, _) = jian_ops_schema::screen_projection::project_screens(&source);
+        let (document, variants) = projected.unwrap();
+        let table = ScreenTable::from_projected(document, variants).unwrap();
+        assert_eq!(table.page_for("/home", 0.0), Some("home-m@0-480"));
+        assert_eq!(table.page_for("/home", 480.0), Some("home-m@0-480"));
+        assert_eq!(table.page_for("/home", 480.5), Some("home-t@480.5-1024"));
+        assert_eq!(table.page_for("/home", 1024.0), Some("home-t@480.5-1024"));
+        assert_eq!(table.page_for("/home", 2000.0), Some("home"));
+    }
 
     #[test]
     fn known_path_push_mutates_stack() {
