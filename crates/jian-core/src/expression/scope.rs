@@ -77,8 +77,18 @@ impl<'a> EvalContext for StateGraphContext<'a> {
                         .and_then(|m| m.get(key).cloned())
                 }),
                 "$route" => self.state.route.borrow().get(key).cloned(),
+                "$storage" if self.state.is_responsive() => {
+                    let mut value = self.state.storage_cache.read(key).0;
+                    for seg in tail {
+                        value = walk_member(&value, seg);
+                    }
+                    return Some(RuntimeValue(value));
+                }
                 "$storage" => self.state.storage.borrow().get(key).cloned(),
                 "$vars" => self.state.vars.borrow().get(key).cloned(),
+                "$viewport" if self.state.is_responsive() => {
+                    self.state.viewport.borrow().get(key).cloned()
+                }
                 "$state" => self
                     .node_id
                     .and_then(|nid| {
@@ -138,12 +148,20 @@ impl<'a> EvalContext for StateGraphContext<'a> {
                 Scope::Route,
                 None,
             ))),
+            "$storage" if self.state.is_responsive() => {
+                Some(RuntimeValue(self.state.storage_cache.snapshot()))
+            }
             "$storage" => Some(RuntimeValue(scope_to_object(
                 self.state,
                 Scope::Storage,
                 None,
             ))),
             "$vars" => Some(RuntimeValue(scope_to_object(self.state, Scope::Vars, None))),
+            "$viewport" if self.state.is_responsive() => Some(RuntimeValue(scope_to_object(
+                self.state,
+                Scope::Viewport,
+                None,
+            ))),
             "$state" => {
                 if let Some(nid) = self.node_id {
                     return Some(RuntimeValue(scope_to_object(
@@ -236,6 +254,11 @@ fn scope_to_object(state: &StateGraph, scope: Scope, id: Option<&str>) -> serde_
         }
         Scope::Vars => {
             for (k, s) in state.vars.borrow().iter() {
+                m.insert(k.clone(), s.get().0);
+            }
+        }
+        Scope::Viewport => {
+            for (k, s) in state.viewport.borrow().iter() {
                 m.insert(k.clone(), s.get().0);
             }
         }

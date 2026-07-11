@@ -1,7 +1,9 @@
 //! Runtime state graph — holds all Signals organized by scope, page, and node.
 
+pub mod conformance;
 pub mod path;
 pub mod scope;
+pub mod storage_cache;
 
 pub use path::{PathError, Segment, StatePath};
 pub use scope::Scope;
@@ -27,31 +29,54 @@ pub struct StateGraph {
     pub(crate) self_: RefCell<SelfStateMap>,
     pub(crate) route: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
     pub(crate) storage: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
+    pub storage_cache: Rc<storage_cache::StorageCache>,
+    responsive: Cell<bool>,
     pub(crate) vars: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
+    pub(crate) viewport: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
 }
 
 impl StateGraph {
+    pub fn app_snapshot(&self) -> BTreeMap<String, Value> {
+        self.app
+            .borrow()
+            .iter()
+            .map(|(key, signal)| (key.clone(), signal.get().0))
+            .collect()
+    }
+
+    pub fn replace_app(&self, values: &BTreeMap<String, Value>) {
+        self.app
+            .borrow_mut()
+            .retain(|key, _| values.contains_key(key));
+        for (key, value) in values {
+            self.app_set(key, value.clone());
+        }
+    }
+
     pub fn new(scheduler: Rc<Scheduler>) -> Self {
         Self::new_with_counter(scheduler, Rc::new(Cell::new(0)))
     }
 
     pub fn new_with_counter(scheduler: Rc<Scheduler>, mutation_counter: Rc<Cell<u64>>) -> Self {
         Self {
-            scheduler,
+            scheduler: scheduler.clone(),
             mutation_counter,
             app: RefCell::new(BTreeMap::new()),
             page: RefCell::new(BTreeMap::new()),
             self_: RefCell::new(BTreeMap::new()),
             route: RefCell::new(BTreeMap::new()),
             storage: RefCell::new(BTreeMap::new()),
+            storage_cache: Rc::new(storage_cache::StorageCache::new(scheduler.clone())),
+            responsive: Cell::new(false),
             vars: RefCell::new(BTreeMap::new()),
+            viewport: RefCell::new(BTreeMap::new()),
         }
     }
 
     /// Create or update a state variable in the app scope.
     pub fn app_set(&self, name: &str, value: Value) {
         self.bump_mutation();
-        let rv = RuntimeValue(value);
+        let rv = RuntimeValue(value.clone());
         let mut map = self.app.borrow_mut();
         if let Some(sig) = map.get(name) {
             sig.set(rv);
@@ -232,13 +257,36 @@ impl StateGraph {
     /// storage backend layer their reads on top.
     pub fn storage_set(&self, name: &str, value: Value) {
         self.bump_mutation();
-        let rv = RuntimeValue(value);
+        let rv = RuntimeValue(value.clone());
         let mut map = self.storage.borrow_mut();
         if let Some(sig) = map.get(name) {
             sig.set(rv);
         } else {
             let sig = Signal::new(rv, self.scheduler.clone());
             map.insert(name.to_owned(), sig);
+        }
+        if self.responsive.get() {
+            self.storage_cache.set_local(name, value);
+        }
+    }
+
+    pub fn set_responsive(&self, responsive: bool) {
+        self.responsive.set(responsive);
+    }
+
+    pub fn is_responsive(&self) -> bool {
+        self.responsive.get()
+    }
+
+    pub fn set_viewport(&self, width: f32, height: f32, dpr: f32) {
+        for (key, value) in [("width", width), ("height", height), ("dpr", dpr)] {
+            let runtime = RuntimeValue(serde_json::json!(value));
+            let mut viewport = self.viewport.borrow_mut();
+            if let Some(signal) = viewport.get(key) {
+                signal.set(runtime);
+            } else {
+                viewport.insert(key.into(), Signal::new(runtime, self.scheduler.clone()));
+            }
         }
     }
 
@@ -286,6 +334,12 @@ impl StateGraph {
                 .borrow()
                 .get(path.segments.first().and_then(seg_as_key)?)
                 .cloned()?,
+            Scope::Viewport if self.responsive.get() => self
+                .viewport
+                .borrow()
+                .get(path.segments.first().and_then(seg_as_key)?)
+                .cloned()?,
+            Scope::Viewport => return None,
             Scope::Vars => self
                 .vars
                 .borrow()
