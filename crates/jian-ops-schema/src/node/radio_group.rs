@@ -19,6 +19,8 @@ pub struct RadioGroupNode {
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<SizingBehavior>,
+    #[serde(flatten)]
+    pub limits: crate::sizing::SizeLimits,
     /// Currently selected option `value`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,

@@ -222,6 +222,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             placeholder,
             value,
             leading_icon,
@@ -243,6 +244,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             placeholder,
             value,
             leading_icon,
@@ -265,6 +267,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             // Any visible text becomes the placeholder; legacy frames
             // carry no option list, so authors fill it post-migration.
             placeholder: placeholder.or(value),
@@ -287,6 +290,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             checked: None,
             fill: c.fill.clone(),
             stroke: c.stroke.clone(),
@@ -305,6 +309,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             checked: None,
             // The visible (non-muted) text is the checkbox label.
             label: value.or(placeholder),
@@ -325,6 +330,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             min: None,
             max: None,
             step: None,
@@ -346,6 +352,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             value: None,
             options: {
                 let labels = collect_text_labels(frame);
@@ -376,6 +383,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             placeholder,
             value: value
                 .as_deref()
@@ -403,6 +411,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             base,
             width: c.width.clone(),
             height: c.height.clone(),
+            limits: c.limits,
             value: None,
             max: None,
             indeterminate: None,

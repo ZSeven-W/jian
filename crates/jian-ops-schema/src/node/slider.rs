@@ -18,6 +18,8 @@ pub struct SliderNode {
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<SizingBehavior>,
+    #[serde(flatten)]
+    pub limits: crate::sizing::SizeLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

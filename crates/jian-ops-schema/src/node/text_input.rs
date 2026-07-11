@@ -21,6 +21,8 @@ pub struct TextInputNode {
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<SizingBehavior>,
+    #[serde(flatten)]
+    pub limits: crate::sizing::SizeLimits,
     /// Placeholder shown when `value` is empty. Static text — author
     /// `bindings.placeholder` if it needs to react to state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
