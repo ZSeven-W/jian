@@ -254,13 +254,12 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
         std::rc::Rc<jian_core::screens::ScreenRouter>,
         jian_core::screens::ScreenTable,
     )> = None;
-    if let Some((normalized, proj_warnings)) =
-        jian_ops_schema::screen_projection::project_screens(&schema)
-    {
-        for w in &proj_warnings {
-            eprintln!("jian player: {w}");
-        }
-        let table = jian_core::screens::ScreenTable::from_document(normalized.clone())
+    let (projected, proj_warnings) = jian_ops_schema::screen_projection::project_screens(&schema);
+    for warning in &proj_warnings {
+        eprintln!("jian player: {warning}");
+    }
+    if let Some((normalized, variants)) = projected {
+        let table = jian_core::screens::ScreenTable::from_projected(normalized.clone(), variants)
             .expect("normalized doc always carries routes");
         let router = std::rc::Rc::new(jian_core::screens::ScreenRouter::new(
             table.entry_path(),

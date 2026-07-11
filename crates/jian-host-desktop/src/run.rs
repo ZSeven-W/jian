@@ -658,6 +658,9 @@ impl ApplicationHandler for RunApp {
                 // review, round 2, HIGH: same bug class as the
                 // resumed-rebuild fix in a different event arm.)
                 if !self.pending_visual_stage {
+                    if let Some(target) = self.host.runtime.needs_variant_swap(logical.0) {
+                        let _ = self.host.runtime.switch_variant(&target);
+                    }
                     let _ = self.host.runtime.build_layout(logical);
                     self.host.runtime.rebuild_spatial();
                 }
