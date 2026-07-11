@@ -204,6 +204,17 @@ impl Painter for SkiaWidgetPainter<'_> {
     ) -> f32 {
         measure_text_with_fallback(text, font_size, weight, italic)
     }
+
+    fn measure_text_family_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> f32 {
+        measure_text_with_family_fallback(text, font_size, family, weight, italic)
+    }
 }
 
 fn paint(color: Color, style: PaintStyle) -> SkPaint {
@@ -285,18 +296,69 @@ fn draw_text_with_fallback(
 }
 
 fn measure_text_with_fallback(text: &str, size: f32, weight: u16, italic: bool) -> f32 {
+    measure_text_with_family_fallback(text, size, "Inter", weight, italic)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TextMeasureStyle<'a> {
+    family: &'a str,
+    size: f32,
+    weight: u16,
+    italic: bool,
+}
+
+fn text_measure_style<'a>(
+    family: &'a str,
+    size: f32,
+    weight: u16,
+    italic: bool,
+) -> TextMeasureStyle<'a> {
+    TextMeasureStyle {
+        family,
+        size,
+        weight,
+        italic,
+    }
+}
+
+fn measure_text_with_family_fallback(
+    text: &str,
+    size: f32,
+    family: &str,
+    weight: u16,
+    italic: bool,
+) -> f32 {
+    let style = text_measure_style(family, size, weight, italic);
     let paint = SkPaint::default();
     if text.is_ascii() {
-        return font_for("Inter", size, weight, italic)
+        return font_for(style.family, style.size, style.weight, style.italic)
             .measure_str(text, Some(&paint))
             .0;
     }
     text.chars()
         .map(|ch| {
             let s = ch.to_string();
-            font_for_char("Inter", size, weight, italic, ch)
+            font_for_char(style.family, style.size, style.weight, style.italic, ch)
                 .measure_str(&s, Some(&paint))
                 .0
         })
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measurement_style_preserves_requested_family_size_and_weight() {
+        assert_eq!(
+            text_measure_style("Probe Sans", 17.0, 650, false),
+            TextMeasureStyle {
+                family: "Probe Sans",
+                size: 17.0,
+                weight: 650,
+                italic: false,
+            }
+        );
+    }
 }

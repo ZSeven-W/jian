@@ -46,6 +46,9 @@ impl ImageAdjustments {
 }
 
 impl TextLayout {
+    /// Creates one text run whose `origin` is a top-left offset from the
+    /// top-left `origin` later passed to [`Painter::draw_text`]. Backends are
+    /// responsible for deriving the font baseline from that top-left point.
     pub fn single_run(
         content: &str,
         font_family: &str,
@@ -115,6 +118,8 @@ pub trait Painter {
 
     fn fill_rect(&mut self, rect: Rect, color: Color);
     fn stroke_rect(&mut self, rect: Rect, color: Color, width: f32);
+    /// Draws `layout` relative to the top-left `origin`; `origin.y` is not a
+    /// font baseline. Individual run origins are top-left offsets from it.
     fn draw_text(&mut self, layout: &TextLayout, origin: Point2D);
     fn clip_rect(&mut self, rect: Rect);
 
