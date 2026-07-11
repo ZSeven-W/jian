@@ -15,7 +15,7 @@ pub mod tokens;
 pub(crate) mod test_support;
 
 pub use geometry::{Color, Point2D, Rect};
-pub use painter::{ImageAdjustments, ImageDrawMode, Painter, TextLayout};
+pub use painter::{ImageAdjustments, ImageDrawMode, Painter, TextLayout, TextMetrics};
 pub use text_box::{HorizontalAlign, TextBox, VerticalAlign};
 pub use tokens::{Density, Tokens};
 

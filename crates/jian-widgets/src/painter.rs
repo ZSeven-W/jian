@@ -10,6 +10,38 @@ pub struct TextLayout {
     italic: bool,
 }
 
+/// One shaped line's geometry relative to the top-left paragraph origin.
+///
+/// `ink_top` and `ink_bottom` describe the visible glyph bounds, while
+/// `baseline` and `line_height` describe the paragraph line box. Keeping both
+/// lets controls optically center glyphs without changing top-aligned text
+/// blocks into baseline-positioned content.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextMetrics {
+    pub width: f32,
+    pub line_height: f32,
+    pub baseline: f32,
+    pub ink_top: f32,
+    pub ink_bottom: f32,
+}
+
+impl TextMetrics {
+    pub const fn line_box(width: f32, line_height: f32) -> Self {
+        Self {
+            width,
+            line_height,
+            baseline: line_height,
+            ink_top: 0.0,
+            ink_bottom: line_height,
+        }
+    }
+
+    pub fn ink_center(self) -> Option<f32> {
+        (self.ink_top.is_finite() && self.ink_bottom.is_finite() && self.ink_bottom >= self.ink_top)
+            .then_some((self.ink_top + self.ink_bottom) * 0.5)
+    }
+}
+
 /// Raster image placement mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageDrawMode {
@@ -398,6 +430,22 @@ pub trait Painter {
     ) -> f32 {
         let _ = family;
         self.measure_text_styled(text, font_size, weight, italic)
+    }
+
+    /// Measure the paragraph line box and visible glyph bounds for one styled
+    /// line. Backends with real shaping should override this; the default keeps
+    /// the legacy `font_size` line box so capture and lightweight painters
+    /// remain deterministic.
+    fn measure_text_metrics_family_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> TextMetrics {
+        let width = self.measure_text_family_styled(text, font_size, family, weight, italic);
+        TextMetrics::line_box(width, font_size)
     }
 }
 

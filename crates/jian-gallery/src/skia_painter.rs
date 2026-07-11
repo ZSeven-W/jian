@@ -1,5 +1,5 @@
 use jian_skia::SkiaSurface;
-use jian_widgets::{Color, Painter, Point2D, Rect, TextLayout};
+use jian_widgets::{Color, Painter, Point2D, Rect, TextLayout, TextMetrics};
 use skia_safe::font_style::{Slant, Weight, Width};
 use skia_safe::{
     Color as SkColor, Color4f, Font, FontMgr, FontStyle, Paint as SkPaint, PaintStyle,
@@ -215,6 +215,29 @@ impl Painter for SkiaWidgetPainter<'_> {
     ) -> f32 {
         measure_text_with_family_fallback(text, font_size, family, weight, italic)
     }
+
+    fn measure_text_metrics_family_styled(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        family: &str,
+        weight: u16,
+        italic: bool,
+    ) -> TextMetrics {
+        let width = measure_text_with_family_fallback(text, font_size, family, weight, italic);
+        let Some((ink_top, ink_bottom)) =
+            text_ink_bounds_with_family_fallback(text, font_size, family, weight, italic)
+        else {
+            return TextMetrics::line_box(width, font_size);
+        };
+        TextMetrics {
+            width,
+            line_height: font_size,
+            baseline: font_size,
+            ink_top: font_size + ink_top,
+            ink_bottom: font_size + ink_bottom,
+        }
+    }
 }
 
 fn paint(color: Color, style: PaintStyle) -> SkPaint {
@@ -345,6 +368,43 @@ fn measure_text_with_family_fallback(
         .sum()
 }
 
+fn text_ink_bounds_with_family_fallback(
+    text: &str,
+    size: f32,
+    family: &str,
+    weight: u16,
+    italic: bool,
+) -> Option<(f32, f32)> {
+    let mut top = f32::INFINITY;
+    let mut bottom = f32::NEG_INFINITY;
+    for ch in text.chars().filter(|ch| !ch.is_whitespace()) {
+        let font = font_for_char(family, size, weight, italic, ch);
+        let glyphs = font.str_to_glyphs_vec(ch.to_string());
+        let mut found_outline = false;
+        for glyph in glyphs {
+            let Some(path) = font.get_path(glyph) else {
+                continue;
+            };
+            let bounds = path.compute_tight_bounds();
+            if bounds.top.is_finite()
+                && bounds.bottom.is_finite()
+                && bounds.bottom >= bounds.top
+                && bounds.height() > 0.0
+            {
+                top = top.min(bounds.top);
+                bottom = bottom.max(bounds.bottom);
+                found_outline = true;
+            }
+        }
+        if !found_outline {
+            let (_, bounds) = font.measure_str(ch.to_string(), None);
+            top = top.min(bounds.top);
+            bottom = bottom.max(bounds.bottom);
+        }
+    }
+    (top.is_finite() && bottom.is_finite() && bottom >= top).then_some((top, bottom))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,5 +420,20 @@ mod tests {
                 italic: false,
             }
         );
+    }
+
+    #[test]
+    fn text_metrics_follow_the_gallery_baseline_and_real_ink_bounds() {
+        let mut surface = SkiaSurface::new_raster(100, 40);
+        let mut painter = SkiaWidgetPainter::new(&mut surface, 1.0);
+        let metrics =
+            painter.measure_text_metrics_family_styled("Center", 13.0, "system-ui", 400, false);
+        let (ink_top, ink_bottom) =
+            text_ink_bounds_with_family_fallback("Center", 13.0, "system-ui", 400, false)
+                .expect("ascii glyphs expose visible bounds");
+
+        assert_eq!(metrics.baseline, 13.0);
+        assert!((metrics.ink_top - (13.0 + ink_top)).abs() < 0.001);
+        assert!((metrics.ink_bottom - (13.0 + ink_bottom)).abs() < 0.001);
     }
 }
