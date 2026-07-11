@@ -6,7 +6,7 @@
 //! and the Jian runtime is single-threaded.
 
 use async_trait::async_trait;
-use jian_core::action::services::ClipboardService;
+use jian_core::action::services::{ClipboardService, ServiceError};
 use std::cell::RefCell;
 
 pub struct DesktopClipboard {
@@ -23,10 +23,16 @@ impl DesktopClipboard {
 
 #[async_trait(?Send)]
 impl ClipboardService for DesktopClipboard {
-    async fn read_text(&self) -> Option<String> {
-        self.inner.borrow_mut().get_text().ok()
+    async fn read_text(&self) -> Result<String, ServiceError> {
+        self.inner
+            .borrow_mut()
+            .get_text()
+            .map_err(|error| ServiceError(error.to_string()))
     }
-    async fn write_text(&self, text: &str) {
-        let _ = self.inner.borrow_mut().set_text(text);
+    async fn write_text(&self, text: &str) -> Result<(), ServiceError> {
+        self.inner
+            .borrow_mut()
+            .set_text(text)
+            .map_err(|error| ServiceError(error.to_string()))
     }
 }

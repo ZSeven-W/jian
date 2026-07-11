@@ -5,6 +5,7 @@
 //! `Vec<RenderCommand>` so integration tests can assert on the output.
 
 pub mod commands;
+pub mod image_store;
 pub mod paint;
 pub mod scene;
 pub mod widget_style;
@@ -18,6 +19,22 @@ pub use paint::{
 pub use scene::{collect_draws, collect_draws_with_state};
 
 use crate::geometry::{Affine2, Rect, Size};
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone)]
+pub struct DecodeError(pub String);
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for DecodeError {}
+
+thread_local! { static REGISTERED_IMAGES: RefCell<BTreeMap<String, Vec<u8>>> = const { RefCell::new(BTreeMap::new()) }; }
+pub fn registered_image_bytes(key: &str) -> Option<Vec<u8>> {
+    REGISTERED_IMAGES.with(|images| images.borrow().get(key).cloned())
+}
 
 pub trait RenderBackend {
     type Surface;
@@ -37,6 +54,27 @@ pub trait RenderBackend {
     fn apply_shadow(&mut self, shadow: &ShadowSpec);
 
     fn draw(&mut self, op: &DrawOp);
+    fn register_image(&mut self, url_key: &str, bytes: &[u8]) -> Result<(), DecodeError> {
+        if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.len() >= 24 {
+            let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+            let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+            let rgba = (width as u64)
+                .saturating_mul(height as u64)
+                .saturating_mul(4);
+            if width > 16_384 || height > 16_384 || rgba > 128 * 1024 * 1024 {
+                return Err(DecodeError("decoded image bounds exceeded".into()));
+            }
+        }
+        REGISTERED_IMAGES.with(|images| {
+            images
+                .borrow_mut()
+                .insert(url_key.to_owned(), bytes.to_vec())
+        });
+        Ok(())
+    }
+    fn release_image(&mut self, url_key: &str) {
+        REGISTERED_IMAGES.with(|images| images.borrow_mut().remove(url_key));
+    }
 }
 
 /// Test / replay backend that records every command.

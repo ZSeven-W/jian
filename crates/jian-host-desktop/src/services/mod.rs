@@ -13,6 +13,8 @@ pub mod storage;
 pub mod clipboard;
 
 #[cfg(feature = "network")]
+pub mod image_resolver;
+#[cfg(feature = "network")]
 pub mod network;
 
 #[cfg(feature = "feedback")]

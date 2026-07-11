@@ -43,6 +43,7 @@ pub mod font_lock;
 pub mod font_resolve;
 pub mod icons;
 pub(crate) mod image;
+pub(crate) mod image_registry;
 #[cfg(feature = "textlayout")]
 pub mod measure;
 pub mod path;
