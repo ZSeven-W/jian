@@ -111,7 +111,7 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
         c.height.as_ref(),
         Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
     );
-    Style {
+    let mut style = Style {
         display: Display::Flex,
         size: Size {
             width: resolve_sizing(c.width.as_ref()),
@@ -131,6 +131,24 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
             height: gap_lp,
         },
         ..Default::default()
+    };
+    apply_limits(&mut style, &c.limits);
+    style
+}
+
+/// Map optional authored bounds onto taffy's min/max dimensions.
+pub(crate) fn apply_limits(style: &mut Style, limits: &jian_ops_schema::sizing::SizeLimits) {
+    if let Some(value) = limits.min_width {
+        style.min_size.width = length(value as f32);
+    }
+    if let Some(value) = limits.max_width {
+        style.max_size.width = length(value as f32);
+    }
+    if let Some(value) = limits.min_height {
+        style.min_size.height = length(value as f32);
+    }
+    if let Some(value) = limits.max_height {
+        style.max_size.height = length(value as f32);
     }
 }
 
@@ -156,7 +174,7 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             ..Default::default()
         },
         _ => {
-            let (w, h) = leaf_size(n);
+            let (w, h, limits) = leaf_size_and_limits(n);
             // A fixed (Number) leaf must not be flex-shrunk below its size:
             // TS sums fixed sizes and shares only the remainder among
             // fill_container, whereas taffy's default `flex_shrink = 1`
@@ -166,14 +184,18 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             // flex-share its row, so squares keep their size (matches TS).
             let fixed = matches!(w, Some(SizingBehavior::Number(_)))
                 && matches!(h, Some(SizingBehavior::Number(_)));
-            Style {
+            let mut style = Style {
                 size: Size {
                     width: resolve_sizing(w),
                     height: resolve_sizing(h),
                 },
                 flex_shrink: if fixed { 0.0 } else { 1.0 },
                 ..Default::default()
+            };
+            if let Some(limits) = limits {
+                apply_limits(&mut style, limits);
             }
+            style
         }
     };
     if let Some((x, y)) = explicit_position(n) {
@@ -236,37 +258,41 @@ fn node_base(
     })
 }
 
-fn leaf_size(
+fn leaf_size_and_limits(
     n: &jian_ops_schema::node::PenNode,
-) -> (Option<&SizingBehavior>, Option<&SizingBehavior>) {
+) -> (
+    Option<&SizingBehavior>,
+    Option<&SizingBehavior>,
+    Option<&jian_ops_schema::sizing::SizeLimits>,
+) {
     use jian_ops_schema::node::PenNode;
     match n {
-        PenNode::Text(t) => (t.width.as_ref(), t.height.as_ref()),
-        PenNode::TextInput(t) => (t.width.as_ref(), t.height.as_ref()),
-        PenNode::IconFont(i) => (i.width.as_ref(), i.height.as_ref()),
-        PenNode::Image(i) => (i.width.as_ref(), i.height.as_ref()),
+        PenNode::Text(t) => (t.width.as_ref(), t.height.as_ref(), Some(&t.limits)),
+        PenNode::TextInput(t) => (t.width.as_ref(), t.height.as_ref(), Some(&t.limits)),
+        PenNode::IconFont(i) => (i.width.as_ref(), i.height.as_ref(), Some(&i.limits)),
+        PenNode::Image(i) => (i.width.as_ref(), i.height.as_ref(), Some(&i.limits)),
         // Ellipse was missing — its width/height never reached the flex
         // solver, so a 36×36 avatar ring measured 0×0 and `justifyContent:
         // center` parked its ORIGIN at the parent's center (+half, +half);
         // paint then drew the declared 36×36 shifted by its own radius
         // (measured: a 270° arc ring rendered half-off its avatar).
-        PenNode::Ellipse(e) => (e.width.as_ref(), e.height.as_ref()),
-        PenNode::Polygon(p) => (p.width.as_ref(), p.height.as_ref()),
+        PenNode::Ellipse(e) => (e.width.as_ref(), e.height.as_ref(), Some(&e.limits)),
+        PenNode::Polygon(p) => (p.width.as_ref(), p.height.as_ref(), Some(&p.limits)),
         // Path has the same flex-solver requirement as Ellipse:
         // chart paths authored as fill_container inside a layout:none card
         // resolved to w=0, so the painter's path-fit fallback translated
         // without scaling and the chart line never stretched with its card.
-        PenNode::Path(p) => (p.width.as_ref(), p.height.as_ref()),
-        PenNode::TextArea(t) => (t.width.as_ref(), t.height.as_ref()),
-        PenNode::Select(s) => (s.width.as_ref(), s.height.as_ref()),
-        PenNode::Switch(s) => (s.width.as_ref(), s.height.as_ref()),
-        PenNode::Checkbox(c) => (c.width.as_ref(), c.height.as_ref()),
-        PenNode::Slider(s) => (s.width.as_ref(), s.height.as_ref()),
-        PenNode::RadioGroup(r) => (r.width.as_ref(), r.height.as_ref()),
-        PenNode::NumberInput(n) => (n.width.as_ref(), n.height.as_ref()),
-        PenNode::Progress(p) => (p.width.as_ref(), p.height.as_ref()),
-        PenNode::Tabs(t) => (t.width.as_ref(), t.height.as_ref()),
-        _ => (None, None),
+        PenNode::Path(p) => (p.width.as_ref(), p.height.as_ref(), Some(&p.limits)),
+        PenNode::TextArea(t) => (t.width.as_ref(), t.height.as_ref(), Some(&t.limits)),
+        PenNode::Select(s) => (s.width.as_ref(), s.height.as_ref(), Some(&s.limits)),
+        PenNode::Switch(s) => (s.width.as_ref(), s.height.as_ref(), Some(&s.limits)),
+        PenNode::Checkbox(c) => (c.width.as_ref(), c.height.as_ref(), Some(&c.limits)),
+        PenNode::Slider(s) => (s.width.as_ref(), s.height.as_ref(), Some(&s.limits)),
+        PenNode::RadioGroup(r) => (r.width.as_ref(), r.height.as_ref(), Some(&r.limits)),
+        PenNode::NumberInput(n) => (n.width.as_ref(), n.height.as_ref(), Some(&n.limits)),
+        PenNode::Progress(p) => (p.width.as_ref(), p.height.as_ref(), Some(&p.limits)),
+        PenNode::Tabs(t) => (t.width.as_ref(), t.height.as_ref(), Some(&t.limits)),
+        _ => (None, None, None),
     }
 }
 
@@ -280,7 +306,10 @@ fn node_size_refs(
         PenNode::Frame(f) => (f.container.width.as_ref(), f.container.height.as_ref()),
         PenNode::Group(g) => (g.container.width.as_ref(), g.container.height.as_ref()),
         PenNode::Rectangle(r) => (r.container.width.as_ref(), r.container.height.as_ref()),
-        _ => leaf_size(n),
+        _ => {
+            let (width, height, _) = leaf_size_and_limits(n);
+            (width, height)
+        }
     }
 }
 
@@ -414,5 +443,15 @@ mod tests {
         assert_eq!(r.bottom, lp_len(10.0));
         assert_eq!(r.left, lp_len(20.0));
         assert_eq!(r.right, lp_len(20.0));
+    }
+
+    #[test]
+    fn limits_map_to_taffy_min_max() {
+        let container: ContainerProps =
+            serde_json::from_str(r#"{"width":100,"minWidth":50,"maxHeight":40}"#).unwrap();
+        let style = container_to_style(&container);
+        assert_eq!(style.min_size.width, length(50.0));
+        assert_eq!(style.max_size.height, length(40.0));
+        assert_eq!(style.max_size.width, Dimension::Auto);
     }
 }
