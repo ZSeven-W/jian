@@ -12,6 +12,7 @@ pub use tree::{NodeData, NodeKey, NodeTree};
 
 use jian_ops_schema::document::PenDocument;
 
+#[derive(Clone)]
 pub struct RuntimeDocument {
     pub schema: PenDocument,
     pub tree: NodeTree,

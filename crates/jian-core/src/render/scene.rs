@@ -207,7 +207,7 @@ fn walk(
 
     let mut overrides = BindingOverrides::default();
     if let (Some(_), Some(j), Some(state)) = (r, json.as_mut(), state) {
-        overrides = apply_bindings(j, state);
+        overrides = apply_bindings(j, state, !doc.schema.is_responsive());
     }
 
     if let Some(json) = json.as_ref() {
@@ -247,7 +247,7 @@ fn walk(
             })
             .is_some();
         if !handled {
-            emit_for_node(r, json, out);
+            emit_for_node(r, json, doc.schema.is_responsive(), out);
         }
     }
 
@@ -306,7 +306,11 @@ impl BindingOverrides {
 ///   leaves this is enough to move them around.)
 /// - `fill[0].color` (hex string — written into the first fill's color
 ///   field, defaulting `type` to `"solid"`)
-fn apply_bindings(node: &mut Value, state: &crate::state::StateGraph) -> BindingOverrides {
+fn apply_bindings(
+    node: &mut Value,
+    state: &crate::state::StateGraph,
+    allow_rect_overrides: bool,
+) -> BindingOverrides {
     let mut overrides = BindingOverrides::default();
     let Some(obj) = node.as_object_mut() else {
         return overrides;
@@ -346,25 +350,17 @@ fn apply_bindings(node: &mut Value, state: &crate::state::StateGraph) -> Binding
                     }
                 }
             }
-            "x" => {
-                if let Some(n) = number_from_runtime(&value) {
-                    overrides.x = Some(n as f32);
-                }
+            "x" if allow_rect_overrides => {
+                overrides.x = number_from_runtime(&value).map(|n| n as f32)
             }
-            "y" => {
-                if let Some(n) = number_from_runtime(&value) {
-                    overrides.y = Some(n as f32);
-                }
+            "y" if allow_rect_overrides => {
+                overrides.y = number_from_runtime(&value).map(|n| n as f32)
             }
-            "width" => {
-                if let Some(n) = number_from_runtime(&value) {
-                    overrides.w = Some(n as f32);
-                }
+            "width" if allow_rect_overrides => {
+                overrides.w = number_from_runtime(&value).map(|n| n as f32)
             }
-            "height" => {
-                if let Some(n) = number_from_runtime(&value) {
-                    overrides.h = Some(n as f32);
-                }
+            "height" if allow_rect_overrides => {
+                overrides.h = number_from_runtime(&value).map(|n| n as f32)
             }
             "fill[0].color" => {
                 if let Some(s) = value.as_str() {
@@ -467,7 +463,7 @@ fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
     }
 }
 
-fn emit_for_node(r: crate::geometry::Rect, json: &Value, out: &mut Vec<DrawOp>) {
+fn emit_for_node(r: crate::geometry::Rect, json: &Value, responsive: bool, out: &mut Vec<DrawOp>) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
 
     // --- Image emission. Image nodes and `image` fills both paint
@@ -475,7 +471,7 @@ fn emit_for_node(r: crate::geometry::Rect, json: &Value, out: &mut Vec<DrawOp>) 
     // *under* and any stroke *around* the image. Compute shadow/stroke
     // up-front so the emit ordering is shadow → image → stroke even
     // when this branch returns early.
-    let image_source = image_source_for(json);
+    let image_source = image_source_for(json, responsive);
     if let Some((source, opacity)) = image_source {
         let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
         if let Some(shadow) = first_shadow(json) {
@@ -1313,8 +1309,8 @@ fn node_opacity(json: &Value) -> f32 {
 /// Treat `data:` strings as inline base64 payloads; everything else is
 /// a host-resolved URL (the skia backend's image cache draws a grey
 /// placeholder if no resolver is wired up).
-fn classify_source(src: &str) -> ImageSource {
-    if src.starts_with("data:") {
+fn classify_source(src: &str, responsive: bool) -> ImageSource {
+    if src.starts_with("data:") && !responsive {
         ImageSource::DataUrl(src.to_owned())
     } else {
         ImageSource::Url(src.to_owned())
@@ -1324,11 +1320,11 @@ fn classify_source(src: &str) -> ImageSource {
 /// Resolve which image source (if any) a node should paint with. Image
 /// nodes win over image fills; fills only fire on non-image nodes with
 /// `fill[0].type == "image"`. Returns `(source, opacity)`.
-fn image_source_for(json: &Value) -> Option<(ImageSource, f32)> {
+fn image_source_for(json: &Value, responsive: bool) -> Option<(ImageSource, f32)> {
     if json.get("type").and_then(|t| t.as_str()) == Some("image") {
         let src = json.get("src").and_then(|v| v.as_str())?;
         let opacity = json.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-        return Some((classify_source(src), opacity));
+        return Some((classify_source(src, responsive), opacity));
     }
     let first_fill = json
         .get("fill")
@@ -1340,7 +1336,7 @@ fn image_source_for(json: &Value) -> Option<(ImageSource, f32)> {
     }
     let url = obj.get("url").and_then(|v| v.as_str())?.to_owned();
     let opacity = obj.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    Some((classify_source(&url), opacity))
+    Some((classify_source(&url, responsive), opacity))
 }
 
 fn try_linear_gradient(fill: &Value) -> Option<LinearGradient> {

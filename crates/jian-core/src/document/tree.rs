@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 new_key_type! { pub struct NodeKey; }
 
+#[derive(Clone)]
 pub struct NodeData {
     /// The schema-level representation (borrowed reference is not possible; we clone).
     pub schema: PenNode,
@@ -23,6 +24,7 @@ pub struct NodeData {
     pub children: Vec<NodeKey>,
 }
 
+#[derive(Clone)]
 pub struct NodeTree {
     pub nodes: SlotMap<NodeKey, NodeData>,
     pub by_id: BTreeMap<String, NodeKey>,

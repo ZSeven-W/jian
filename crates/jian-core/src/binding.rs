@@ -35,6 +35,76 @@ use std::rc::Rc;
 /// runtime / compile diagnostics produced during evaluation.
 pub type ApplyFn = dyn FnMut(RuntimeValue, Vec<Diagnostic>) + 'static;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InvalidationClass {
+    LayoutSpatial,
+    PaintOnly,
+    Interactive,
+}
+
+pub fn classify_binding(property: &str) -> InvalidationClass {
+    match property {
+        "content" | "text" | "x" | "y" | "width" | "height" | "layout" | "minWidth"
+        | "maxWidth" | "minHeight" | "maxHeight" => InvalidationClass::LayoutSpatial,
+        "visible" | "disabled" => InvalidationClass::Interactive,
+        _ => InvalidationClass::PaintOnly,
+    }
+}
+
+pub(crate) fn has_install_binding(node: &jian_ops_schema::node::PenNode) -> bool {
+    serde_json::to_value(node)
+        .ok()
+        .and_then(|json| json.get("bindings").cloned())
+        .and_then(|bindings| bindings.as_object().cloned())
+        .is_some_and(|bindings| {
+            bindings
+                .keys()
+                .any(|property| classify_binding(property) != InvalidationClass::PaintOnly)
+        })
+}
+
+pub(crate) fn materialize_layout_bindings(
+    node: &mut jian_ops_schema::node::PenNode,
+    state: &StateGraph,
+    page_id: Option<&str>,
+) {
+    let Ok(mut json) = serde_json::to_value(&*node) else {
+        return;
+    };
+    let Some(object) = json.as_object_mut() else {
+        return;
+    };
+    let Some(bindings) = object
+        .get("bindings")
+        .and_then(|value| value.as_object())
+        .cloned()
+    else {
+        return;
+    };
+    let node_id = object
+        .get("id")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    for (property, source) in bindings {
+        if classify_binding(&property) == InvalidationClass::PaintOnly {
+            continue;
+        }
+        let Some(source) = source.as_str() else {
+            continue;
+        };
+        let Ok(expression) = Expression::compile(source) else {
+            continue;
+        };
+        let (value, _) = expression.eval(state, page_id, node_id.as_deref());
+        if !value.is_null() {
+            object.insert(property, value.0);
+        }
+    }
+    if let Ok(materialized) = serde_json::from_value(json) {
+        *node = materialized;
+    }
+}
+
 pub struct BindingEffect {
     _handle: EffectHandle,
 }
@@ -512,5 +582,16 @@ mod tests {
         state.app_set("n", json!(7));
         sched.flush();
         assert_eq!(last.borrow().as_i64(), Some(49));
+    }
+
+    #[test]
+    fn invalidation_table_covers_geometry_interactivity_and_fallback() {
+        assert_eq!(classify_binding("width"), InvalidationClass::LayoutSpatial);
+        assert_eq!(classify_binding("visible"), InvalidationClass::Interactive);
+        assert_eq!(classify_binding("opacity"), InvalidationClass::PaintOnly);
+        assert_eq!(
+            classify_binding("futureProperty"),
+            InvalidationClass::PaintOnly
+        );
     }
 }

@@ -1,5 +1,6 @@
 use jian_core::document::loader;
 use jian_core::layout::LayoutEngine;
+use jian_core::render::{collect_draws_with_state, DrawOp};
 use jian_core::signal::scheduler::Scheduler;
 use jian_core::state::StateGraph;
 use jian_core::Runtime;
@@ -103,6 +104,69 @@ fn non_responsive_document_ignores_authored_min_max_fields() {
         r#""version":"1.1","responsive":false"#,
     );
     assert_eq!(layout(&explicitly_false), layout(without_limits));
+}
+
+#[test]
+fn responsive_layout_binding_reflows_through_the_real_pump() {
+    let schema = load_str(
+        r#"{"version":"1.2","responsive":true,
+        "state":{"w":{"type":"int","default":20}},
+        "children":[{"type":"frame","id":"root","width":100,"height":100,"children":[
+          {"type":"rectangle","id":"box","width":10,"height":10,
+           "bindings":{"width":"$app.w"}}]}]}"#,
+    )
+    .unwrap()
+    .value;
+    let mut runtime = Runtime::new_from_document(schema).unwrap();
+    runtime.build_layout((100.0, 100.0)).unwrap();
+    let key = runtime.document.as_ref().unwrap().tree.get("box").unwrap();
+    assert_eq!(runtime.layout.node_rect(key).unwrap().size.width, 20.0);
+
+    runtime.state.app_set("w", serde_json::json!(60));
+    runtime.scheduler.flush();
+    assert!(runtime.pump(1).needs_paint);
+    assert_eq!(runtime.layout.node_rect(key).unwrap().size.width, 60.0);
+}
+
+#[test]
+fn responsive_render_waits_for_bound_geometry_install() {
+    let schema = load_str(
+        r##"{"version":"1.2","responsive":true,
+        "state":{"x":{"type":"int","default":5}},
+        "children":[{"type":"frame","id":"root","width":100,"height":100,"children":[
+          {"type":"rectangle","id":"box","x":0,"width":10,"height":10,
+           "fill":[{"type":"solid","color":"#ff0000"}],"bindings":{"x":"$app.x"}}]}]}"##,
+    )
+    .unwrap()
+    .value;
+    let mut runtime = Runtime::new_from_document(schema).unwrap();
+    runtime.build_layout((100.0, 100.0)).unwrap();
+    runtime.state.app_set("x", serde_json::json!(40));
+    runtime.scheduler.flush();
+
+    let rect_x = collect_draws_with_state(
+        runtime.document.as_ref().unwrap(),
+        &runtime.layout,
+        &runtime.state,
+    )
+    .into_iter()
+    .find_map(|draw| match draw {
+        DrawOp::Rect { rect, .. } if rect.size.width == 10.0 => Some(rect.origin.x),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(rect_x, 5.0);
+
+    runtime.pump(1);
+    assert_eq!(
+        runtime
+            .layout
+            .node_rect(runtime.document.as_ref().unwrap().tree.get("box").unwrap())
+            .unwrap()
+            .origin
+            .x,
+        40.0
+    );
 }
 
 fn responsive_rects(width: f32, height: f32) -> BTreeMap<String, [f32; 4]> {

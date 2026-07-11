@@ -24,6 +24,8 @@ use crate::geometry::{rect, Rect};
 use jian_ops_schema::pack::initial_layout::InitialLayoutSnapshot;
 use measure::{default_backend, FontStyleKind, MeasureBackend, MeasureRequest, StyledRun};
 use slotmap::SecondaryMap;
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::rc::Rc;
 use taffy::prelude::*;
@@ -114,6 +116,13 @@ pub struct LayoutEngine {
     pub(crate) root_owner: SecondaryMap<NodeKey, NodeKey>,
     pub(crate) base_styles: SecondaryMap<NodeKey, Style>,
     origin_normalized: HashSet<NodeKey>,
+    #[cfg(test)]
+    fail_next_staged_build: Cell<bool>,
+}
+
+pub struct StagedLayout {
+    pub(crate) engine: LayoutEngine,
+    pub(crate) roots: Vec<NodeId>,
 }
 
 impl LayoutEngine {
@@ -141,6 +150,8 @@ impl LayoutEngine {
             root_owner: SecondaryMap::new(),
             base_styles: SecondaryMap::new(),
             origin_normalized: HashSet::new(),
+            #[cfg(test)]
+            fail_next_staged_build: Cell::new(false),
         }
     }
 
@@ -155,6 +166,28 @@ impl LayoutEngine {
     /// `build_layout` path.
     pub fn set_backend(&mut self, measure: Rc<dyn MeasureBackend>) {
         self.measure = measure;
+    }
+
+    /// Build a fresh tree aside. The receiver remains usable if any build or
+    /// later compute step fails; callers install only after the transaction
+    /// has completed successfully.
+    pub fn build_staged(&self, doc: &crate::document::RuntimeDocument) -> CoreResult<StagedLayout> {
+        #[cfg(test)]
+        if self.fail_next_staged_build.replace(false) {
+            return Err(CoreError::Layout("injected staged build failure".into()));
+        }
+        let mut engine = Self::with_backend(self.measure.clone());
+        let roots = engine.build_responsive(&doc.tree, doc.schema.is_responsive())?;
+        Ok(StagedLayout { engine, roots })
+    }
+
+    pub fn install(&mut self, staged: StagedLayout) {
+        *self = staged.engine;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_staged_build_failure(&self) {
+        self.fail_next_staged_build.set(true);
     }
 
     /// Build a taffy tree mirroring the NodeTree. Returns the root NodeIds.
