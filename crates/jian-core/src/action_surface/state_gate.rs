@@ -28,6 +28,7 @@ pub struct RuntimeStateGate<'a> {
     pub document: &'a RuntimeDocument,
     pub state: &'a StateGraph,
     pub expr_cache: Rc<ExpressionCache>,
+    page_key: Option<&'a str>,
 }
 
 impl<'a> RuntimeStateGate<'a> {
@@ -40,6 +41,21 @@ impl<'a> RuntimeStateGate<'a> {
             document,
             state,
             expr_cache,
+            page_key: None,
+        }
+    }
+
+    pub fn new_with_page(
+        document: &'a RuntimeDocument,
+        state: &'a StateGraph,
+        expr_cache: Rc<ExpressionCache>,
+        page_key: &'a str,
+    ) -> Self {
+        Self {
+            document,
+            state,
+            expr_cache,
+            page_key: Some(page_key),
         }
     }
 
@@ -117,7 +133,7 @@ impl<'a> RuntimeStateGate<'a> {
             Ok(e) => e,
             Err(_) => return default,
         };
-        let (value, _warnings) = compiled.eval(self.state, None, Some(node_id));
+        let (value, _warnings) = compiled.eval(self.state, self.page_key, Some(node_id));
         let _ = Value::Null; // keep `serde_json::Value` import alive
         value.as_bool().unwrap_or(default)
     }
@@ -372,5 +388,23 @@ mod tests {
         // Authors who want bool-valued shortcuts compose the comparison
         // directly, no backticks:
         //   "disabled": "$state.x > 5"
+    }
+
+    #[test]
+    fn responsive_page_context_controls_action_visibility() {
+        let (doc, state) = build(
+            r#"{"version":"1.2","responsive":true,"children":[
+              {"type":"frame","id":"action","bindings":{"visible":"$page.flag"}}
+            ]}"#,
+        );
+        state.page_set("desktop", "flag", serde_json::json!(true));
+        state.page_set("mobile", "flag", serde_json::json!(false));
+        let cache = Rc::new(ExpressionCache::new());
+
+        assert!(
+            RuntimeStateGate::new_with_page(&doc, &state, cache.clone(), "desktop")
+                .allows("action")
+        );
+        assert!(!RuntimeStateGate::new_with_page(&doc, &state, cache, "mobile").allows("action"));
     }
 }

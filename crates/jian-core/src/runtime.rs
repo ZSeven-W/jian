@@ -177,6 +177,7 @@ pub struct Runtime {
     mutation_counter: Rc<Cell<u64>>,
     last_variant_build_count: usize,
     action_surface_inputs: Vec<crate::action_surface::ActionDefinition>,
+    action_surface_generation: u64,
 
     // --- Gesture + Action wiring (Plan 5 T15) ---
     pub gestures: PointerRouter,
@@ -249,6 +250,7 @@ impl Runtime {
             mutation_counter,
             last_variant_build_count: 0,
             action_surface_inputs: Vec::new(),
+            action_surface_generation: 0,
 
             gestures: PointerRouter::new(),
             focus: FocusManager::new(),
@@ -348,6 +350,7 @@ impl Runtime {
             mutation_counter,
             last_variant_build_count: 0,
             action_surface_inputs,
+            action_surface_generation: 1,
 
             gestures: PointerRouter::new(),
             focus,
@@ -394,6 +397,15 @@ impl Runtime {
     ) {
         self.variant_source = Some(source);
         self.configure_variants(path, table);
+        if let Some(page_id) = self
+            .document
+            .as_ref()
+            .and_then(|document| document.active_page.clone())
+        {
+            self.active_variant_page_id = Some(page_id.clone());
+            self.active_page_key = page_id.clone();
+            self.widget_states.set_page_key(page_id);
+        }
     }
 
     pub fn selected_variant(&self) -> Option<&str> {
@@ -402,6 +414,11 @@ impl Runtime {
 
     pub fn active_page_key(&self) -> &str {
         &self.active_page_key
+    }
+
+    /// Changes whenever the mounted document's derived action set changes.
+    pub fn action_surface_generation(&self) -> u64 {
+        self.action_surface_generation
     }
 
     pub fn begin_ime_handshake(&mut self, snapshot: ImeSnapshot) -> u64 {
@@ -474,11 +491,20 @@ impl Runtime {
     /// State seeding uses `SeedMode::PreserveExisting` — keys that
     /// already hold a value keep that value; only newly-introduced
     /// keys get their schema default.
-    pub fn replace_document(&mut self, mut schema: PenDocument) -> CoreResult<()> {
+    pub fn replace_document(&mut self, schema: PenDocument) -> CoreResult<()> {
+        let preferred_path = self.active_screen_path.clone();
+        self.replace_document_for_path(schema, preferred_path.as_deref())
+    }
+
+    pub(crate) fn replace_document_for_path(
+        &mut self,
+        mut schema: PenDocument,
+        preferred_path: Option<&str>,
+    ) -> CoreResult<()> {
         let prepared = prepare_document(
             schema,
             (self.viewport.size.width, self.viewport.size.height),
-            self.active_screen_path.as_deref(),
+            preferred_path,
         );
         schema = prepared.mounted;
         // Rebuild the capability gate from the new schema. Reuse the
@@ -510,6 +536,7 @@ impl Runtime {
         self.audit = Some(audit);
         self.capabilities = capabilities;
         self.action_surface_inputs = action_surface_inputs;
+        self.action_surface_generation = self.action_surface_generation.wrapping_add(1);
         self.load_warnings = prepared.warnings;
         self.variant_source = prepared.source;
         self.variant_table = prepared.variants;
@@ -775,7 +802,7 @@ impl Runtime {
                         let schema = &doc.tree.nodes[node].schema;
                         crate::document::tree::node_schema_id(schema).to_owned()
                     };
-                    self.focus_request(node);
+                    let _ = self.focus_request(node);
                     self.with_widget_state(node, |st| {
                         if let WidgetState::Slider { dragging, .. } = st {
                             *dragging = true;
@@ -859,7 +886,7 @@ impl Runtime {
         if matches!(act, Act::NotWidget) {
             return;
         }
-        self.focus_request(node);
+        let _ = self.focus_request(node);
 
         let changed = match act {
             Act::Toggle => self.with_widget_state(node, |st| {
@@ -1049,9 +1076,9 @@ impl Runtime {
         let key = key.into();
         if key == "Tab" {
             if modifiers.contains(crate::gesture::pointer::Modifiers::SHIFT) {
-                return self.focus_previous();
+                return self.focus_previous().unwrap_or_default();
             }
-            return self.focus_next();
+            return self.focus_next().unwrap_or_default();
         }
         // Route editing keys to the focused editable widget before the
         // generic semantic dispatch. Printable text + paste arrive via
@@ -1380,30 +1407,45 @@ impl Runtime {
 
     /// Move focus forward one step (`Tab`) and emit the corresponding
     /// `FocusLost` / `FocusGained` events.
-    pub fn focus_next(&mut self) -> Vec<SemanticEvent> {
+    pub fn focus_next(&mut self) -> CoreResult<Vec<SemanticEvent>> {
+        if self.input_frozen() {
+            return Err(CoreError::Busy);
+        }
         let change = self.focus.next();
-        self.emit_focus_change(change)
+        Ok(self.emit_focus_change(change))
     }
 
     /// Move focus backward one step (`Shift+Tab`).
-    pub fn focus_previous(&mut self) -> Vec<SemanticEvent> {
+    pub fn focus_previous(&mut self) -> CoreResult<Vec<SemanticEvent>> {
+        if self.input_frozen() {
+            return Err(CoreError::Busy);
+        }
         let change = self.focus.previous();
-        self.emit_focus_change(change)
+        Ok(self.emit_focus_change(change))
     }
 
     /// Programmatically focus an explicit node. Hosts call this from
     /// click handlers (focus-on-click) or from `jian-action-surface`
     /// when an AI client requests a focus change.
-    pub fn focus_request(&mut self, node: crate::document::NodeKey) -> Vec<SemanticEvent> {
+    pub fn focus_request(
+        &mut self,
+        node: crate::document::NodeKey,
+    ) -> CoreResult<Vec<SemanticEvent>> {
+        if self.input_frozen() {
+            return Err(CoreError::Busy);
+        }
         let change = self.focus.request(node);
-        self.emit_focus_change(change)
+        Ok(self.emit_focus_change(change))
     }
 
     /// Drop focus entirely — typically wired to clicking outside any
     /// focusable node, or to the window losing OS focus.
-    pub fn focus_clear(&mut self) -> Vec<SemanticEvent> {
+    pub fn focus_clear(&mut self) -> CoreResult<Vec<SemanticEvent>> {
+        if self.input_frozen() {
+            return Err(CoreError::Busy);
+        }
         let change = self.focus.clear();
-        self.emit_focus_change(change)
+        Ok(self.emit_focus_change(change))
     }
 
     fn emit_focus_change(&mut self, change: crate::gesture::FocusChange) -> Vec<SemanticEvent> {
@@ -1450,6 +1492,9 @@ impl Runtime {
     /// that fired (per message) so hosts can request a redraw when
     /// state changed.
     pub fn pump_websockets(&mut self) -> usize {
+        if self.input_frozen() {
+            return 0;
+        }
         let snapshot: Vec<(
             String,
             Rc<dyn crate::action::services::WebSocketSession>,
@@ -1529,6 +1574,9 @@ impl Runtime {
     /// Drive timer-based recognizers (LongPress). Host must call each frame.
     pub fn tick(&mut self, now: Instant) -> Vec<SemanticEvent> {
         let emitted = self.gestures.tick(now);
+        if self.input_frozen() {
+            return Vec::new();
+        }
         for ev in &emitted {
             self.dispatch_semantic(ev);
         }
@@ -1806,12 +1854,12 @@ mod tests {
         )
         .unwrap();
         // Focus the first input, type, then backspace one char.
-        rt.focus_next();
+        rt.focus_next().unwrap();
         assert!(rt.dispatch_text_input("hi").unwrap());
         rt.dispatch_keyboard("Backspace", Modifiers::empty());
         assert_eq!(widget_text(&mut rt, "a"), "h");
         // Tab to the second input; typing there leaves the first alone.
-        rt.focus_next();
+        rt.focus_next().unwrap();
         assert!(rt.dispatch_text_input("x").unwrap());
         assert_eq!(widget_text(&mut rt, "b"), "x");
         assert_eq!(widget_text(&mut rt, "a"), "h");
@@ -1838,7 +1886,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        rt.focus_next();
+        rt.focus_next().unwrap();
         assert!(rt.dispatch_text_input("a@b").unwrap());
         let got = rt
             .state
@@ -1868,7 +1916,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        rt.focus_next();
+        rt.focus_next().unwrap();
         assert!(rt.dispatch_text_input("42").unwrap());
         // Bound as a number, not the string "42".
         assert_eq!(rt.state.app_get("n").and_then(|v| v.as_f64()), Some(42.0));
@@ -1892,11 +1940,11 @@ mod tests {
         )
         .unwrap();
         // Switch: Space flips it on.
-        rt.focus_next();
+        rt.focus_next().unwrap();
         rt.dispatch_keyboard(" ", Modifiers::empty());
         assert_eq!(rt.state.app_get("on").and_then(|v| v.as_bool()), Some(true));
         // Slider: two ArrowRight steps of 2 → 4.
-        rt.focus_next();
+        rt.focus_next().unwrap();
         rt.dispatch_keyboard("ArrowRight", Modifiers::empty());
         rt.dispatch_keyboard("ArrowRight", Modifiers::empty());
         assert_eq!(rt.state.app_get("vol").and_then(|v| v.as_f64()), Some(4.0));
@@ -1923,7 +1971,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        rt.focus_next();
+        rt.focus_next().unwrap();
         rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // a → b
         rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // b → c
         assert_eq!(
@@ -2032,7 +2080,7 @@ mod tests {
         )
         .unwrap();
         let mut rt = Runtime::new_from_document(loaded.value).unwrap();
-        rt.focus_next();
+        rt.focus_next().unwrap();
         assert!(rt.dispatch_text_input("hey").unwrap());
         let got = rt
             .state
@@ -2753,7 +2801,7 @@ mod tests {
 
         // Pin focus on A so the synthetic change below has a real
         // previous to fire FocusLost against.
-        let evs = rt.focus_request(key_a);
+        let evs = rt.focus_request(key_a).unwrap();
         assert_eq!(evs.len(), 1);
         assert!(matches!(evs[0], SemanticEvent::FocusGained { .. }));
         assert_eq!(evs[0].node(), key_a);
@@ -2945,8 +2993,8 @@ mod tests {
 
     fn variant_runtime() -> Runtime {
         let source: PenDocument = serde_json::from_str(
-            r#"{"version":"1.2","responsive":true,"children":[
-              {"type":"frame","id":"desktop","screen":"/","children":[{"type":"text_input","id":"field","value":"abIMEz"}]},
+            r#"{"version":"1.2","responsive":true,"state":{"long":{"type":"int","default":0}},"children":[
+              {"type":"frame","id":"desktop","screen":"/","width":300,"height":200,"children":[{"type":"text_input","id":"field","value":"abIMEz","width":100,"height":30,"events":{"onLongPress":[{"set":{"$app.long":"1"}}]}}]},
               {"type":"frame","id":"mobile","screen":"/","breakpoint":{"maxWidth":480},"children":[{"type":"text_input","id":"field","value":"mobile"}]}]}"#,
         ).unwrap();
         let (projected, _) = jian_ops_schema::screen_projection::project_screens(&source);
@@ -2964,6 +3012,116 @@ mod tests {
         let mut runtime = Runtime::new_from_document(mounted).unwrap();
         runtime.configure_variant_source(normalized, "/", variants);
         runtime
+    }
+
+    fn freeze_variant_runtime(runtime: &mut Runtime) {
+        let key = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("field")
+            .unwrap();
+        let node = runtime.document.as_ref().unwrap().tree.nodes[key]
+            .schema
+            .clone();
+        let state = runtime
+            .widget_states
+            .get_or_init(&node, &runtime.state)
+            .unwrap();
+        let crate::widget_state::WidgetState::TextInput(state) = state else {
+            panic!()
+        };
+        state.set_composition("pending", 7, 0);
+        runtime.switch_variant("mobile@0-480").unwrap();
+        assert!(runtime.input_frozen());
+    }
+
+    #[test]
+    fn focus_entry_points_return_busy_while_variant_input_is_frozen() {
+        let mut runtime = variant_runtime();
+        let key = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("field")
+            .unwrap();
+        freeze_variant_runtime(&mut runtime);
+        assert!(matches!(runtime.focus_next(), Err(CoreError::Busy)));
+        assert!(matches!(runtime.focus_previous(), Err(CoreError::Busy)));
+        assert!(matches!(runtime.focus_request(key), Err(CoreError::Busy)));
+        assert!(matches!(runtime.focus_clear(), Err(CoreError::Busy)));
+    }
+
+    #[test]
+    fn websocket_messages_wait_until_variant_freeze_lifts() {
+        use crate::action::context::WsHandle;
+        use crate::action::services::WebSocketSession;
+        use async_trait::async_trait;
+
+        struct Session(Rc<RefCell<Vec<String>>>);
+        #[async_trait(?Send)]
+        impl WebSocketSession for Session {
+            async fn send(&self, _: String) -> Result<(), String> {
+                Ok(())
+            }
+            async fn close(&self) -> Result<(), String> {
+                Ok(())
+            }
+            async fn receive(&self) -> Vec<String> {
+                std::mem::take(&mut *self.0.borrow_mut())
+            }
+        }
+
+        let mut runtime = variant_runtime();
+        runtime.state.app_set("last", serde_json::json!(""));
+        let inbox = Rc::new(RefCell::new(vec!["later".to_owned()]));
+        runtime.ws_sessions.borrow_mut().insert(
+            "chat".into(),
+            WsHandle {
+                session: Rc::new(Session(inbox.clone())),
+                on_message: Some(serde_json::json!([{ "set": { "$app.last": "$event.data" } }])),
+            },
+        );
+        freeze_variant_runtime(&mut runtime);
+        assert_eq!(runtime.pump_websockets(), 0);
+        assert_eq!(inbox.borrow().as_slice(), ["later"]);
+        let request = match runtime.swap_state {
+            SwapState::AwaitingIme { request_id, .. } => request_id,
+            _ => unreachable!(),
+        };
+        runtime.confirm_ime_cancel(request);
+        assert_eq!(runtime.pump_websockets(), 1);
+        assert_eq!(
+            runtime.state.app_get("last").unwrap().as_str(),
+            Some("later")
+        );
+    }
+
+    #[test]
+    fn pending_long_press_is_dropped_when_tick_occurs_during_freeze() {
+        let mut runtime = variant_runtime();
+        runtime.build_layout((300.0, 200.0)).unwrap();
+        runtime.rebuild_spatial();
+        let key = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("field")
+            .unwrap();
+        let rect = runtime.layout.node_rect(key).unwrap();
+        runtime.dispatch_pointer(PointerEvent::simple(
+            1,
+            crate::gesture::PointerPhase::Down,
+            crate::geometry::point(rect.min_x() + 1.0, rect.min_y() + 1.0),
+        ));
+        freeze_variant_runtime(&mut runtime);
+
+        let emitted = runtime.tick(Instant::now() + std::time::Duration::from_millis(800));
+        assert!(emitted.is_empty());
+        assert_eq!(runtime.state.app_get("long").unwrap().as_i64(), Some(0));
     }
 
     #[test]
@@ -2995,6 +3153,29 @@ mod tests {
     }
 
     #[test]
+    fn failed_rebuild_while_awaiting_ime_abandons_and_detaches_swap() {
+        let mut runtime = variant_runtime();
+        freeze_variant_runtime(&mut runtime);
+        let request = match runtime.swap_state {
+            SwapState::AwaitingIme { request_id, .. } => request_id,
+            _ => unreachable!(),
+        };
+
+        assert!(runtime.switch_variant("missing-variant").is_err());
+        assert!(!runtime.input_frozen());
+        assert_eq!(runtime.selected_variant(), Some("desktop"));
+        assert!(runtime
+            .load_warnings()
+            .iter()
+            .any(|warning| warning.contains("parked variant rebuild failed")));
+        assert_eq!(
+            runtime.confirm_ime_cancel(request),
+            ImeConfirmOutcome::Applied
+        );
+        assert_eq!(runtime.selected_variant(), Some("desktop"));
+    }
+
+    #[test]
     fn composition_parks_and_confirmation_commits_swap() {
         let mut runtime = variant_runtime();
         let key = runtime
@@ -3015,7 +3196,7 @@ mod tests {
             panic!()
         };
         field.set_caret(2, 0);
-        runtime.focus_request(key);
+        runtime.focus_request(key).unwrap();
         runtime
             .dispatch_ime(crate::gesture::ime::ImeEvent {
                 kind: crate::gesture::ime::ImeKind::CompositionStart,

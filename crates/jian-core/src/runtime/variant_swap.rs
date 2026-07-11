@@ -69,8 +69,21 @@ impl Runtime {
             SwapState::AwaitingIme { parked, .. } => (parked.started_at_ms, parked.build_count + 1),
             SwapState::Idle => (self.now_ms, 1),
         };
-        // The only fallible work happens before live metadata or freeze changes.
-        let parked = self.build_parked(target_page_id, started_at_ms, build_count)?;
+        // The only fallible work happens before live metadata changes. A failed
+        // rebuild of an already-parked request must detach that request and
+        // lift freeze rather than leave the stale artifact active.
+        let was_awaiting = matches!(self.swap_state, SwapState::AwaitingIme { .. });
+        let parked = match self.build_parked(target_page_id, started_at_ms, build_count) {
+            Ok(parked) => parked,
+            Err(error) => {
+                if was_awaiting {
+                    self.abandon_variant_swap();
+                    self.load_warnings
+                        .push(format!("parked variant rebuild failed: {error}"));
+                }
+                return Err(error);
+            }
+        };
         if let SwapState::AwaitingIme {
             parked: current, ..
         } = &mut self.swap_state
@@ -189,6 +202,7 @@ impl Runtime {
         self.spatial = parked.spatial;
         self.widget_states = parked.widget_states;
         self.action_surface_inputs = parked.action_surface_inputs;
+        self.action_surface_generation = self.action_surface_generation.wrapping_add(1);
         for warning in parked.warnings {
             if !self.load_warnings.contains(&warning) {
                 self.load_warnings.push(warning);

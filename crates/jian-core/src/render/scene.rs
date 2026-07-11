@@ -1828,7 +1828,7 @@ mod tests {
                      "fill":[{ "type":"solid", "color":"#ffffff" }] }
                  ]}"##,
         );
-        rt.focus_next();
+        rt.focus_next().unwrap();
         rt.dispatch_text_input("hi").unwrap();
         let theme = crate::render::widget_style::WidgetTheme::default();
         let is_caret = |op: &DrawOp| matches!(op, DrawOp::Rect { rect, .. } if (rect.size.width - 1.0).abs() < 0.01);
@@ -1984,7 +1984,7 @@ mod tests {
                      "fill":[{ "type":"solid", "color":"#ffffff" }] }
                  ]}"##,
         );
-        rt.focus_next();
+        rt.focus_next().unwrap();
         rt.dispatch_text_input("the quick brown fox jumps over the lazy dog")
             .unwrap();
         let theme = crate::render::widget_style::WidgetTheme::default();

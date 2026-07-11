@@ -1119,6 +1119,7 @@ impl RunApp {
         use jian_action_surface::mcp::Request;
         use jian_action_surface::{ClosureGate, RuntimeDispatcher};
         use jian_core::action_surface::RuntimeStateGate;
+        self.host.refresh_mcp_surface_if_needed();
         let mut executed = false;
         let Some(drain) = self.host.mcp_drain.as_mut() else {
             return false;
@@ -1139,10 +1140,11 @@ impl RunApp {
                     // immutable borrow only, no conflict with surface.
                     let response = match self.host.runtime.document.as_ref() {
                         Some(doc) => {
-                            let gate = RuntimeStateGate::new(
+                            let gate = RuntimeStateGate::new_with_page(
                                 doc,
                                 &self.host.runtime.state,
                                 self.host.runtime.expr_cache.clone(),
+                                self.host.runtime.active_page_key(),
                             );
                             surface.list_with_gate(opts, &gate)
                         }
@@ -1167,10 +1169,11 @@ impl RunApp {
                         let runtime = &self.host.runtime;
                         match runtime.document.as_ref() {
                             Some(doc) => {
-                                let gate = RuntimeStateGate::new(
+                                let gate = RuntimeStateGate::new_with_page(
                                     doc,
                                     &runtime.state,
                                     runtime.expr_cache.clone(),
+                                    runtime.active_page_key(),
                                 );
                                 // `find_action` matches canonical names
                                 // AND aliases — same matcher

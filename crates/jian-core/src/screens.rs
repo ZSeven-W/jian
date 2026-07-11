@@ -230,7 +230,7 @@ pub fn reconcile_screens(
             rejections,
         });
     };
-    runtime.replace_document(doc)?;
+    runtime.replace_document_for_path(doc, Some(&state.path))?;
     runtime.configure_variant_source(
         table.doc.clone(),
         state.path.clone(),
@@ -288,6 +288,45 @@ mod tests {
         assert_eq!(pages[0].id, "mobile@0-480");
         assert_eq!(pages.len(), 2);
         assert!(pages.iter().any(|page| page.id == "desktop"));
+    }
+
+    #[test]
+    fn responsive_reconcile_mounts_target_paths_width_selected_variant() {
+        use std::rc::Rc;
+
+        let source: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,"children":[
+              {"type":"frame","id":"a","screen":"/a","children":[{"type":"rectangle","id":"a-only"}]},
+              {"type":"frame","id":"b-wide","screen":"/b","children":[{"type":"rectangle","id":"b-wide-only"}]},
+              {"type":"frame","id":"b-narrow","screen":"/b","breakpoint":{"maxWidth":480},"children":[{"type":"rectangle","id":"b-narrow-only"}]}
+            ]}"#,
+        )
+        .unwrap();
+        let (projected, _) = jian_ops_schema::screen_projection::project_screens(&source);
+        let (document, variants) = projected.unwrap();
+        let table = ScreenTable::from_projected(document, variants).unwrap();
+        let router = Rc::new(ScreenRouter::new("/a", table.paths()));
+        let mut runtime = crate::Runtime::new_from_document(source).unwrap();
+        runtime.set_viewport_size((320.0, 600.0));
+        runtime.nav = router.clone();
+        let mut current = "/a".to_owned();
+
+        router.push("/b");
+        reconcile_screens(&mut runtime, &router, &table, &mut current).unwrap();
+
+        assert!(runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("b-narrow-only")
+            .is_some());
+        assert_eq!(
+            runtime.state.dump_default_state().route.get("path"),
+            Some(&serde_json::json!("/b"))
+        );
+        assert_eq!(runtime.selected_variant(), Some("b-narrow@0-480"));
+        assert_eq!(runtime.active_page_key(), "b-narrow@0-480");
     }
 
     #[test]

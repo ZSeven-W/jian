@@ -121,6 +121,9 @@ pub struct DesktopHost {
     /// host author re-supplying it on every save.
     #[cfg(feature = "mcp")]
     pub mcp_salt: BuildSalt,
+    /// Runtime action generation represented by `mcp_surface`.
+    #[cfg(feature = "mcp")]
+    pub mcp_surface_generation: u64,
     /// Audit ring buffer attached to every fresh `ActionSurface` the
     /// host derives from a document. Held here so reload-time
     /// re-derivation reuses the same log (audit history survives
@@ -274,6 +277,8 @@ impl DesktopHost {
             #[cfg(feature = "mcp")]
             mcp_salt: [0u8; 16],
             #[cfg(feature = "mcp")]
+            mcp_surface_generation: 0,
+            #[cfg(feature = "mcp")]
             mcp_audit: None,
             #[cfg(feature = "prod-asp")]
             asp_drain: None,
@@ -304,6 +309,8 @@ impl DesktopHost {
             mcp_surface: None,
             #[cfg(feature = "mcp")]
             mcp_salt: [0u8; 16],
+            #[cfg(feature = "mcp")]
+            mcp_surface_generation: 0,
             #[cfg(feature = "mcp")]
             mcp_audit: None,
             #[cfg(feature = "prod-asp")]
@@ -542,8 +549,33 @@ impl DesktopHost {
         self.mcp_drain = Some(drain);
         self.mcp_surface = surface;
         self.mcp_salt = salt;
+        self.mcp_surface_generation = self.runtime.action_surface_generation();
         self.mcp_audit = Some(audit);
         self
+    }
+
+    /// Refresh the host-owned MCP surface after an atomic runtime mount.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn refresh_mcp_surface_if_needed(&mut self) {
+        let generation = self.runtime.action_surface_generation();
+        if generation == self.mcp_surface_generation || self.mcp_drain.is_none() {
+            return;
+        }
+        if let Some(document) = self.runtime.document.as_ref() {
+            match self.mcp_surface.as_mut() {
+                Some(surface) => surface.refresh(&document.schema, &self.mcp_salt),
+                None => {
+                    let mut surface =
+                        ActionSurface::from_document(&document.schema, &self.mcp_salt)
+                            .with_session_id("mcp");
+                    if let Some(audit) = self.mcp_audit.as_ref() {
+                        surface = surface.with_audit(audit.clone());
+                    }
+                    self.mcp_surface = Some(surface);
+                }
+            }
+        }
+        self.mcp_surface_generation = generation;
     }
 
     /// Plan 18 ASP prod mode (C4 follow-up): wire a listener-side
@@ -836,6 +868,41 @@ mod tests {
         assert!(host.mcp_surface.is_some(), "surface derived from doc");
         assert!(host.mcp_audit.is_some(), "audit log attached");
         assert_eq!(host.mcp_salt, [9u8; 16], "salt held for reload re-derive");
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn variant_commit_refreshes_live_mcp_action_surface() {
+        let schema: jian_ops_schema::document::PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,"children":[
+              {"type":"frame","id":"desktop","screen":"/","children":[
+                {"type":"frame","id":"desktop-action","semantics":{"aiName":"desktop"},"events":{"onTap":[{"set":{"$app.hit":"desktop"}}]}}]},
+              {"type":"frame","id":"mobile","screen":"/","breakpoint":{"maxWidth":480},"children":[
+                {"type":"frame","id":"mobile-action","semantics":{"aiName":"mobile"},"events":{"onTap":[{"set":{"$app.hit":"mobile"}}]}}]}
+            ]}"#,
+        )
+        .unwrap();
+        let runtime = Runtime::new_from_document(schema).unwrap();
+        let (_bridge, drain) = jian_action_surface::mcp::Bridge::new();
+        let mut host = DesktopHost::new(runtime, "Mcp").with_mcp(drain, [7u8; 16]);
+        assert!(host
+            .mcp_surface
+            .as_ref()
+            .unwrap()
+            .actions()
+            .iter()
+            .any(|action| action.name.full().contains("desktop")));
+
+        host.runtime.switch_variant("mobile@0-480").unwrap();
+        host.refresh_mcp_surface_if_needed();
+
+        let actions = host.mcp_surface.as_ref().unwrap().actions();
+        assert!(actions
+            .iter()
+            .any(|action| action.name.full().contains("mobile")));
+        assert!(!actions
+            .iter()
+            .any(|action| action.name.full().contains("desktop")));
     }
 
     #[cfg(feature = "mcp")]
