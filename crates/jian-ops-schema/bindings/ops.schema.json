@@ -382,6 +382,17 @@
                 "null"
               ]
             },
+            "breakpoint": {
+              "description": "Breakpoint range for screen variants. Invalid ranges are stripped during responsive screen projection.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BreakpointRange"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "id": {
               "type": "string"
             },
@@ -7232,6 +7243,26 @@
           "additionalProperties": false
         }
       ]
+    },
+    "BreakpointRange": {
+      "description": "Inclusive viewport-width range for a responsive screen variant.",
+      "type": "object",
+      "properties": {
+        "minWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "maxWidth": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
     },
     "Constraints": {
       "description": "Figma-style per-axis anchoring for absolutely positioned nodes.",

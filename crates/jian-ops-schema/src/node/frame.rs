@@ -40,6 +40,10 @@ pub struct FrameNode {
     /// the screen-projection pass; ignored elsewhere. Additive 1.x.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub screen: Option<String>,
+    /// Breakpoint range for screen variants. Invalid ranges are stripped
+    /// during responsive screen projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breakpoint: Option<crate::breakpoint::BreakpointRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -99,6 +103,33 @@ pub struct RectangleNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::breakpoint::BreakpointRange;
+
+    #[test]
+    fn breakpoint_parses_and_legacy_roundtrip_unchanged() {
+        let breakpoint: BreakpointRange =
+            serde_json::from_str(r#"{"minWidth":0,"maxWidth":480}"#).unwrap();
+        assert!(breakpoint.validate().is_ok());
+        let frame: FrameNode = serde_json::from_str(r#"{"id":"f","screen":"/home"}"#).unwrap();
+        assert!(frame.breakpoint.is_none());
+        assert!(serde_json::to_value(frame)
+            .unwrap()
+            .get("breakpoint")
+            .is_none());
+    }
+
+    #[test]
+    fn invalid_breakpoint_ranges_are_detected() {
+        for json in [
+            r#"{"minWidth":500,"maxWidth":480}"#,
+            r#"{"minWidth":-1}"#,
+            r#"{"maxWidth":null}"#,
+            r#"{}"#,
+        ] {
+            let breakpoint: BreakpointRange = serde_json::from_str(json).unwrap();
+            assert!(breakpoint.validate().is_err(), "{json}");
+        }
+    }
 
     #[test]
     fn frame_screen_marker_roundtrip() {

@@ -1,6 +1,7 @@
 //! `jian-ops-schema` — canonical types + JSON Schema for Jian `.op` files.
 
 pub mod app;
+pub mod breakpoint;
 pub mod compat;
 pub mod constraints;
 pub mod conversion;
@@ -19,6 +20,7 @@ pub mod navigation;
 pub mod node;
 pub mod pack;
 pub mod page;
+pub mod page_ids;
 pub mod promote;
 pub mod routes;
 pub mod screen_projection;
