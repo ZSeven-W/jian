@@ -190,6 +190,11 @@ fn describe(source: &str, w: &LoadWarning) -> (Severity, String, Option<Span>) {
                 span,
             )
         }
+        LoadWarning::ViewportWrite { path } => (
+            Severity::Warning,
+            format!("write to read-only `$viewport` at `{path}` is ignored"),
+            locate_substring(source, "$viewport"),
+        ),
     }
 }
 

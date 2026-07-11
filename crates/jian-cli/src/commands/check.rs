@@ -152,5 +152,9 @@ fn warning_tuple(w: &LoadWarning) -> (&'static str, serde_json::Value) {
             "legacy_role_promoted",
             serde_json::json!({ "path": path, "from_role": from_role, "to": to }),
         ),
+        LoadWarning::ViewportWrite { path } => (
+            "viewport_write",
+            serde_json::json!({ "path": path, "message": "$viewport is read-only" }),
+        ),
     }
 }

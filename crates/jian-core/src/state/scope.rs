@@ -9,6 +9,7 @@ pub enum Scope {
     SelfNode,
     Route,
     Storage,
+    Viewport,
     /// Design variables — shared theme scope.
     Vars,
 }
@@ -21,6 +22,7 @@ impl Scope {
             Scope::SelfNode => "$self",
             Scope::Route => "$route",
             Scope::Storage => "$storage",
+            Scope::Viewport => "$viewport",
             Scope::Vars => "$vars",
         }
     }
@@ -32,6 +34,7 @@ impl Scope {
             "$self" => Scope::SelfNode,
             "$route" => Scope::Route,
             "$storage" => Scope::Storage,
+            "$viewport" => Scope::Viewport,
             "$vars" => Scope::Vars,
             _ => return None,
         })
@@ -50,6 +53,7 @@ mod tests {
             Scope::SelfNode,
             Scope::Route,
             Scope::Storage,
+            Scope::Viewport,
             Scope::Vars,
         ] {
             let p = s.as_prefix();

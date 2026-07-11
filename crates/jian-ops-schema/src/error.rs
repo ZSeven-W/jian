@@ -39,6 +39,9 @@ pub enum LoadWarning {
         expr: String,
         reason: String,
     },
+    ViewportWrite {
+        path: String,
+    },
     /// A legacy frame carrying an explicit widget role marker was
     /// promoted in-memory to a first-class widget node (the source
     /// file is NOT rewritten — see promote.rs).

@@ -75,6 +75,7 @@ pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDo
                     .to_owned(),
             });
         }
+        collect_viewport_writes(&raw, "$", &mut warnings);
     }
 
     if raw.get("logicModules").is_some() {
@@ -114,6 +115,28 @@ pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDo
         value: doc,
         warnings,
     })
+}
+
+fn collect_viewport_writes(value: &serde_json::Value, path: &str, warnings: &mut Vec<LoadWarning>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, child) in object {
+                let child_path = format!("{path}.{key}");
+                if key.starts_with("$viewport") {
+                    warnings.push(LoadWarning::ViewportWrite {
+                        path: child_path.clone(),
+                    });
+                }
+                collect_viewport_writes(child, &child_path, warnings);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                collect_viewport_writes(child, &format!("{path}[{index}]"), warnings);
+            }
+        }
+        _ => {}
+    }
 }
 
 const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
