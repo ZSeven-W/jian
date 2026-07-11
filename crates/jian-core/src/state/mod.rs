@@ -242,7 +242,7 @@ impl StateGraph {
         }
     }
 
-    fn bump_mutation(&self) {
+    pub(crate) fn bump_mutation(&self) {
         self.mutation_counter
             .set(self.mutation_counter.get().wrapping_add(1));
     }

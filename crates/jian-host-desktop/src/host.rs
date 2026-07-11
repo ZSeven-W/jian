@@ -704,7 +704,7 @@ mod tests {
         let schema_a = jian_ops_schema::load_str(body_a).unwrap().value;
         let mut runtime = Runtime::new_from_document(schema_a).unwrap();
         runtime.build_layout((640.0, 480.0)).unwrap();
-        runtime.viewport.size = jian_core::geometry::size(640.0, 480.0);
+        runtime.set_viewport_size((640.0, 480.0));
         runtime.state.app_set("count", serde_json::json!(7));
 
         let mut host = DesktopHost::new(runtime, "Test");

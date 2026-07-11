@@ -173,11 +173,21 @@ impl ScreenTable {
     }
 
     /// Single-page document for mounting `path`'s screen.
-    pub fn doc_for_path(&self, path: &str) -> Option<PenDocument> {
-        let idx = self.page_index(path)?;
-        let page = self.doc.pages.as_ref()?.get(idx)?.clone();
+    pub fn doc_for_path(&self, path: &str, viewport_width: f32) -> Option<PenDocument> {
+        let page_id = self.page_for(path, viewport_width)?;
+        let pages = self.doc.pages.as_ref()?;
+        let idx = pages.iter().position(|page| page.id == page_id)?;
+        let mut reordered = Vec::with_capacity(pages.len());
+        reordered.push(pages[idx].clone());
+        reordered.extend(
+            pages
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != idx)
+                .map(|(_, page)| page.clone()),
+        );
         let mut out = self.doc.clone();
-        out.pages = Some(vec![page]);
+        out.pages = Some(reordered);
         Some(out)
     }
 }
@@ -212,7 +222,8 @@ pub fn reconcile_screens(
             rejections,
         });
     }
-    let Some(doc) = table.doc_for_path(&state.path) else {
+    let viewport_width = runtime.viewport.size.width;
+    let Some(doc) = table.doc_for_path(&state.path, viewport_width) else {
         // Validated router should make this unreachable; stay put.
         return Ok(ReconcileOutcome {
             switched: None,
@@ -220,6 +231,11 @@ pub fn reconcile_screens(
         });
     };
     runtime.replace_document(doc)?;
+    runtime.configure_variant_source(
+        table.doc.clone(),
+        state.path.clone(),
+        table.variants.clone(),
+    );
     runtime
         .state
         .route_set("path", serde_json::json!(state.path));
@@ -254,6 +270,24 @@ mod tests {
         assert_eq!(table.page_for("/home", 480.5), Some("home-t@480.5-1024"));
         assert_eq!(table.page_for("/home", 1024.0), Some("home-t@480.5-1024"));
         assert_eq!(table.page_for("/home", 2000.0), Some("home"));
+    }
+
+    #[test]
+    fn doc_for_path_selects_width_and_retains_variant_source_pages() {
+        let source: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,"children":[
+              {"type":"frame","id":"desktop","screen":"/"},
+              {"type":"frame","id":"mobile","screen":"/","breakpoint":{"maxWidth":480}}]}"#,
+        )
+        .unwrap();
+        let (projected, _) = jian_ops_schema::screen_projection::project_screens(&source);
+        let (document, variants) = projected.unwrap();
+        let table = ScreenTable::from_projected(document, variants).unwrap();
+        let selected = table.doc_for_path("/", 320.0).unwrap();
+        let pages = selected.pages.unwrap();
+        assert_eq!(pages[0].id, "mobile@0-480");
+        assert_eq!(pages.len(), 2);
+        assert!(pages.iter().any(|page| page.id == "desktop"));
     }
 
     #[test]

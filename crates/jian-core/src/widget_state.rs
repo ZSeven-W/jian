@@ -5,9 +5,11 @@
 use crate::state::StateGraph;
 use crate::text_input::TextInputState;
 use jian_ops_schema::node::{BoolOrExpression, NumberOrExpression, PenNode};
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WidgetState {
     /// Shared by text_input, text_area and number_input (the latter
     /// edits its numeric value as text, gated to digits by the host).
@@ -37,14 +39,47 @@ pub enum WidgetState {
     },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 pub struct WidgetStateStore {
     map: HashMap<(String, String), WidgetState>,
     page_key: String,
+    mutation_counter: Rc<Cell<u64>>,
+}
+
+impl Default for WidgetStateStore {
+    fn default() -> Self {
+        Self::with_counter(Rc::new(Cell::new(0)))
+    }
 }
 
 impl WidgetStateStore {
+    pub fn with_counter(mutation_counter: Rc<Cell<u64>>) -> Self {
+        Self {
+            map: HashMap::new(),
+            page_key: String::new(),
+            mutation_counter,
+        }
+    }
+
+    pub fn clone_with_counter(&self, mutation_counter: Rc<Cell<u64>>) -> Self {
+        Self {
+            map: self.map.clone(),
+            page_key: self.page_key.clone(),
+            mutation_counter,
+        }
+    }
+
+    pub fn set_mutation_counter(&mut self, mutation_counter: Rc<Cell<u64>>) {
+        self.mutation_counter = mutation_counter;
+    }
+
+    fn bump_mutation(&self) {
+        self.mutation_counter
+            .set(self.mutation_counter.get().wrapping_add(1));
+    }
+
     pub fn set_page_key(&mut self, page_key: impl Into<String>) {
+        self.bump_mutation();
         self.page_key = page_key.into();
     }
 
@@ -63,6 +98,7 @@ impl WidgetStateStore {
     /// navigation. Live `Occupied` state of a matching variant is
     /// never touched here.
     pub fn get_or_init(&mut self, node: &PenNode, state: &StateGraph) -> Option<&mut WidgetState> {
+        self.bump_mutation();
         let (id, mut init) = match node {
             PenNode::TextInput(n) => (
                 &n.base.id,
@@ -146,6 +182,7 @@ impl WidgetStateStore {
     }
 
     pub fn get_mut(&mut self, id: &str) -> Option<&mut WidgetState> {
+        self.bump_mutation();
         self.map.get_mut(&(self.page_key.clone(), id.to_owned()))
     }
 
@@ -154,6 +191,7 @@ impl WidgetStateStore {
     }
 
     pub fn get_for_page_mut(&mut self, page_key: &str, id: &str) -> Option<&mut WidgetState> {
+        self.bump_mutation();
         self.map.get_mut(&(page_key.to_owned(), id.to_owned()))
     }
 
@@ -169,6 +207,7 @@ impl WidgetStateStore {
     /// Mutable iterator over the states — used to clear transient flags
     /// (e.g. a slider's `dragging`) on pointer up.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut WidgetState> {
+        self.bump_mutation();
         let page_key = self.page_key.clone();
         self.map
             .iter_mut()
@@ -177,13 +216,35 @@ impl WidgetStateStore {
 
     /// Drop state for nodes that no longer exist (document swap).
     pub fn retain_ids(&mut self, live: &dyn Fn(&str) -> bool) {
+        self.bump_mutation();
         let page_key = self.page_key.as_str();
         self.map
             .retain(|(page, id), _| page != page_key || live(id));
     }
 
     pub fn clear(&mut self) {
+        self.bump_mutation();
         self.map.clear();
+    }
+
+    pub fn reset_transients(&mut self) {
+        self.bump_mutation();
+        for state in self.map.values_mut() {
+            match state {
+                WidgetState::TextInput(text) => text.reset_transient(),
+                WidgetState::Select {
+                    open, hover_index, ..
+                } => {
+                    *open = false;
+                    *hover_index = None;
+                }
+                WidgetState::Slider { dragging, .. } => *dragging = false,
+                WidgetState::Radio { hover_index, .. } | WidgetState::Tabs { hover_index, .. } => {
+                    *hover_index = None
+                }
+                WidgetState::Toggle { .. } => {}
+            }
+        }
     }
 }
 
@@ -308,6 +369,33 @@ mod tests {
         store.set_page_key("mobile");
         match store.get("same") {
             Some(WidgetState::TextInput(text)) => assert_eq!(text.text(), "a!"),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn mutable_access_bumps_shared_counter_and_transients_reset_across_pages() {
+        use std::cell::Cell;
+        let counter = std::rc::Rc::new(Cell::new(0));
+        let mut store = WidgetStateStore::with_counter(counter.clone());
+        let state = empty_state();
+        let input = node(r#"{"type":"text_input","id":"field","value":"durable"}"#);
+        store.set_page_key("a");
+        let _ = store.get_or_init(&input, &state);
+        assert!(counter.get() > 0);
+        if let Some(WidgetState::TextInput(text)) = store.get_mut("field") {
+            text.set_composition("preedit", 7, 0);
+            text.select_all();
+        }
+        store.set_page_key("b");
+        let _ = store.get_or_init(&input, &state);
+        store.reset_transients();
+        match store.get_for_page("a", "field") {
+            Some(WidgetState::TextInput(text)) => {
+                assert_eq!(text.text(), "durable");
+                assert!(text.composition().is_none());
+                assert!(text.highlight_range().is_none());
+            }
             _ => panic!(),
         }
     }

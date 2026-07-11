@@ -17,7 +17,7 @@
 use crate::pointer::PointerTranslator;
 use crate::scene::collect_draws_with_state;
 use crate::DesktopHost;
-use jian_core::geometry::{point, rect, size as make_size};
+use jian_core::geometry::{point, rect};
 use jian_core::render::{DrawOp, Paint, RenderBackend, TextAlign, TextRun};
 use jian_core::scene::Color;
 use jian_skia::surface::SkiaSurface;
@@ -564,7 +564,7 @@ impl ApplicationHandler for RunApp {
             let _ = self.host.runtime.build_layout(logical);
             self.host.runtime.rebuild_spatial();
         }
-        self.host.runtime.viewport.size = make_size(logical.0, logical.1);
+        self.host.runtime.set_viewport_size(logical);
 
         // Plan 19 capstone B4: when a data-path bootstrap pre-populated
         // the host's startup_report, ask winit for an immediate
@@ -664,7 +664,7 @@ impl ApplicationHandler for RunApp {
                     let _ = self.host.runtime.build_layout(logical);
                     self.host.runtime.rebuild_spatial();
                 }
-                self.host.runtime.viewport.size = make_size(logical.0, logical.1);
+                self.host.runtime.set_viewport_size(logical);
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -933,7 +933,7 @@ impl RunApp {
             .runtime
             .build_layout(logical)
             .map_err(|e| format!("layout: {:?}", e))?;
-        self.host.runtime.viewport.size = make_size(logical.0, logical.1);
+        self.host.runtime.set_viewport_size(logical);
         self.host.runtime.rebuild_spatial();
         // Refresh the MCP action set so AI clients see the new
         // aiNames immediately after save (no `tools/list` cache to

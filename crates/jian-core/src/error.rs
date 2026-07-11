@@ -19,6 +19,9 @@ pub enum CoreError {
 
     #[error("scene: node id not found: {0:?}")]
     NodeNotFound(String),
+
+    #[error("runtime busy: variant swap awaiting IME")]
+    Busy,
 }
 
 pub type CoreResult<T> = std::result::Result<T, CoreError>;

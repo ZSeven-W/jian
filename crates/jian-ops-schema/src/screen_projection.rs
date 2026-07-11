@@ -127,6 +127,7 @@ struct Screen {
     range: Option<BreakpointRange>,
     order: usize,
     normalized_id: Option<String>,
+    stripped_range: bool,
 }
 
 /// Scan one slice of top-level nodes for `FrameNode.screen` markers,
@@ -169,11 +170,13 @@ fn collect_screens(
         seen_paths
             .entry(path.to_owned())
             .or_insert_with(|| frame.base.id.clone());
+        let mut stripped_range = false;
         let range = if responsive {
             frame.breakpoint.and_then(|range| {
                 if range.validate().is_ok() {
                     Some(range)
                 } else {
+                    stripped_range = true;
                     warnings.push(ProjectionWarning::InvalidRangeStripped {
                         node_id: frame.base.id.clone(),
                     });
@@ -198,6 +201,7 @@ fn collect_screens(
             range,
             order: screens.len(),
             normalized_id: None,
+            stripped_range,
         });
     }
 }
@@ -380,9 +384,22 @@ fn build_variant_table(
         let authored_defaults: Vec<usize> = indices
             .iter()
             .copied()
-            .filter(|index| screens[*index].range.is_none())
+            .filter(|index| screens[*index].range.is_none() && !screens[*index].stripped_range)
+            .collect();
+        let stripped_defaults: Vec<usize> = indices
+            .iter()
+            .copied()
+            .filter(|index| screens[*index].range.is_none() && screens[*index].stripped_range)
             .collect();
         let default_index = if let Some((&first, extras)) = authored_defaults.split_first() {
+            for &extra in extras.iter().chain(stripped_defaults.iter()) {
+                warnings.push(ProjectionWarning::DuplicateDefault {
+                    path: path.clone(),
+                    node_id: screens[extra].id.clone(),
+                });
+            }
+            first
+        } else if let Some((&first, extras)) = stripped_defaults.split_first() {
             for &extra in extras {
                 warnings.push(ProjectionWarning::DuplicateDefault {
                     path: path.clone(),
@@ -519,6 +536,18 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|warning| matches!(warning, ProjectionWarning::BreakpointWithoutScreen { .. })));
+    }
+
+    #[test]
+    fn authored_default_wins_when_invalid_stripped_candidate_comes_first() {
+        let document = responsive_doc(
+            r#"[
+              {"type":"frame","id":"bad","screen":"/","breakpoint":{"minWidth":500,"maxWidth":400}},
+              {"type":"frame","id":"authored","screen":"/"}]"#,
+        );
+        let (projected, _) = project_screens(&document);
+        let (_, table) = projected.unwrap();
+        assert_eq!(table.0["/"].default_page_id, "authored");
     }
 
     #[test]

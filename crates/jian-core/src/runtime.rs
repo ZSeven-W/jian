@@ -25,7 +25,7 @@ use crate::capability::{
 };
 use crate::document::{loader, RuntimeDocument};
 use crate::effect::EffectRegistry;
-use crate::error::CoreResult;
+use crate::error::{CoreError, CoreResult};
 use crate::expression::ExpressionCache;
 use crate::geometry::size;
 use crate::gesture::{
@@ -51,6 +51,113 @@ pub use variant_swap::{ParkedBuild, SwapState};
 /// inspection without letting long-lived hosts grow unboundedly.
 const AUDIT_LOG_CAPACITY: usize = 1000;
 
+struct PreparedDocument {
+    mounted: PenDocument,
+    source: Option<PenDocument>,
+    variants: jian_ops_schema::screen_projection::ScreenVariantTable,
+    path: Option<String>,
+    selected_page_id: Option<String>,
+    warnings: Vec<String>,
+}
+
+fn prepare_document(
+    mut schema: PenDocument,
+    viewport: (f32, f32),
+    preferred_path: Option<&str>,
+) -> PreparedDocument {
+    if !schema.is_responsive() {
+        return PreparedDocument {
+            mounted: schema,
+            source: None,
+            variants: Default::default(),
+            path: None,
+            selected_page_id: None,
+            warnings: Vec::new(),
+        };
+    }
+    let (projected, projection_warnings) =
+        jian_ops_schema::screen_projection::project_screens(&schema);
+    let mut warnings: Vec<String> = projection_warnings
+        .into_iter()
+        .map(|warning| warning.to_string())
+        .collect();
+    if let Some((source, variants)) = projected {
+        let path = preferred_path
+            .filter(|path| variants.0.contains_key(*path))
+            .map(str::to_owned)
+            .or_else(|| source.routes.as_ref().map(|routes| routes.entry.clone()))
+            .unwrap_or_else(|| "/".to_owned());
+        let selected_page_id = select_variant_page(&variants, &path, viewport.0);
+        let mut mounted = source.clone();
+        if let Some(selected) = selected_page_id.as_deref() {
+            mounted.pages = source
+                .pages
+                .as_ref()
+                .and_then(|pages| pages.iter().find(|page| page.id == selected))
+                .cloned()
+                .map(|page| vec![page]);
+        }
+        return PreparedDocument {
+            mounted,
+            source: Some(source),
+            variants,
+            path: Some(path),
+            selected_page_id,
+            warnings,
+        };
+    }
+    if let Some(pages) = schema.pages.as_mut() {
+        let had_routes = schema.routes.is_some();
+        let mut routes = schema
+            .routes
+            .take()
+            .unwrap_or(jian_ops_schema::routes::RoutesConfig {
+                entry: String::new(),
+                routes: Default::default(),
+                transitions: None,
+            });
+        let mut id_warnings = Vec::new();
+        jian_ops_schema::page_ids::normalize_page_ids(pages, &mut routes, &mut id_warnings);
+        warnings.extend(id_warnings.into_iter().map(|warning| warning.to_string()));
+        if had_routes {
+            schema.routes = Some(routes);
+        }
+    }
+    let selected_page_id = schema
+        .pages
+        .as_ref()
+        .and_then(|pages| pages.first())
+        .map(|page| page.id.clone());
+    PreparedDocument {
+        mounted: schema,
+        source: None,
+        variants: Default::default(),
+        path: None,
+        selected_page_id,
+        warnings,
+    }
+}
+
+fn select_variant_page(
+    variants: &jian_ops_schema::screen_projection::ScreenVariantTable,
+    path: &str,
+    width: f32,
+) -> Option<String> {
+    let set = variants.0.get(path)?;
+    Some(
+        set.ranged
+            .iter()
+            .find(|entry| {
+                entry.range.min_width.unwrap_or(0.0) as f32 <= width
+                    && width <= entry.range.max_width.unwrap_or(f64::INFINITY) as f32
+            })
+            .map_or_else(
+                || set.default_page_id.clone(),
+                |entry| entry.page_id.clone(),
+            ),
+    )
+}
+
 pub struct Runtime {
     pub scheduler: Rc<Scheduler>,
     pub effects: Rc<EffectRegistry>,
@@ -68,6 +175,8 @@ pub struct Runtime {
     swap_state: SwapState,
     variant_source: Option<PenDocument>,
     mutation_counter: Rc<Cell<u64>>,
+    last_variant_build_count: usize,
+    action_surface_inputs: Vec<crate::action_surface::ActionDefinition>,
 
     // --- Gesture + Action wiring (Plan 5 T15) ---
     pub gestures: PointerRouter,
@@ -114,6 +223,8 @@ impl Runtime {
     pub fn new() -> Self {
         let scheduler = Rc::new(Scheduler::new());
         let mutation_counter = Rc::new(Cell::new(0));
+        let widget_states =
+            crate::widget_state::WidgetStateStore::with_counter(mutation_counter.clone());
         let effects = EffectRegistry::new();
         effects.install_on(&scheduler);
         Self {
@@ -136,10 +247,12 @@ impl Runtime {
             swap_state: Default::default(),
             variant_source: None,
             mutation_counter,
+            last_variant_build_count: 0,
+            action_surface_inputs: Vec::new(),
 
             gestures: PointerRouter::new(),
             focus: FocusManager::new(),
-            widget_states: crate::widget_state::WidgetStateStore::default(),
+            widget_states,
             now_ms: 0,
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
@@ -178,6 +291,8 @@ impl Runtime {
         let effects = EffectRegistry::new();
         effects.install_on(&scheduler);
 
+        let prepared = prepare_document(schema, (800.0, 600.0), None);
+        let schema = prepared.mounted;
         let audit = Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY));
         let declared = schema
             .app
@@ -193,23 +308,23 @@ impl Runtime {
         let gate = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit.clone())));
 
         let responsive = schema.is_responsive();
-        let active_screen_path = schema.routes.as_ref().map(|routes| routes.entry.clone());
-        let active_variant_page_id = schema
-            .pages
-            .as_ref()
-            .and_then(|pages| pages.first())
-            .map(|page| page.id.clone());
+        let active_screen_path = prepared.path;
+        let active_variant_page_id = prepared.selected_page_id;
         let active_page_key = if responsive {
             active_variant_page_id.clone().unwrap_or_default()
         } else {
             String::new()
         };
         let mutation_counter = Rc::new(Cell::new(0));
+        let widget_states =
+            crate::widget_state::WidgetStateStore::with_counter(mutation_counter.clone());
         let state = Rc::new(StateGraph::new_with_counter(
             scheduler.clone(),
             mutation_counter.clone(),
         ));
         let doc = loader::build(schema, &state)?;
+        let action_surface_inputs =
+            crate::action_surface::derive_actions(&doc.schema, &crate::action_surface::BUILD_SALT);
         let focus_chain = collect_focus_chain(&doc);
         let mut focus = FocusManager::new();
         focus.set_chain(focus_chain);
@@ -222,19 +337,21 @@ impl Runtime {
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
-            load_warnings: Vec::new(),
-            variant_table: Default::default(),
+            load_warnings: prepared.warnings,
+            variant_table: prepared.variants,
             active_screen_path,
             active_variant_page_id,
             active_page_key: active_page_key.clone(),
             ime_registry: Default::default(),
             swap_state: Default::default(),
-            variant_source: None,
+            variant_source: prepared.source,
             mutation_counter,
+            last_variant_build_count: 0,
+            action_surface_inputs,
 
             gestures: PointerRouter::new(),
             focus,
-            widget_states: crate::widget_state::WidgetStateStore::default(),
+            widget_states,
             now_ms: 0,
             actions: default_registry(),
             expr_cache: Rc::new(ExpressionCache::new()),
@@ -317,11 +434,14 @@ impl Runtime {
                 return None;
             };
             let composition = field.composition()?;
-            let region = composition.region?;
+            let region = composition
+                .region
+                .unwrap_or_else(|| (field.caret(), field.caret()));
             Some(ImeSnapshot {
                 field_key: (self.active_page_key.clone(), node_id.to_owned()),
                 region,
                 text: composition.text.clone(),
+                durable_text: field.text().to_owned(),
             })
         })
     }
@@ -355,71 +475,12 @@ impl Runtime {
     /// already hold a value keep that value; only newly-introduced
     /// keys get their schema default.
     pub fn replace_document(&mut self, mut schema: PenDocument) -> CoreResult<()> {
-        self.load_warnings.clear();
-        if schema.is_responsive() {
-            let (projected, warnings) =
-                jian_ops_schema::screen_projection::project_screens(&schema);
-            self.load_warnings
-                .extend(warnings.into_iter().map(|warning| warning.to_string()));
-            if let Some((normalized, variants)) = projected {
-                let path = self
-                    .active_screen_path
-                    .clone()
-                    .filter(|path| variants.0.contains_key(path))
-                    .or_else(|| {
-                        normalized
-                            .routes
-                            .as_ref()
-                            .map(|routes| routes.entry.clone())
-                    })
-                    .unwrap_or_else(|| "/".to_owned());
-                let selected = variants.0.get(&path).map(|set| {
-                    set.ranged
-                        .iter()
-                        .find(|entry| {
-                            entry.range.min_width.unwrap_or(0.0) as f32 <= self.viewport.size.width
-                                && self.viewport.size.width
-                                    <= entry.range.max_width.unwrap_or(f64::INFINITY) as f32
-                        })
-                        .map_or(set.default_page_id.clone(), |entry| entry.page_id.clone())
-                });
-                let mut mounted = normalized.clone();
-                if let (Some(pages), Some(selected)) =
-                    (normalized.pages.as_ref(), selected.as_ref())
-                {
-                    mounted.pages = pages
-                        .iter()
-                        .find(|page| &page.id == selected)
-                        .cloned()
-                        .map(|page| vec![page]);
-                }
-                self.variant_source = Some(normalized);
-                self.variant_table = variants;
-                self.active_screen_path = Some(path);
-                self.active_variant_page_id = selected.clone();
-                self.active_page_key = selected.unwrap_or_default();
-                self.widget_states
-                    .set_page_key(self.active_page_key.clone());
-                schema = mounted;
-            } else if let Some(pages) = schema.pages.as_mut() {
-                let mut routes =
-                    schema
-                        .routes
-                        .take()
-                        .unwrap_or(jian_ops_schema::routes::RoutesConfig {
-                            entry: String::new(),
-                            routes: Default::default(),
-                            transitions: None,
-                        });
-                let mut warnings = Vec::new();
-                jian_ops_schema::page_ids::normalize_page_ids(pages, &mut routes, &mut warnings);
-                if !routes.routes.is_empty() {
-                    schema.routes = Some(routes);
-                }
-                self.load_warnings
-                    .extend(warnings.into_iter().map(|warning| warning.to_string()));
-            }
-        }
+        let prepared = prepare_document(
+            schema,
+            (self.viewport.size.width, self.viewport.size.height),
+            self.active_screen_path.as_deref(),
+        );
+        schema = prepared.mounted;
         // Rebuild the capability gate from the new schema. Reuse the
         // existing AuditLog so the rolling history isn't truncated on
         // every save. If the original Runtime was constructed via
@@ -440,11 +501,27 @@ impl Runtime {
             .audit
             .clone()
             .unwrap_or_else(|| Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY)));
-        self.audit = Some(audit.clone());
-        self.capabilities = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit)));
+        let capabilities = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit.clone())));
 
         let doc = loader::build_with(schema, &self.state, loader::SeedMode::PreserveExisting)?;
+        let action_surface_inputs =
+            crate::action_surface::derive_actions(&doc.schema, &crate::action_surface::BUILD_SALT);
         let focus_chain = collect_focus_chain(&doc);
+        self.audit = Some(audit);
+        self.capabilities = capabilities;
+        self.action_surface_inputs = action_surface_inputs;
+        self.load_warnings = prepared.warnings;
+        self.variant_source = prepared.source;
+        self.variant_table = prepared.variants;
+        self.active_screen_path = prepared.path;
+        self.active_variant_page_id = prepared.selected_page_id.clone();
+        self.active_page_key = if doc.schema.is_responsive() {
+            prepared.selected_page_id.unwrap_or_default()
+        } else {
+            String::new()
+        };
+        self.widget_states
+            .set_page_key(self.active_page_key.clone());
         self.document = Some(doc);
         // Preserve widget runtime state for ids that still exist in the
         // swapped-in tree; drop state for nodes that vanished.
@@ -487,10 +564,16 @@ impl Runtime {
     }
 
     pub fn build_layout(&mut self, available: (f32, f32)) -> CoreResult<()> {
-        self.mutation_counter
-            .set(self.mutation_counter.get().wrapping_add(1));
+        let responsive = self
+            .document
+            .as_ref()
+            .expect("no document loaded")
+            .schema
+            .is_responsive();
+        if responsive {
+            self.set_viewport_size(available);
+        }
         let doc = self.document.as_ref().expect("no document loaded");
-        let responsive = doc.schema.is_responsive();
         let roots = self.layout.build_responsive(&doc.tree, responsive)?;
         if !responsive {
             for root in roots {
@@ -523,6 +606,15 @@ impl Runtime {
 
     pub fn load_warnings(&self) -> &[String] {
         &self.load_warnings
+    }
+
+    /// Canonical live logical viewport used by responsive selection/reload.
+    pub fn set_viewport_size(&mut self, viewport: (f32, f32)) {
+        if (self.viewport.size.width, self.viewport.size.height) != viewport {
+            self.viewport.size = size(viewport.0, viewport.1);
+            self.mutation_counter
+                .set(self.mutation_counter.get().wrapping_add(1));
+        }
     }
 
     /// Plan 19 D1 cold-start fast path: feed the runtime a pre-computed
@@ -1154,32 +1246,32 @@ impl Runtime {
 
     /// Printable text from the host (keypress chars, paste). Routed to
     /// the focused editable widget; returns `true` when consumed.
-    pub fn dispatch_text_input(&mut self, text: &str) -> bool {
+    pub fn dispatch_text_input(&mut self, text: &str) -> CoreResult<bool> {
         if self.input_frozen() {
-            return false;
+            return Err(CoreError::Busy);
         }
         if text.is_empty() {
-            return false;
+            return Ok(false);
         }
         let now = self.now_ms;
         let id = self.focused_widget_id();
         {
             let Some(st) = self.focused_text_state() else {
-                return false;
+                return Ok(false);
             };
             st.insert_str(text, now);
         }
         if let Some(id) = id.as_deref() {
             self.sync_widget_binding(id);
         }
-        true
+        Ok(true)
     }
 
     /// IME composition events (`gesture::ime::ImeEvent`). Routed to the
     /// focused editable widget; returns `true` when consumed.
-    pub fn dispatch_ime(&mut self, ev: crate::gesture::ime::ImeEvent) -> bool {
+    pub fn dispatch_ime(&mut self, ev: crate::gesture::ime::ImeEvent) -> CoreResult<bool> {
         if self.input_frozen() {
-            return false;
+            return Err(CoreError::Busy);
         }
         use crate::gesture::ime::ImeKind;
         let now = self.now_ms;
@@ -1187,7 +1279,7 @@ impl Runtime {
         let committed;
         {
             let Some(st) = self.focused_text_state() else {
-                return false;
+                return Ok(false);
             };
             match ev.kind {
                 ImeKind::CompositionStart => {
@@ -1216,7 +1308,7 @@ impl Runtime {
                 self.sync_widget_binding(id);
             }
         }
-        true
+        Ok(true)
     }
 
     /// Push the focused/edited widget's current value into the state
@@ -1445,10 +1537,16 @@ impl Runtime {
 
     fn dispatch_semantic(&self, event: &SemanticEvent) -> ExecOutcome {
         let doc = self.document.as_ref().expect("no document loaded");
-        let ctx = match event_payload(event) {
+        let source_node_id = doc
+            .tree
+            .nodes
+            .get(event.node())
+            .map(|node| crate::document::tree::node_schema_id(&node.schema).to_owned());
+        let mut ctx = match event_payload(event) {
             Some(payload) => self.make_action_ctx_with_event(payload),
             None => self.make_action_ctx(),
         };
+        ctx.node_id = source_node_id;
         let outcome = dispatch_event(doc, event, &self.actions, &ctx);
         // Actions mutate state via Signals whose effects are scheduled;
         // flush synchronously so bindings / scene observers see the new
@@ -1513,7 +1611,7 @@ impl Runtime {
             scheduler: self.scheduler.clone(),
             event: None,
             locals: RefCell::new(BTreeMap::new()),
-            page_id: None,
+            page_id: Some(self.active_page_key.clone()),
             node_id: None,
             network: self.network.clone(),
             ws_sessions: self.ws_sessions.clone(),
@@ -1709,12 +1807,12 @@ mod tests {
         .unwrap();
         // Focus the first input, type, then backspace one char.
         rt.focus_next();
-        assert!(rt.dispatch_text_input("hi"));
+        assert!(rt.dispatch_text_input("hi").unwrap());
         rt.dispatch_keyboard("Backspace", Modifiers::empty());
         assert_eq!(widget_text(&mut rt, "a"), "h");
         // Tab to the second input; typing there leaves the first alone.
         rt.focus_next();
-        assert!(rt.dispatch_text_input("x"));
+        assert!(rt.dispatch_text_input("x").unwrap());
         assert_eq!(widget_text(&mut rt, "b"), "x");
         assert_eq!(widget_text(&mut rt, "a"), "h");
     }
@@ -1741,7 +1839,7 @@ mod tests {
         )
         .unwrap();
         rt.focus_next();
-        assert!(rt.dispatch_text_input("a@b"));
+        assert!(rt.dispatch_text_input("a@b").unwrap());
         let got = rt
             .state
             .app_get("email")
@@ -1771,7 +1869,7 @@ mod tests {
         )
         .unwrap();
         rt.focus_next();
-        assert!(rt.dispatch_text_input("42"));
+        assert!(rt.dispatch_text_input("42").unwrap());
         // Bound as a number, not the string "42".
         assert_eq!(rt.state.app_get("n").and_then(|v| v.as_f64()), Some(42.0));
     }
@@ -1935,7 +2033,7 @@ mod tests {
         .unwrap();
         let mut rt = Runtime::new_from_document(loaded.value).unwrap();
         rt.focus_next();
-        assert!(rt.dispatch_text_input("hey"));
+        assert!(rt.dispatch_text_input("hey").unwrap());
         let got = rt
             .state
             .app_get("q")
@@ -2878,6 +2976,25 @@ mod tests {
     }
 
     #[test]
+    fn failed_detached_build_leaves_every_live_variant_context_untouched() {
+        let mut runtime = variant_runtime();
+        let document_schema = runtime.document.as_ref().unwrap().schema.clone();
+        let page_key = runtime.active_page_key().to_owned();
+        let selected = runtime.selected_variant().map(str::to_owned);
+        let counter = runtime.mutation_counter();
+        let capabilities = runtime.capabilities.clone();
+
+        let error = runtime.switch_variant("missing-variant").unwrap_err();
+        assert!(matches!(error, CoreError::Layout(_)));
+        assert_eq!(runtime.document.as_ref().unwrap().schema, document_schema);
+        assert_eq!(runtime.active_page_key(), page_key);
+        assert_eq!(runtime.selected_variant(), selected.as_deref());
+        assert_eq!(runtime.mutation_counter(), counter);
+        assert!(Rc::ptr_eq(&runtime.capabilities, &capabilities));
+        assert!(!runtime.input_frozen());
+    }
+
+    #[test]
     fn composition_parks_and_confirmation_commits_swap() {
         let mut runtime = variant_runtime();
         let key = runtime
@@ -2897,10 +3014,33 @@ mod tests {
         let crate::widget_state::WidgetState::TextInput(field) = field else {
             panic!()
         };
-        field.set_composition("IME", 3, 0);
-        field.set_composing_region(2, 5);
+        field.set_caret(2, 0);
+        runtime.focus_request(key);
+        runtime
+            .dispatch_ime(crate::gesture::ime::ImeEvent {
+                kind: crate::gesture::ime::ImeKind::CompositionStart,
+                text: String::new(),
+            })
+            .unwrap();
+        runtime
+            .dispatch_ime(crate::gesture::ime::ImeEvent {
+                kind: crate::gesture::ime::ImeKind::CompositionUpdate { selection: None },
+                text: "IME".into(),
+            })
+            .unwrap();
         assert!(!runtime.switch_variant("mobile@0-480").unwrap());
         assert!(runtime.input_frozen());
+        assert!(matches!(
+            runtime.dispatch_text_input("blocked"),
+            Err(CoreError::Busy)
+        ));
+        assert!(matches!(
+            runtime.dispatch_ime(crate::gesture::ime::ImeEvent {
+                kind: crate::gesture::ime::ImeKind::CompositionEnd,
+                text: "blocked".into(),
+            }),
+            Err(CoreError::Busy)
+        ));
         let request_id = match &runtime.swap_state {
             SwapState::AwaitingIme { request_id, .. } => *request_id,
             _ => panic!(),
@@ -2911,5 +3051,83 @@ mod tests {
         );
         assert_eq!(runtime.selected_variant(), Some("mobile@0-480"));
         assert!(!runtime.input_frozen());
+        assert_eq!(runtime.last_variant_build_count(), 2);
+        match runtime.widget_states.get_for_page("desktop", "field") {
+            Some(crate::widget_state::WidgetState::TextInput(field)) => {
+                assert_eq!(field.text(), "abOKIMEz");
+                assert!(field.composition().is_none());
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn event_actions_receive_active_page_and_source_node_context() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{
+          "version":"1.2","responsive":true,
+          "pages":[{"id":"responsive-page","name":"P","children":[
+            {"type":"frame","id":"button","width":100,"height":50,
+             "events":{"onTap":[{"set":{"$page.hit":"1"}},{"set":{"$self.hit":"2"}}]}}
+          ]}]}
+        "#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(schema).unwrap();
+        runtime.build_layout((100.0, 50.0)).unwrap();
+        runtime.rebuild_spatial();
+        runtime.dispatch_pointer(PointerEvent::simple(
+            0,
+            crate::gesture::PointerPhase::Down,
+            crate::geometry::point(10.0, 10.0),
+        ));
+        runtime.dispatch_pointer(PointerEvent::simple(
+            0,
+            crate::gesture::PointerPhase::Up,
+            crate::geometry::point(10.0, 10.0),
+        ));
+        assert_eq!(
+            runtime.state.page.borrow()["responsive-page"]["hit"]
+                .get()
+                .0,
+            serde_json::json!(1)
+        );
+        assert_eq!(
+            runtime
+                .state
+                .self_get("responsive-page", "button", "hit")
+                .unwrap()
+                .0,
+            serde_json::json!(2)
+        );
+    }
+
+    #[test]
+    fn unprojected_responsive_initial_load_normalizes_page_ids() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{
+          "version":"1.2","responsive":true,
+          "pages":[
+            {"id":"","name":"A","children":[]},
+            {"id":"","name":"B","children":[]},
+            {"id":"~root","name":"Reserved","children":[]}
+          ]}
+        "#,
+        )
+        .unwrap();
+        let runtime = Runtime::new_from_document(schema).unwrap();
+        let ids: Vec<&str> = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .schema
+            .pages
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|page| page.id.as_str())
+            .collect();
+        assert_eq!(ids, ["~root~2", "~root~3", "~root"]);
+        assert_eq!(runtime.active_page_key(), "~root~2");
     }
 }

@@ -255,9 +255,20 @@ impl TextInputState {
         self.composition = None;
     }
 
+    pub fn reset_transient(&mut self) {
+        self.selection = Selection::caret(self.text.len());
+        self.select_all = false;
+        self.composition = None;
+    }
+
     pub fn set_composing_region(&mut self, start: usize, end: usize) {
-        let start = prev_char_boundary(&self.text, start.min(end));
-        let end = prev_char_boundary(&self.text, start.max(end));
+        let (raw_start, raw_end) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let start = prev_char_boundary(&self.text, raw_start);
+        let end = next_char_boundary(&self.text, raw_end);
         if let Some(composition) = &mut self.composition {
             composition.region = Some((start, end));
         } else {
@@ -426,4 +437,14 @@ fn replace_range_clamps_to_utf8_boundaries() {
     assert_eq!(state.text(), "aX计z");
     state.replace_range(1, 2, "", 1);
     assert_eq!(state.text(), "a计z");
+}
+
+#[test]
+fn composing_region_swaps_reversed_offsets_and_forward_snaps_end() {
+    let mut state = TextInputState::with_text("a设计z");
+    state.set_composition("X", 1, 0);
+    state.set_composing_region(6, 2);
+    assert_eq!(state.composition().unwrap().region, Some((1, 7)));
+    state.commit_composition(1);
+    assert_eq!(state.text(), "aXz");
 }

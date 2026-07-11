@@ -1,18 +1,35 @@
-use super::Runtime;
+use super::{collect_focus_chain, root_has_limits, select_viewport_root, Runtime};
+use crate::action_surface::{derive_actions, ActionDefinition, BUILD_SALT};
+use crate::document::{loader, RuntimeDocument};
 use crate::error::{CoreError, CoreResult};
+use crate::layout::LayoutEngine;
+use crate::signal::scheduler::Scheduler;
+use crate::spatial::{NodeBBox, SpatialIndex};
+use crate::state::StateGraph;
+use crate::widget_state::WidgetStateStore;
 use jian_ops_schema::PenDocument;
+use std::cell::Cell;
+use std::rc::Rc;
 
-#[derive(Debug, Clone)]
+/// A complete, non-live candidate. Construction performs schema loading,
+/// layout, spatial indexing, widget seeding and action-surface derivation.
 pub struct ParkedBuild {
     pub target_page_id: String,
-    pub schema: PenDocument,
-    pub mutation_counter_at_build: u64,
-    pub font_generation_at_build: u64,
-    pub build_count: usize,
-    pub started_at_ms: u64,
+    pub document: RuntimeDocument,
+    pub layout: LayoutEngine,
+    pub spatial: SpatialIndex,
+    pub widget_states: WidgetStateStore,
+    pub action_surface_inputs: Vec<ActionDefinition>,
+    pub warnings: Vec<String>,
+    staged_state: Rc<StateGraph>,
+    mutation_counter_at_build: u64,
+    // TODO(M1c): include font generation in the commit recheck once the
+    // measurement backend exposes a real monotonic generation seam.
+    build_count: usize,
+    pub(crate) started_at_ms: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub enum SwapState {
     #[default]
     Idle,
@@ -38,41 +55,27 @@ impl Runtime {
         self.mutation_counter.get()
     }
 
+    pub fn last_variant_build_count(&self) -> usize {
+        self.last_variant_build_count
+    }
+
     pub fn switch_variant(&mut self, target_page_id: &str) -> CoreResult<bool> {
-        if self.active_variant_page_id.as_deref() == Some(target_page_id) {
+        if matches!(self.swap_state, SwapState::Idle)
+            && self.active_variant_page_id.as_deref() == Some(target_page_id)
+        {
             return Ok(false);
         }
-        let source = self
-            .variant_source
-            .as_ref()
-            .ok_or_else(|| CoreError::Layout("variant source is not configured".into()))?;
-        let page = source
-            .pages
-            .as_ref()
-            .and_then(|pages| pages.iter().find(|page| page.id == target_page_id))
-            .cloned()
-            .ok_or_else(|| CoreError::Layout(format!("unknown variant page `{target_page_id}`")))?;
-        let mut schema = source.clone();
-        schema.pages = Some(vec![page]);
-        let parked = ParkedBuild {
-            target_page_id: target_page_id.to_owned(),
-            schema,
-            mutation_counter_at_build: self.mutation_counter(),
-            font_generation_at_build: 0,
-            build_count: 1,
-            started_at_ms: self.now_ms,
+        let (started_at_ms, build_count) = match &self.swap_state {
+            SwapState::AwaitingIme { parked, .. } => (parked.started_at_ms, parked.build_count + 1),
+            SwapState::Idle => (self.now_ms, 1),
         };
+        // The only fallible work happens before live metadata or freeze changes.
+        let parked = self.build_parked(target_page_id, started_at_ms, build_count)?;
         if let SwapState::AwaitingIme {
             parked: current, ..
         } = &mut self.swap_state
         {
-            let started_at_ms = current.started_at_ms;
-            let build_count = current.build_count + 1;
-            **current = ParkedBuild {
-                started_at_ms,
-                build_count,
-                ..parked
-            };
+            **current = parked;
             return Ok(false);
         }
         if let Some(snapshot) = self.active_ime_snapshot() {
@@ -87,26 +90,118 @@ impl Runtime {
         Ok(true)
     }
 
+    fn build_parked(
+        &self,
+        target_page_id: &str,
+        started_at_ms: u64,
+        build_count: usize,
+    ) -> CoreResult<ParkedBuild> {
+        let source = self
+            .variant_source
+            .as_ref()
+            .ok_or_else(|| CoreError::Layout("variant source is not configured".into()))?;
+        let page = source
+            .pages
+            .as_ref()
+            .and_then(|pages| pages.iter().find(|page| page.id == target_page_id))
+            .cloned()
+            .ok_or_else(|| CoreError::Layout(format!("unknown variant page `{target_page_id}`")))?;
+        let mut schema: PenDocument = source.clone();
+        schema.pages = Some(vec![page]);
+
+        let staging_counter = Rc::new(Cell::new(0));
+        let staging_state = Rc::new(StateGraph::new_with_counter(
+            Rc::new(Scheduler::new()),
+            staging_counter.clone(),
+        ));
+        copy_live_seed_state(&self.state, &staging_state);
+        let document =
+            loader::build_with(schema, &staging_state, loader::SeedMode::PreserveExisting)?;
+
+        let viewport = (self.viewport.size.width, self.viewport.size.height);
+        let mut layout = LayoutEngine::with_backend(self.layout.measure.clone());
+        let roots = layout.build_responsive(&document.tree, true)?;
+        let mut warnings = layout.constraint_lints().to_vec();
+        if let Some(root) = select_viewport_root(&document.tree, &mut warnings) {
+            if root_has_limits(&document.tree.nodes[root].schema) {
+                warnings.push("responsive viewport root min/max bounds are ignored".to_owned());
+            }
+            layout.override_root_for_viewport(root, viewport)?;
+        }
+        for root in roots {
+            layout.compute_responsive(root, viewport)?;
+        }
+        let mut spatial = SpatialIndex::new();
+        spatial.rebuild(
+            document
+                .tree
+                .nodes
+                .iter()
+                .filter_map(|(key, _)| layout.node_rect(key).map(|rect| NodeBBox { key, rect })),
+        );
+
+        let mut widget_states = self
+            .widget_states
+            .clone_with_counter(staging_counter.clone());
+        widget_states.set_page_key(target_page_id);
+        for (_, node) in document.tree.nodes.iter() {
+            let _ = widget_states.get_or_init(&node.schema, &staging_state);
+        }
+        let action_surface_inputs = derive_actions(&document.schema, &BUILD_SALT);
+
+        Ok(ParkedBuild {
+            target_page_id: target_page_id.to_owned(),
+            document,
+            layout,
+            spatial,
+            widget_states,
+            action_surface_inputs,
+            warnings,
+            staged_state: staging_state,
+            mutation_counter_at_build: self.mutation_counter(),
+            build_count,
+            started_at_ms,
+        })
+    }
+
     pub(crate) fn commit_parked(&mut self, mut parked: ParkedBuild) -> CoreResult<()> {
         if parked.mutation_counter_at_build != self.mutation_counter() {
-            parked.mutation_counter_at_build = self.mutation_counter();
-            parked.build_count += 1;
+            parked = self.build_parked(
+                &parked.target_page_id,
+                parked.started_at_ms,
+                parked.build_count + 1,
+            )?;
         }
+        merge_staged_defaults(&parked.staged_state, &self.state);
+        let focus_chain = collect_focus_chain(&parked.document);
         let target = parked.target_page_id.clone();
-        let variant_source = self.variant_source.clone();
-        let variant_table = self.variant_table.clone();
-        let active_screen_path = self.active_screen_path.clone();
-        self.replace_document(parked.schema)?;
-        self.variant_source = variant_source;
-        self.variant_table = variant_table;
-        self.active_screen_path = active_screen_path;
+        self.last_variant_build_count = parked.build_count;
+
+        // Reset all retained transient state, including inactive page entries,
+        // before the atomic field installation. Durable values remain intact.
+        parked.widget_states.reset_transients();
+        parked.widget_states.set_page_key(target.clone());
+        parked
+            .widget_states
+            .set_mutation_counter(self.mutation_counter.clone());
+        self.document = Some(parked.document);
+        self.layout = parked.layout;
+        self.spatial = parked.spatial;
+        self.widget_states = parked.widget_states;
+        self.action_surface_inputs = parked.action_surface_inputs;
+        for warning in parked.warnings {
+            if !self.load_warnings.contains(&warning) {
+                self.load_warnings.push(warning);
+            }
+        }
         self.active_variant_page_id = Some(target.clone());
-        self.active_page_key = target.clone();
-        self.widget_states.set_page_key(target);
-        self.gestures.reset();
+        self.active_page_key = target;
         self.focus.clear();
+        self.focus.set_chain(focus_chain);
+        self.gestures.reset();
         self.swap_state = SwapState::Idle;
-        self.mutation_counter.set(self.mutation_counter.get() + 1);
+        self.mutation_counter
+            .set(self.mutation_counter.get().wrapping_add(1));
         Ok(())
     }
 
@@ -124,6 +219,28 @@ impl Runtime {
                 }
             }
             other => self.swap_state = other,
+        }
+    }
+}
+
+fn copy_live_seed_state(live: &StateGraph, staging: &StateGraph) {
+    for (name, signal) in live.app.borrow().iter() {
+        staging.app_set(name, signal.get().0);
+    }
+    for (name, signal) in live.vars.borrow().iter() {
+        staging.vars_set(name, signal.get().0);
+    }
+}
+
+fn merge_staged_defaults(staging: &StateGraph, live: &StateGraph) {
+    for (name, signal) in staging.app.borrow().iter() {
+        if live.app_get(name).is_none() {
+            live.app_set(name, signal.get().0);
+        }
+    }
+    for (name, signal) in staging.vars.borrow().iter() {
+        if live.vars_get(name).is_none() {
+            live.vars_set(name, signal.get().0);
         }
     }
 }

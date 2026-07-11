@@ -62,6 +62,9 @@ impl<'a> ActionDispatcher for RuntimeDispatcher<'a> {
         action: &ActionDefinition,
         params: &Map<String, Value>,
     ) -> Result<(), ExecuteError> {
+        if self.runtime.input_frozen() {
+            return Err(ExecuteError::already_running());
+        }
         match action.source_kind {
             SourceKind::SetValue => dispatch_set_value(self.runtime, action, params),
             SourceKind::OpenRoute => dispatch_open_route(self.runtime, action, params),
@@ -368,6 +371,54 @@ mod tests {
         rt.build_layout((400.0, 200.0)).unwrap();
         rt.rebuild_spatial();
         (rt, schema)
+    }
+
+    #[test]
+    fn frozen_variant_swap_rejects_action_execution_as_retryable_busy() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,"state":{"value":{"type":"string","default":"old"}},"children":[
+              {"type":"frame","id":"desktop","screen":"/","children":[
+                {"type":"text_input","id":"editor","value":"text"},
+                {"type":"text_input","id":"setter","semantics":{"aiName":"value"},"bindings":{"bind:value":"$state.value"}}]},
+              {"type":"frame","id":"mobile","screen":"/","breakpoint":{"maxWidth":480},"children":[]}
+            ]}"#,
+        )
+        .unwrap();
+        let mut rt = Runtime::new_from_document(schema).unwrap();
+        let editor_key = rt.document.as_ref().unwrap().tree.get("editor").unwrap();
+        let editor = rt.document.as_ref().unwrap().tree.nodes[editor_key]
+            .schema
+            .clone();
+        let state = rt.widget_states.get_or_init(&editor, &rt.state).unwrap();
+        let jian_core::widget_state::WidgetState::TextInput(state) = state else {
+            panic!()
+        };
+        state.set_composition("preedit", 7, 0);
+        assert!(!rt.switch_variant("mobile@0-480").unwrap());
+        assert!(rt.input_frozen());
+
+        let mounted = rt.document.as_ref().unwrap().schema.clone();
+        let mut surface = ActionSurface::from_document(&mounted, &[0u8; 16]);
+        let action = surface
+            .actions()
+            .iter()
+            .find(|action| matches!(action.source_kind, SourceKind::SetValue))
+            .map(|action| action.name.full())
+            .unwrap();
+        let mut dispatcher = RuntimeDispatcher::new(&mut rt);
+        let outcome = surface.execute(&action, Some(&json!({"value":"new"})), &mut dispatcher);
+        assert!(matches!(
+            outcome,
+            ExecuteOutcome::Err(ExecuteError::Busy {
+                reason: crate::BusyReason::AlreadyRunning
+            })
+        ));
+        assert_eq!(
+            rt.state
+                .app_get("value")
+                .and_then(|value| value.as_str().map(str::to_owned)),
+            Some("old".to_owned())
+        );
     }
 
     #[test]

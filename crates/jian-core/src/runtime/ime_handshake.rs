@@ -16,6 +16,7 @@ pub struct ImeSnapshot {
     pub field_key: (String, String),
     pub region: (usize, usize),
     pub text: String,
+    pub durable_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,11 +105,14 @@ impl ImeRegistry {
             return ImeConfirmOutcome::Dropped;
         };
         let (start, end) = request.snapshot.region;
-        if field.text().get(start..end) != Some(request.snapshot.text.as_str()) {
+        let durable_matches = field.text() == request.snapshot.durable_text;
+        // A confirmation consumes the source composition even when its
+        // durable context moved while the host request was outstanding.
+        field.clear_composition();
+        if !durable_matches || start > end || end > field.text().len() {
             return ImeConfirmOutcome::Dropped;
         }
         field.replace_range(start, end, replacement, 0);
-        field.clear_composition();
         ImeConfirmOutcome::Applied
     }
 }
@@ -137,11 +141,16 @@ mod tests {
     #[test]
     fn snapshot_commit_applies_only_while_region_matches() {
         let mut registry = ImeRegistry::default();
-        let mut store = store_with("p", "field", "abIMEz");
+        let mut store = store_with("p", "field", "abz");
+        if let Some(WidgetState::TextInput(field)) = store.get_for_page_mut("p", "field") {
+            field.set_caret(2, 0);
+            field.set_composition("IME", 3, 0);
+        }
         let id = registry.issue(ImeSnapshot {
             field_key: ("p".into(), "field".into()),
-            region: (2, 5),
+            region: (2, 2),
             text: "IME".into(),
+            durable_text: "abz".into(),
         });
         assert_eq!(
             registry.confirm_commit(id, "OK", &mut store),
@@ -160,16 +169,21 @@ mod tests {
     #[test]
     fn moved_region_drops_and_new_same_field_voids_old() {
         let mut registry = ImeRegistry::default();
-        let mut store = store_with("p", "field", "abIMEz");
+        let mut store = store_with("p", "field", "abz");
+        if let Some(WidgetState::TextInput(field)) = store.get_for_page_mut("p", "field") {
+            field.set_composition("IME", 3, 0);
+        }
         let old = registry.issue(ImeSnapshot {
             field_key: ("p".into(), "field".into()),
-            region: (2, 5),
+            region: (3, 3),
             text: "IME".into(),
+            durable_text: "abz".into(),
         });
         let current = registry.issue(ImeSnapshot {
             field_key: ("p".into(), "field".into()),
-            region: (1, 4),
-            text: "bIM".into(),
+            region: (3, 3),
+            text: "IME".into(),
+            durable_text: "abz".into(),
         });
         assert_eq!(
             registry.confirm_cancel(old, &mut store),

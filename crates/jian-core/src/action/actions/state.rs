@@ -137,6 +137,7 @@ impl ActionImpl for Reset {
         "reset"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
+        ctx.state.bump_mutation();
         match self.scope {
             Scope::App => ctx.state.app.borrow_mut().clear(),
             Scope::Vars => ctx.state.vars.borrow_mut().clear(),
