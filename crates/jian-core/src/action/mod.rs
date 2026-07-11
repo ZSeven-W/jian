@@ -14,6 +14,7 @@ pub mod error;
 pub mod executor;
 pub mod registry;
 pub mod services;
+pub mod task_queue;
 pub mod value;
 
 pub use action_trait::{ActionChain, ActionFactory, ActionImpl, BoxedAction};
@@ -21,6 +22,7 @@ pub use capability::{Capability, CapabilityGate, DeclaredCapabilityGate, DummyCa
 pub use context::ActionContext;
 pub use executor::{execute_list, execute_list_shared, ExecOutcome};
 pub use registry::ActionRegistry;
+pub use task_queue::{TaskClock, TaskQueue};
 
 use std::cell::RefCell;
 use std::rc::Rc;

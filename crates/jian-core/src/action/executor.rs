@@ -1,5 +1,4 @@
-//! Top-level execute facade. Parses a JSON ActionList and executes it via
-//! `futures::executor::block_on`, returning the final result + any warnings.
+//! Compatibility execute facade for callers outside `Runtime`.
 
 use super::context::ActionContext;
 use super::error::{ActionError, ActionResult};
@@ -13,7 +12,8 @@ pub struct ExecOutcome {
 }
 
 /// Parse + execute a JSON ActionList blob in the given ActionContext.
-/// Blocks until all actions resolve (including fetches & delays).
+/// Polls once. Runtime-owned event chains use `TaskQueue` and are resumed by
+/// `Runtime::pump`; this facade remains for immediately-ready unit/host calls.
 pub fn execute_list(registry: &ActionRegistry, list: &Value, ctx: &ActionContext) -> ExecOutcome {
     let chain = match registry.parse_list(list) {
         Ok(c) => c,
@@ -25,7 +25,14 @@ pub fn execute_list(registry: &ActionRegistry, list: &Value, ctx: &ActionContext
         }
     };
 
-    let result: ActionResult = futures::executor::block_on(async { chain.run_serial(ctx).await });
+    use std::task::{Context, Poll};
+    let mut future = chain.run_serial(ctx);
+    let waker = futures::task::noop_waker();
+    let mut task_context = Context::from_waker(&waker);
+    let result: ActionResult = match future.as_mut().poll(&mut task_context) {
+        Poll::Ready(result) => result,
+        Poll::Pending => Ok(()),
+    };
 
     ExecOutcome {
         result,

@@ -14,4 +14,12 @@ pub trait Router {
     fn replace(&self, path: &str);
     fn pop(&self);
     fn reset(&self, path: &str);
+    fn restore(&self, state: RouteState, valid_paths: &[String]) {
+        let path = if valid_paths.iter().any(|path| path == &state.path) {
+            state.path
+        } else {
+            valid_paths.first().cloned().unwrap_or_else(|| "/".into())
+        };
+        self.reset(&path);
+    }
 }

@@ -117,11 +117,14 @@ impl ActionImpl for OpenUrl {
         for w in ws {
             ctx.warn(w);
         }
-        ctx.warn(crate::expression::Diagnostic {
-            kind: crate::expression::DiagKind::RuntimeWarning,
-            message: format!("open_url: {}", v.as_str().unwrap_or("<non-string>")),
-            span: crate::expression::Span::zero(),
-        });
+        let url = v.as_str().unwrap_or("");
+        if let Err(error) = ctx.platform.open_url(url) {
+            ctx.warn(crate::expression::Diagnostic {
+                kind: crate::expression::DiagKind::RuntimeWarning,
+                message: format!("open_url: {error}"),
+                span: crate::expression::Span::zero(),
+            });
+        }
         Ok(())
     }
 }

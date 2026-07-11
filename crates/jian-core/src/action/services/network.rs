@@ -34,6 +34,7 @@ pub trait NetworkClient {
 
 #[async_trait(?Send)]
 pub trait WebSocketSession {
+    fn abort(&self) {}
     async fn send(&self, text: String) -> Result<(), String>;
     async fn close(&self) -> Result<(), String>;
     /// Drain any messages received since the last call. Hosts that

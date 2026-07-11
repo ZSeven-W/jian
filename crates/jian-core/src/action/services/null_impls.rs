@@ -6,6 +6,7 @@ use super::{
     network::{HttpRequest, HttpResponse, NetworkClient},
     router::{RouteState, Router},
     storage::StorageBackend,
+    ServiceError,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -24,14 +25,20 @@ pub struct NullStorageBackend;
 
 #[async_trait(?Send)]
 impl StorageBackend for NullStorageBackend {
-    async fn get(&self, _: &str) -> Option<Value> {
-        None
+    async fn get(&self, _: &str) -> Result<Option<Value>, ServiceError> {
+        Ok(None)
     }
-    async fn set(&self, _: &str, _: Value) {}
-    async fn delete(&self, _: &str) {}
-    async fn clear(&self) {}
-    async fn keys(&self) -> Vec<String> {
-        Vec::new()
+    async fn set(&self, _: &str, _: Value) -> Result<(), ServiceError> {
+        Ok(())
+    }
+    async fn delete(&self, _: &str) -> Result<(), ServiceError> {
+        Ok(())
+    }
+    async fn clear(&self) -> Result<(), ServiceError> {
+        Ok(())
+    }
+    async fn keys(&self) -> Result<Vec<String>, ServiceError> {
+        Ok(Vec::new())
     }
 }
 
@@ -70,10 +77,12 @@ pub struct NullClipboard;
 
 #[async_trait(?Send)]
 impl ClipboardService for NullClipboard {
-    async fn read_text(&self) -> Option<String> {
-        None
+    async fn read_text(&self) -> Result<String, ServiceError> {
+        Err(ServiceError("clipboard unavailable".into()))
     }
-    async fn write_text(&self, _: &str) {}
+    async fn write_text(&self, _: &str) -> Result<(), ServiceError> {
+        Err(ServiceError("clipboard unavailable".into()))
+    }
 }
 
 #[cfg(test)]
@@ -98,8 +107,8 @@ mod tests {
     #[test]
     fn null_storage_empty() {
         let s = NullStorageBackend;
-        assert!(block_on(s.get("x")).is_none());
-        assert!(block_on(s.keys()).is_empty());
+        assert!(block_on(s.get("x")).unwrap().is_none());
+        assert!(block_on(s.keys()).unwrap().is_empty());
     }
 
     #[test]

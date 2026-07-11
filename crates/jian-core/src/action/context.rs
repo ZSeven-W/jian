@@ -14,6 +14,7 @@ use crate::value::RuntimeValue;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// One entry in the live WebSocket registry. Pairs the session
 /// handle with the optional `on_message` ActionList that runs every
@@ -26,6 +27,7 @@ pub struct WsHandle {
     /// `ActionChain` doesn't implement `Clone` and we need to
     /// re-execute per message; the runtime re-parses each call.
     pub on_message: Option<serde_json::Value>,
+    pub generation: u64,
 }
 
 /// Live WebSocket sessions, keyed by author-provided id. Inserted by
@@ -37,6 +39,8 @@ pub type WsSessionRegistry = Rc<RefCell<HashMap<String, WsHandle>>>;
 pub struct ActionContext {
     pub state: Rc<StateGraph>,
     pub scheduler: Rc<Scheduler>,
+    pub clock: Option<Arc<crate::action::TaskClock>>,
+    pub document_generation: u64,
 
     /// $event value for event-triggered action chains. None for lifecycle.
     pub event: Option<RuntimeValue>,
@@ -54,6 +58,7 @@ pub struct ActionContext {
     pub feedback: Rc<dyn FeedbackSink>,
     pub async_fb: Rc<dyn AsyncFeedback>,
     pub clipboard: Rc<dyn ClipboardService>,
+    pub platform: Rc<dyn super::services::PlatformService>,
 
     pub capabilities: Rc<dyn CapabilityGate>,
     /// Tier-3 logic provider. `NullLogicProvider` is installed by
@@ -114,6 +119,8 @@ mod tests {
         ActionContext {
             state: Rc::new(StateGraph::new(sched.clone())),
             scheduler: sched,
+            clock: None,
+            document_generation: 0,
             event: None,
             locals: RefCell::new(BTreeMap::new()),
             page_id: None,
@@ -125,6 +132,7 @@ mod tests {
             feedback: Rc::new(NullFeedback),
             async_fb: Rc::new(NullFeedback),
             clipboard: Rc::new(NullClipboard),
+            platform: Rc::new(crate::action::services::NullPlatform),
             capabilities: Rc::new(DummyCapabilityGate),
             logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),

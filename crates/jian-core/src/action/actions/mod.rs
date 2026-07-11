@@ -55,7 +55,6 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
         "storage_clear",
         Box::new(storage_ops::factory_storage_clear),
     );
-    r.register("storage_wipe", Box::new(storage_ops::factory_storage_wipe));
 
     // UI feedback (non-nested)
     r.register("toast", Box::new(feedback::factory_toast));
@@ -75,6 +74,17 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     r.register("blur", Box::new(platform::factory_blur));
 
     // Control (nested — via weak registry upgrade)
+    let w = weak.clone();
+    r.register(
+        "storage_wipe",
+        Box::new(move |body| {
+            let registry = w.upgrade().ok_or(ActionError::Custom(
+                "registry dropped while parsing `storage_wipe`".into(),
+            ))?;
+            let registry = registry.borrow();
+            storage_ops::make_storage_wipe_body(&registry, body)
+        }),
+    );
     let w = weak.clone();
     r.register(
         "if",

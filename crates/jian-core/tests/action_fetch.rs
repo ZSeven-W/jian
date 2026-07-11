@@ -45,6 +45,8 @@ fn setup_with_net(
     let ctx = ActionContext {
         state: state.clone(),
         scheduler: sched,
+        clock: None,
+        document_generation: 0,
         event: None,
         locals: RefCell::new(BTreeMap::new()),
         page_id: None,
@@ -56,6 +58,7 @@ fn setup_with_net(
         feedback: Rc::new(NullFeedback),
         async_fb: Rc::new(NullFeedback),
         clipboard: Rc::new(NullClipboard),
+        platform: Rc::new(jian_core::action::services::NullPlatform),
         capabilities: cap,
         logic: Rc::new(jian_core::logic::NullLogicProvider),
         expr_cache: Rc::new(ExpressionCache::new()),

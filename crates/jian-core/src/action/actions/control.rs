@@ -30,7 +30,7 @@ pub fn factory_abort(_body: &Value) -> Result<BoxedAction, ActionError> {
 // ---- delay ----
 
 struct Delay {
-    _ms: u64,
+    ms: u64,
 }
 
 #[async_trait(?Send)]
@@ -38,8 +38,10 @@ impl ActionImpl for Delay {
     fn name(&self) -> &'static str {
         "delay"
     }
-    async fn execute(&self, _ctx: &ActionContext) -> ActionResult {
-        // MVP: instantaneous. Real timer service arrives with host adapter.
+    async fn execute(&self, ctx: &ActionContext) -> ActionResult {
+        if let Some(clock) = &ctx.clock {
+            clock.sleep(self.ms).await;
+        }
         Ok(())
     }
 }
@@ -54,7 +56,7 @@ pub fn factory_delay(body: &Value) -> Result<BoxedAction, ActionError> {
         field: "ms",
         message: "must be positive integer".into(),
     })?;
-    Ok(Box::new(Delay { _ms: ms }))
+    Ok(Box::new(Delay { ms }))
 }
 
 // ---- if ----

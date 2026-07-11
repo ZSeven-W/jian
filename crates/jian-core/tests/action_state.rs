@@ -18,6 +18,8 @@ fn setup_ctx() -> (Rc<Scheduler>, Rc<StateGraph>, ActionContext) {
     let ctx = ActionContext {
         state: state.clone(),
         scheduler: sched.clone(),
+        clock: None,
+        document_generation: 0,
         event: None,
         locals: RefCell::new(BTreeMap::new()),
         page_id: None,
@@ -29,6 +31,7 @@ fn setup_ctx() -> (Rc<Scheduler>, Rc<StateGraph>, ActionContext) {
         feedback: Rc::new(NullFeedback),
         async_fb: Rc::new(NullFeedback),
         clipboard: Rc::new(NullClipboard),
+        platform: Rc::new(jian_core::action::services::NullPlatform),
         capabilities: Rc::new(DummyCapabilityGate),
         logic: Rc::new(jian_core::logic::NullLogicProvider),
         expr_cache: Rc::new(ExpressionCache::new()),

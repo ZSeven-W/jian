@@ -25,20 +25,30 @@ struct MemStore {
 
 #[async_trait(?Send)]
 impl StorageBackend for MemStore {
-    async fn get(&self, key: &str) -> Option<Value> {
-        self.map.borrow().get(key).cloned()
+    async fn get(
+        &self,
+        key: &str,
+    ) -> Result<Option<Value>, jian_core::action::services::ServiceError> {
+        Ok(self.map.borrow().get(key).cloned())
     }
-    async fn set(&self, key: &str, value: Value) {
+    async fn set(
+        &self,
+        key: &str,
+        value: Value,
+    ) -> Result<(), jian_core::action::services::ServiceError> {
         self.map.borrow_mut().insert(key.to_owned(), value);
+        Ok(())
     }
-    async fn delete(&self, key: &str) {
+    async fn delete(&self, key: &str) -> Result<(), jian_core::action::services::ServiceError> {
         self.map.borrow_mut().remove(key);
+        Ok(())
     }
-    async fn clear(&self) {
+    async fn clear(&self) -> Result<(), jian_core::action::services::ServiceError> {
         self.map.borrow_mut().clear();
+        Ok(())
     }
-    async fn keys(&self) -> Vec<String> {
-        self.map.borrow().keys().cloned().collect()
+    async fn keys(&self) -> Result<Vec<String>, jian_core::action::services::ServiceError> {
+        Ok(self.map.borrow().keys().cloned().collect())
     }
 }
 
@@ -88,6 +98,8 @@ fn setup(
     let ctx = ActionContext {
         state: state.clone(),
         scheduler: sched,
+        clock: None,
+        document_generation: 0,
         event: None,
         locals: RefCell::new(BTreeMap::new()),
         page_id: None,
@@ -99,6 +111,7 @@ fn setup(
         feedback: fb_sink,
         async_fb: fb_async,
         clipboard,
+        platform: Rc::new(jian_core::action::services::NullPlatform),
         capabilities: cap,
         logic: Rc::new(jian_core::logic::NullLogicProvider),
         expr_cache: Rc::new(ExpressionCache::new()),

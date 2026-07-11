@@ -1,6 +1,6 @@
 //! Storage actions: `storage_set`, `storage_clear`, `storage_wipe`.
 
-use crate::action::action_trait::{ActionImpl, BoxedAction};
+use crate::action::action_trait::{ActionChain, ActionImpl, BoxedAction};
 use crate::action::capability::Capability;
 use crate::action::context::ActionContext;
 use crate::action::error::{ActionError, ActionResult};
@@ -35,7 +35,14 @@ impl ActionImpl for StorageSet {
             for w in ws {
                 ctx.warn(w);
             }
-            ctx.storage.set(key, v.0).await;
+            let value = v.0;
+            ctx.storage
+                .set(key, value.clone())
+                .await
+                .map_err(|error| ActionError::Custom(format!("storage_set: {error}")))?;
+            if ctx.state.is_responsive() {
+                ctx.state.storage_set(key, value);
+            }
         }
         Ok(())
     }
@@ -75,7 +82,13 @@ impl ActionImpl for StorageClear {
                 needed: Capability::Storage,
             });
         }
-        ctx.storage.delete(&self.key).await;
+        ctx.storage
+            .delete(&self.key)
+            .await
+            .map_err(|error| ActionError::Custom(format!("storage_clear: {error}")))?;
+        if ctx.state.is_responsive() {
+            ctx.state.storage_cache.remove(&self.key);
+        }
         Ok(())
     }
 }
@@ -92,7 +105,9 @@ pub fn factory_storage_clear(body: &Value) -> Result<BoxedAction, ActionError> {
     Ok(Box::new(StorageClear { key }))
 }
 
-struct StorageWipe;
+struct StorageWipe {
+    on_error: Option<ActionChain>,
+}
 
 #[async_trait(?Send)]
 impl ActionImpl for StorageWipe {
@@ -106,11 +121,32 @@ impl ActionImpl for StorageWipe {
                 needed: Capability::Storage,
             });
         }
-        ctx.storage.clear().await;
-        Ok(())
+        match ctx.storage.clear().await {
+            Ok(()) => {
+                if ctx.state.is_responsive() {
+                    ctx.state.storage_cache.clear_present();
+                }
+                Ok(())
+            }
+            Err(error) => {
+                if let Some(handler) = &self.on_error {
+                    handler.run_serial(ctx).await
+                } else {
+                    Err(ActionError::Custom(format!("storage_wipe: {error}")))
+                }
+            }
+        }
     }
 }
 
-pub fn factory_storage_wipe(_body: &Value) -> Result<BoxedAction, ActionError> {
-    Ok(Box::new(StorageWipe))
+pub fn make_storage_wipe_body(
+    registry: &crate::action::ActionRegistry,
+    body: &Value,
+) -> Result<BoxedAction, ActionError> {
+    let on_error = body
+        .as_object()
+        .and_then(|object| object.get("on_error"))
+        .map(|handler| registry.parse_list(handler))
+        .transpose()?;
+    Ok(Box::new(StorageWipe { on_error }))
 }

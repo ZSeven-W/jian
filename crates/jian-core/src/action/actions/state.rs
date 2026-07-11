@@ -73,6 +73,13 @@ pub(crate) fn write_path(ctx: &ActionContext, path: &StatePath, value: Value) ->
                 ));
             }
         }
+        Scope::Viewport => {
+            ctx.warn(crate::expression::Diagnostic {
+                kind: crate::expression::DiagKind::RuntimeWarning,
+                message: "$viewport is read-only".into(),
+                span: crate::expression::Span::zero(),
+            });
+        }
         Scope::Route | Scope::Storage => {
             return Err(ActionError::Custom(format!(
                 "set: {} is not directly writable; use router/storage actions",

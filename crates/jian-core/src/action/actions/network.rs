@@ -12,6 +12,46 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+struct LoadingGuard {
+    state: std::rc::Rc<crate::state::StateGraph>,
+    path: StatePath,
+    page_id: Option<String>,
+    node_id: Option<String>,
+    armed: bool,
+}
+
+impl Drop for LoadingGuard {
+    fn drop(&mut self) {
+        if !self.armed || self.path.segments.len() != 1 {
+            return;
+        }
+        let crate::state::Segment::Key(key) = &self.path.segments[0] else {
+            return;
+        };
+        use crate::state::Scope;
+        match self.path.scope {
+            Scope::App => self.state.app_set(key, Value::Bool(false)),
+            Scope::Vars => self.state.vars_set(key, Value::Bool(false)),
+            Scope::Page => {
+                if let Some(page) = &self.page_id {
+                    self.state.page_set(page, key, Value::Bool(false));
+                }
+            }
+            Scope::SelfNode => {
+                if let Some(node) = &self.node_id {
+                    self.state.self_set(
+                        self.page_id.as_deref().unwrap_or(""),
+                        node,
+                        key,
+                        Value::Bool(false),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub struct Fetch {
     url_expr: Expression,
     method: String,
@@ -40,6 +80,13 @@ impl ActionImpl for Fetch {
         if let Some(ref path) = self.loading {
             crate::action::actions::state::write_path(ctx, path, Value::Bool(true))?;
         }
+        let mut loading_guard = self.loading.clone().map(|path| LoadingGuard {
+            state: ctx.state.clone(),
+            path,
+            page_id: ctx.page_id.clone(),
+            node_id: ctx.node_id.clone(),
+            armed: true,
+        });
 
         let locals = ctx.locals_snapshot();
         let (url_v, ws) = self.url_expr.eval_with_locals(
@@ -96,6 +143,9 @@ impl ActionImpl for Fetch {
 
         if let Some(ref path) = self.loading {
             crate::action::actions::state::write_path(ctx, path, Value::Bool(false))?;
+        }
+        if let Some(guard) = &mut loading_guard {
+            guard.armed = false;
         }
 
         match outcome {

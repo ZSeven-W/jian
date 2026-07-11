@@ -118,6 +118,7 @@ impl ActionImpl for WsConnect {
                     crate::action::context::WsHandle {
                         session,
                         on_message: self.on_message.clone(),
+                        generation: ctx.document_generation,
                     },
                 );
                 Ok(())
@@ -316,6 +317,8 @@ mod tests {
         ActionContext {
             state: Rc::new(StateGraph::new(sched.clone())),
             scheduler: sched,
+            clock: None,
+            document_generation: 0,
             event: None,
             locals: RefCell::new(BTreeMap::new()),
             page_id: None,
@@ -327,6 +330,7 @@ mod tests {
             feedback: Rc::new(NullFeedback),
             async_fb: Rc::new(NullFeedback),
             clipboard: Rc::new(NullClipboard),
+            platform: Rc::new(crate::action::services::NullPlatform),
             capabilities: Rc::new(DummyCapabilityGate),
             logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),
