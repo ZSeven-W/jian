@@ -42,6 +42,8 @@ pub struct PenNodeBase {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraints: Option<crate::constraints::Constraints>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity: Option<NumberOrExpression>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<BoolOrExpression>,

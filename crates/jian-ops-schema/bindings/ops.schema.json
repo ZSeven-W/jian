@@ -424,6 +424,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -590,6 +600,34 @@
               "items": {
                 "$ref": "#/definitions/PenEffect"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -726,6 +764,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -892,6 +940,34 @@
               "items": {
                 "$ref": "#/definitions/PenEffect"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -1028,6 +1104,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -1194,6 +1280,34 @@
               "items": {
                 "$ref": "#/definitions/PenEffect"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -1397,6 +1511,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -1449,6 +1573,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -1608,6 +1760,16 @@
                 "null"
               ],
               "format": "double"
+            },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "opacity": {
               "anyOf": [
@@ -1849,6 +2011,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -1901,6 +2073,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -2113,6 +2313,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -2165,6 +2375,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -2423,6 +2661,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -2475,6 +2723,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -2698,6 +2974,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -2750,6 +3036,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -2991,6 +3305,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -3043,6 +3367,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -3219,6 +3571,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -3271,6 +3633,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -3503,6 +3893,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -3555,6 +3955,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -3773,6 +4201,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -3825,6 +4263,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -4030,6 +4496,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -4082,6 +4558,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -4293,6 +4797,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -4345,6 +4859,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -4571,6 +5113,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -4623,6 +5175,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -4834,6 +5414,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -4886,6 +5476,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -5133,6 +5751,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -5185,6 +5813,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -5403,6 +6059,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -5455,6 +6121,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -5677,6 +6371,16 @@
               ],
               "format": "double"
             },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "opacity": {
               "anyOf": [
                 {
@@ -5729,6 +6433,34 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "minWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxWidth": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "minHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "maxHeight": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         },
@@ -5875,6 +6607,16 @@
                 "null"
               ],
               "format": "double"
+            },
+            "constraints": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Constraints"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "opacity": {
               "anyOf": [
@@ -6489,6 +7231,44 @@
           },
           "additionalProperties": false
         }
+      ]
+    },
+    "Constraints": {
+      "description": "Figma-style per-axis anchoring for absolutely positioned nodes.",
+      "type": "object",
+      "required": [
+        "h",
+        "v"
+      ],
+      "properties": {
+        "h": {
+          "$ref": "#/definitions/HConstraint"
+        },
+        "v": {
+          "$ref": "#/definitions/VConstraint"
+        }
+      }
+    },
+    "HConstraint": {
+      "description": "Horizontal anchoring for an absolutely positioned node.",
+      "type": "string",
+      "enum": [
+        "left",
+        "right",
+        "center",
+        "left_right",
+        "scale"
+      ]
+    },
+    "VConstraint": {
+      "description": "Vertical anchoring for an absolutely positioned node.",
+      "type": "string",
+      "enum": [
+        "top",
+        "bottom",
+        "center",
+        "top_bottom",
+        "scale"
       ]
     },
     "NumberOrExpression": {
