@@ -49,7 +49,7 @@ pub fn collect_draws(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        let offset = root_offset_for(doc, root);
+        let offset = root_offset_for(doc, layout, root);
         walk(
             doc,
             layout,
@@ -78,7 +78,7 @@ pub fn collect_draws_with_state(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        let offset = root_offset_for(doc, root);
+        let offset = root_offset_for(doc, layout, root);
         walk(
             doc,
             layout,
@@ -117,7 +117,7 @@ pub fn collect_draws_with_widgets(
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        let offset = root_offset_for(doc, root);
+        let offset = root_offset_for(doc, layout, root);
         walk(
             doc,
             layout,
@@ -157,8 +157,12 @@ pub fn collect_draws_with_widgets(
 /// belongs at the host pointer-translation seam (tracked follow-up).
 fn root_offset_for(
     doc: &crate::document::RuntimeDocument,
+    layout: &crate::layout::LayoutEngine,
     root: crate::document::NodeKey,
 ) -> (f32, f32) {
+    if layout.is_origin_normalized(root) {
+        return (0.0, 0.0);
+    }
     doc.tree
         .nodes
         .get(root)

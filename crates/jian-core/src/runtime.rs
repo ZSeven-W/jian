@@ -54,6 +54,7 @@ pub struct Runtime {
     pub layout: LayoutEngine,
     pub spatial: SpatialIndex,
     pub viewport: Viewport,
+    load_warnings: Vec<String>,
 
     // --- Gesture + Action wiring (Plan 5 T15) ---
     pub gestures: PointerRouter,
@@ -109,6 +110,7 @@ impl Runtime {
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
+            load_warnings: Vec::new(),
 
             gestures: PointerRouter::new(),
             focus: FocusManager::new(),
@@ -179,6 +181,7 @@ impl Runtime {
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
+            load_warnings: Vec::new(),
 
             gestures: PointerRouter::new(),
             focus,
@@ -219,6 +222,7 @@ impl Runtime {
     /// already hold a value keep that value; only newly-introduced
     /// keys get their schema default.
     pub fn replace_document(&mut self, schema: PenDocument) -> CoreResult<()> {
+        self.load_warnings.clear();
         // Rebuild the capability gate from the new schema. Reuse the
         // existing AuditLog so the rolling history isn't truncated on
         // every save. If the original Runtime was constructed via
@@ -287,11 +291,44 @@ impl Runtime {
 
     pub fn build_layout(&mut self, available: (f32, f32)) -> CoreResult<()> {
         let doc = self.document.as_ref().expect("no document loaded");
-        let roots = self.layout.build(&doc.tree)?;
+        self.viewport.size = size(available.0, available.1);
+        let responsive = doc.schema.is_responsive();
+        let roots = self.layout.build_responsive(&doc.tree, responsive)?;
+        if !responsive {
+            for root in roots {
+                self.layout.compute(root, available)?;
+            }
+            return Ok(());
+        }
+
+        for warning in self.layout.constraint_lints().to_vec() {
+            if !self.load_warnings.contains(&warning) {
+                self.load_warnings.push(warning);
+            }
+        }
+        let viewport_root = select_viewport_root(&doc.tree, &mut self.load_warnings);
+        if let Some(root_key) = viewport_root {
+            if root_has_limits(&doc.tree.nodes[root_key].schema) {
+                let warning = "responsive viewport root min/max bounds are ignored".to_owned();
+                if !self.load_warnings.contains(&warning) {
+                    self.load_warnings.push(warning);
+                }
+            }
+            self.layout
+                .override_root_for_viewport(root_key, available)?;
+        }
         for root in roots {
-            self.layout.compute(root, available)?;
+            if viewport_root.is_some_and(|key| self.layout.map[key] == root) {
+                self.layout.compute_responsive(root, available)?;
+            } else {
+                self.layout.compute(root, available)?;
+            }
         }
         Ok(())
+    }
+
+    pub fn load_warnings(&self) -> &[String] {
+        &self.load_warnings
     }
 
     /// Plan 19 D1 cold-start fast path: feed the runtime a pre-computed
@@ -1271,6 +1308,45 @@ impl Runtime {
             warnings: RefCell::new(Vec::new()),
         }
     }
+}
+
+fn select_viewport_root(
+    tree: &crate::document::NodeTree,
+    warnings: &mut Vec<String>,
+) -> Option<crate::document::NodeKey> {
+    let &first = tree.roots.first()?;
+    if tree.roots.len() > 1 {
+        let warning =
+            "responsive document has extra top-level roots; only the first root is viewport-sized"
+                .to_owned();
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+    }
+    if !matches!(
+        tree.nodes[first].schema,
+        jian_ops_schema::node::PenNode::Frame(_)
+    ) {
+        let warning =
+            "responsive document's first top-level node is not a frame; viewport sizing skipped"
+                .to_owned();
+        if !warnings.contains(&warning) {
+            warnings.push(warning);
+        }
+        return None;
+    }
+    Some(first)
+}
+
+fn root_has_limits(node: &jian_ops_schema::node::PenNode) -> bool {
+    let jian_ops_schema::node::PenNode::Frame(frame) = node else {
+        return false;
+    };
+    let limits = frame.container.limits;
+    limits.min_width.is_some()
+        || limits.max_width.is_some()
+        || limits.min_height.is_some()
+        || limits.max_height.is_some()
 }
 
 impl Default for Runtime {
@@ -2405,5 +2481,59 @@ mod tests {
         assert!(matches!(evs[1], SemanticEvent::FocusGained { .. }));
         assert_eq!(evs[0].node(), key_a);
         assert_eq!(evs[1].node(), key_b);
+    }
+
+    #[test]
+    fn responsive_viewport_root_takes_available_size() {
+        let document: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","formatVersion":"1.2","responsive":true,"children":[
+                {"type":"frame","id":"root","x":50,"y":50,"width":400,"height":300}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(document).unwrap();
+        runtime.build_layout((800.0, 600.0)).unwrap();
+        let key = runtime.document.as_ref().unwrap().tree.get("root").unwrap();
+        let rect = runtime.layout.node_rect(key).unwrap();
+        assert_eq!(
+            (
+                rect.origin.x,
+                rect.origin.y,
+                rect.size.width,
+                rect.size.height
+            ),
+            (0.0, 0.0, 800.0, 600.0)
+        );
+        assert!(runtime.layout.is_origin_normalized(key));
+    }
+
+    #[test]
+    fn responsive_root_min_max_is_ignored_with_warning() {
+        let document: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","formatVersion":"1.2","responsive":true,"children":[
+                {"type":"frame","id":"root","width":400,"height":300,"minWidth":900}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(document).unwrap();
+        runtime.build_layout((200.0, 600.0)).unwrap();
+        let key = runtime.document.as_ref().unwrap().tree.get("root").unwrap();
+        assert_eq!(runtime.layout.node_rect(key).unwrap().size.width, 200.0);
+        assert!(runtime
+            .load_warnings()
+            .iter()
+            .any(|warning| warning.contains("min/max")));
+    }
+
+    #[test]
+    fn non_responsive_root_keeps_authored_size() {
+        let document: PenDocument = serde_json::from_str(
+            r#"{"version":"1.1","children":[
+                {"type":"frame","id":"root","x":50,"y":50,"width":400,"height":300}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(document).unwrap();
+        runtime.build_layout((800.0, 600.0)).unwrap();
+        let key = runtime.document.as_ref().unwrap().tree.get("root").unwrap();
+        assert_eq!(runtime.layout.node_rect(key).unwrap().size.width, 400.0);
+        assert!(!runtime.layout.is_origin_normalized(key));
     }
 }
