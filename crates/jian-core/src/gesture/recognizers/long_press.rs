@@ -5,15 +5,14 @@ use crate::document::NodeKey;
 use crate::gesture::pointer::{PointerEvent, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
 use crate::gesture::semantic::SemanticEvent;
-use std::time::{Duration, Instant};
 
 pub struct LongPressRecognizer {
     id: RecognizerId,
     node: NodeKey,
     state: RecognizerState,
-    down_time: Option<Instant>,
+    down_time_ms: Option<u64>,
     down_position: Option<crate::geometry::Point>,
-    duration: Duration,
+    duration_ms: u64,
     slop_px: f32,
 }
 
@@ -23,14 +22,14 @@ impl LongPressRecognizer {
             id,
             node,
             state: RecognizerState::Possible,
-            down_time: None,
+            down_time_ms: None,
             down_position: None,
-            duration: Duration::from_millis(500),
+            duration_ms: 500,
             slop_px: 8.0,
         }
     }
     pub fn duration(&self) -> u32 {
-        self.duration.as_millis() as u32
+        self.duration_ms as u32
     }
 }
 
@@ -55,7 +54,7 @@ impl Recognizer for LongPressRecognizer {
     ) -> RecognizerState {
         match event.phase {
             PointerPhase::Down => {
-                self.down_time = Some(event.timestamp);
+                self.down_time_ms = Some(event.t_ms);
                 self.down_position = Some(event.position);
                 self.state = RecognizerState::Defer;
             }
@@ -79,20 +78,29 @@ impl Recognizer for LongPressRecognizer {
         self.state
     }
 
-    fn tick(&mut self, now: Instant, arena: &mut ArenaHandle<'_>) {
+    fn tick(&mut self, now_ms: u64, arena: &mut ArenaHandle<'_>) {
         if !matches!(self.state, RecognizerState::Defer) {
             return;
         }
-        if let (Some(t0), Some(p0)) = (self.down_time, self.down_position) {
-            if now.duration_since(t0) >= self.duration {
+        if let (Some(t0), Some(p0)) = (self.down_time_ms, self.down_position) {
+            if now_ms.saturating_sub(t0) >= self.duration_ms {
                 arena.emit(SemanticEvent::LongPress {
                     node: self.node,
                     position: p0,
-                    duration_ms: self.duration.as_millis() as u32,
+                    duration_ms: self.duration_ms as u32,
                 });
                 self.state = RecognizerState::Claimed;
             }
         }
+    }
+
+    fn next_wake_ms(&self) -> Option<u64> {
+        matches!(self.state, RecognizerState::Defer)
+            .then(|| {
+                self.down_time_ms
+                    .map(|start| start.saturating_add(self.duration_ms))
+            })
+            .flatten()
     }
 
     fn accept(&mut self, _: &mut ArenaHandle<'_>) {

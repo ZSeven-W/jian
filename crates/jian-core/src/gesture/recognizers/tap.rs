@@ -4,16 +4,15 @@ use crate::document::NodeKey;
 use crate::gesture::pointer::{PointerEvent, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
 use crate::gesture::semantic::SemanticEvent;
-use std::time::{Duration, Instant};
 
 pub struct TapRecognizer {
     id: RecognizerId,
     node: NodeKey,
     state: RecognizerState,
     down_position: Option<crate::geometry::Point>,
-    down_time: Option<Instant>,
+    down_time_ms: Option<u64>,
     slop_px: f32,
-    timeout: Duration,
+    timeout_ms: u64,
 }
 
 impl TapRecognizer {
@@ -23,9 +22,9 @@ impl TapRecognizer {
             node,
             state: RecognizerState::Possible,
             down_position: None,
-            down_time: None,
+            down_time_ms: None,
             slop_px: 8.0,
-            timeout: Duration::from_millis(500),
+            timeout_ms: 500,
         }
     }
 }
@@ -52,7 +51,7 @@ impl Recognizer for TapRecognizer {
         match event.phase {
             PointerPhase::Down => {
                 self.down_position = Some(event.position);
-                self.down_time = Some(event.timestamp);
+                self.down_time_ms = Some(event.t_ms);
                 self.state = RecognizerState::Possible;
             }
             PointerPhase::Move => {
@@ -68,8 +67,8 @@ impl Recognizer for TapRecognizer {
                 if matches!(self.state, RecognizerState::Rejected) {
                     return self.state;
                 }
-                if let (Some(dt), Some(_dp)) = (self.down_time, self.down_position) {
-                    if event.timestamp.duration_since(dt) <= self.timeout {
+                if let (Some(dt), Some(_dp)) = (self.down_time_ms, self.down_position) {
+                    if event.t_ms.saturating_sub(dt) <= self.timeout_ms {
                         arena.emit(SemanticEvent::Tap {
                             node: self.node,
                             position: event.position,
@@ -100,11 +99,11 @@ pub struct DoubleTapRecognizer {
     id: RecognizerId,
     node: NodeKey,
     state: RecognizerState,
-    first_up: Option<(Instant, crate::geometry::Point)>,
-    down_time: Option<Instant>,
+    first_up: Option<(u64, crate::geometry::Point)>,
+    down_time_ms: Option<u64>,
     down_position: Option<crate::geometry::Point>,
     slop_px: f32,
-    gap: Duration,
+    gap_ms: u64,
 }
 
 impl DoubleTapRecognizer {
@@ -114,10 +113,10 @@ impl DoubleTapRecognizer {
             node,
             state: RecognizerState::Possible,
             first_up: None,
-            down_time: None,
+            down_time_ms: None,
             down_position: None,
             slop_px: 16.0,
-            gap: Duration::from_millis(300),
+            gap_ms: 300,
         }
     }
 }
@@ -143,13 +142,13 @@ impl Recognizer for DoubleTapRecognizer {
     ) -> RecognizerState {
         match event.phase {
             PointerPhase::Down => {
-                self.down_time = Some(event.timestamp);
+                self.down_time_ms = Some(event.t_ms);
                 self.down_position = Some(event.position);
                 if let Some((t, p)) = self.first_up {
-                    let dt = event.timestamp.duration_since(t);
+                    let dt = event.t_ms.saturating_sub(t);
                     let dx = event.position.x - p.x;
                     let dy = event.position.y - p.y;
-                    if dt > self.gap || (dx * dx + dy * dy).sqrt() > self.slop_px {
+                    if dt > self.gap_ms || (dx * dx + dy * dy).sqrt() > self.slop_px {
                         // Too far in time or space — reset to single-tap tracking.
                         self.first_up = None;
                     }
@@ -166,7 +165,7 @@ impl Recognizer for DoubleTapRecognizer {
                     self.state = RecognizerState::Claimed;
                     self.first_up = None;
                 } else {
-                    self.first_up = Some((event.timestamp, event.position));
+                    self.first_up = Some((event.t_ms, event.position));
                 }
             }
             PointerPhase::Cancel => {

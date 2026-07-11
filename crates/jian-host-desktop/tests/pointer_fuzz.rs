@@ -189,7 +189,7 @@ fn pointer_fuzz_does_not_panic() {
         // loop calls this every iteration, but we skip the request
         // here to keep the test quick.
         if rng.range(20) == 0 {
-            runtime.tick(std::time::Instant::now());
+            runtime.tick(0);
         }
     }
 

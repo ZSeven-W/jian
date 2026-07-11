@@ -35,10 +35,9 @@ use crate::document::{NodeKey, RuntimeDocument};
 use crate::geometry::Point;
 use crate::spatial::SpatialIndex;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
 
 /// Max gap between the two Taps of a DoubleTap.
-const DOUBLE_TAP_GAP: Duration = Duration::from_millis(300);
+const DOUBLE_TAP_GAP_MS: u64 = 300;
 /// Max pixel distance between the two Taps of a DoubleTap.
 const DOUBLE_TAP_SLOP_PX: f32 = 16.0;
 
@@ -54,7 +53,7 @@ pub struct PointerRouter {
     /// synthesizer. Tap state crosses pointer-sequences, which is why the
     /// in-arena DoubleTapRecognizer alone can't detect it: each Down opens
     /// a fresh arena.
-    last_tap: Option<(NodeKey, Instant, Point)>,
+    last_tap: Option<(NodeKey, u64, Point)>,
     /// Cross-arena recognizer pool. Plan 5 §B.2's `multi`. Owns each
     /// multi-pointer recognizer (Scale / Rotate) by id; values are
     /// boxed `dyn Recognizer` so future kinds drop in without churning
@@ -172,8 +171,8 @@ impl PointerRouter {
 
         // Synthesize DoubleTap at the router level: in-arena recognizers can't
         // track it because a Down always starts a fresh arena.
-        let now = event.timestamp;
-        self.synthesize_double_tap(&mut out, now);
+        let now_ms = event.t_ms;
+        self.synthesize_double_tap(&mut out, now_ms);
 
         if matches!(event.phase, PointerPhase::Up | PointerPhase::Cancel) {
             self.arenas.remove(&pid);
@@ -320,7 +319,7 @@ impl PointerRouter {
     /// Walk the emitted semantic events; for each `Tap`, check whether it
     /// matches the cached previous Tap (same node, within `DOUBLE_TAP_GAP`
     /// and `DOUBLE_TAP_SLOP_PX`). If so, append a `DoubleTap`.
-    fn synthesize_double_tap(&mut self, out: &mut Vec<SemanticEvent>, now: Instant) {
+    fn synthesize_double_tap(&mut self, out: &mut Vec<SemanticEvent>, now_ms: u64) {
         // Collect the indices where a DoubleTap should be inserted right
         // after a matching Tap, to avoid iterator-invalidation.
         let mut insertions: Vec<(usize, SemanticEvent)> = Vec::new();
@@ -329,11 +328,11 @@ impl PointerRouter {
                 continue;
             };
             if let Some((prev_node, prev_t, prev_pos)) = self.last_tap {
-                let dt = now.saturating_duration_since(prev_t);
+                let dt = now_ms.saturating_sub(prev_t);
                 let dx = position.x - prev_pos.x;
                 let dy = position.y - prev_pos.y;
                 if prev_node == *node
-                    && dt <= DOUBLE_TAP_GAP
+                    && dt <= DOUBLE_TAP_GAP_MS
                     && (dx * dx + dy * dy).sqrt() <= DOUBLE_TAP_SLOP_PX
                 {
                     insertions.push((
@@ -347,7 +346,7 @@ impl PointerRouter {
                     continue;
                 }
             }
-            self.last_tap = Some((*node, now, *position));
+            self.last_tap = Some((*node, now_ms, *position));
         }
         for (offset, (idx, ev)) in insertions.into_iter().enumerate() {
             out.insert(idx + offset, ev);
@@ -402,13 +401,20 @@ impl PointerRouter {
     /// Delegates to `Arena::tick`, which resolves the arena if a timer-driven
     /// claim fires — important for LongPress so a subsequent Up doesn't also
     /// let Tap claim on the same pointer sequence.
-    pub fn tick(&mut self, now: Instant) -> Vec<SemanticEvent> {
+    pub fn tick(&mut self, now_ms: u64) -> Vec<SemanticEvent> {
         let mut out = Vec::new();
         for arena in self.arenas.values_mut() {
-            arena.tick(now);
+            arena.tick(now_ms);
             out.extend(arena.drain_emitted());
         }
         out
+    }
+
+    pub fn next_wake_ms(&self) -> Option<u64> {
+        self.arenas
+            .values()
+            .filter_map(super::arena::Arena::next_wake_ms)
+            .min()
     }
 }
 

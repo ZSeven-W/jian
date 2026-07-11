@@ -145,6 +145,14 @@ impl Arena {
         self.members.iter_mut()
     }
 
+    pub fn next_wake_ms(&self) -> Option<u64> {
+        self.members
+            .iter()
+            .filter(|recognizer| !matches!(recognizer.state(), RecognizerState::Rejected))
+            .filter_map(|recognizer| recognizer.next_wake_ms())
+            .min()
+    }
+
     /// Reject every still-Possible member and mark the arena as
     /// resolved. Used when a cross-arena recognizer (Scale / Rotate)
     /// claims its multi-pointer gesture — the per-pointer arenas it
@@ -168,7 +176,7 @@ impl Arena {
     /// as a side effect (LongPress is the canonical case), resolve the
     /// arena — accept the winner, reject everyone else — so that the
     /// next pointer event doesn't let a competing recognizer also claim.
-    pub fn tick(&mut self, now: std::time::Instant) {
+    pub fn tick(&mut self, now_ms: u64) {
         if self.resolved.is_some() {
             // Still route ticks to the winner in case it wants to emit
             // follow-up events (e.g. pan velocity). No resolution needed.
@@ -179,7 +187,7 @@ impl Arena {
                         let mut handle = ArenaHandle {
                             pending_semantic: &mut pending,
                         };
-                        r.tick(now, &mut handle);
+                        r.tick(now_ms, &mut handle);
                         if let Some(ev) = pending {
                             self.emitted.push(ev);
                         }
@@ -199,7 +207,7 @@ impl Arena {
             let mut handle = ArenaHandle {
                 pending_semantic: &mut pending,
             };
-            r.tick(now, &mut handle);
+            r.tick(now_ms, &mut handle);
             if let Some(ev) = pending {
                 self.emitted.push(ev);
             }

@@ -5,14 +5,13 @@ use crate::geometry::{point, Point};
 use crate::gesture::pointer::{PointerEvent, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
 use crate::gesture::semantic::SemanticEvent;
-use std::time::Instant;
 
 pub struct PanRecognizer {
     id: RecognizerId,
     node: NodeKey,
     state: RecognizerState,
-    start: Option<(Point, Instant)>,
-    last: Option<(Point, Instant)>,
+    start: Option<(Point, u64)>,
+    last: Option<(Point, u64)>,
     threshold: f32,
     claimed: bool,
 }
@@ -57,7 +56,7 @@ impl Recognizer for PanRecognizer {
     ) -> RecognizerState {
         match event.phase {
             PointerPhase::Down => {
-                self.start = Some((event.position, event.timestamp));
+                self.start = Some((event.position, event.t_ms));
                 self.last = self.start;
                 self.state = RecognizerState::Possible;
                 self.claimed = false;
@@ -80,7 +79,7 @@ impl Recognizer for PanRecognizer {
                     }
                 } else if let Some((last_pos, last_t)) = self.last {
                     let delta = point(event.position.x - last_pos.x, event.position.y - last_pos.y);
-                    let dt = event.timestamp.duration_since(last_t).as_secs_f32();
+                    let dt = event.t_ms.saturating_sub(last_t) as f32 / 1000.0;
                     let velocity = if dt > 0.0 {
                         point(delta.x / dt, delta.y / dt)
                     } else {
@@ -92,13 +91,13 @@ impl Recognizer for PanRecognizer {
                         velocity,
                     });
                 }
-                self.last = Some((event.position, event.timestamp));
+                self.last = Some((event.position, event.t_ms));
             }
             PointerPhase::Up => {
                 if self.claimed {
                     let velocity = match (self.start, self.last) {
                         (Some((_, t0)), Some((p_last, t1))) => {
-                            let dt = t1.duration_since(t0).as_secs_f32().max(1e-3);
+                            let dt = (t1.saturating_sub(t0) as f32 / 1000.0).max(1e-3);
                             point(
                                 (p_last.x - event.position.x) / dt,
                                 (p_last.y - event.position.y) / dt,

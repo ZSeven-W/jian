@@ -58,6 +58,12 @@ pub struct TouchArena {
     node: NodeKey,
     start_position: Option<Point2D>,
     next_tick_at: Option<Instant>,
+    /// Millisecond origin for the arena clock. Anchored lazily to the
+    /// FIRST input's timestamp: a caller-captured Instant may predate
+    /// `TouchArena::new()`, and `saturating_duration_since` would then
+    /// clamp press times to 0 while later ticks convert short — silently
+    /// missing long-press deadlines by the construction latency.
+    epoch: Option<Instant>,
 }
 
 impl TouchArena {
@@ -69,7 +75,13 @@ impl TouchArena {
             node,
             start_position: None,
             next_tick_at: None,
+            epoch: None,
         }
+    }
+
+    fn ms_since_epoch(&mut self, timestamp: Instant) -> u64 {
+        let epoch = *self.epoch.get_or_insert(timestamp);
+        timestamp.saturating_duration_since(epoch).as_millis() as u64
     }
 
     pub fn handle(&mut self, input: TouchInput) -> Vec<GalleryGesture> {
@@ -85,7 +97,8 @@ impl TouchArena {
             out.push(GalleryGesture::Press(input.position));
         }
 
-        let event = pointer_event(input);
+        let t_ms = self.ms_since_epoch(input.timestamp);
+        let event = pointer_event(input, t_ms);
         if let Some(arena) = self.arena.as_mut() {
             arena.dispatch(&event, &self.doc);
             let gestures = map_semantic(arena.drain_emitted(), self.start_position);
@@ -116,7 +129,11 @@ impl TouchArena {
         let Some(arena) = self.arena.as_mut() else {
             return Vec::new();
         };
-        arena.tick(timestamp);
+        let now_ms = {
+            let epoch = *self.epoch.get_or_insert(timestamp);
+            timestamp.saturating_duration_since(epoch).as_millis() as u64
+        };
+        arena.tick(now_ms);
         let gestures = map_semantic(arena.drain_emitted(), self.start_position);
         if self
             .next_tick_at
@@ -141,7 +158,7 @@ impl Default for TouchArena {
     }
 }
 
-fn pointer_event(input: TouchInput) -> PointerEvent {
+fn pointer_event(input: TouchInput, t_ms: u64) -> PointerEvent {
     PointerEvent {
         id: PointerId(input.id as u32),
         kind: PointerKind::Touch,
@@ -156,7 +173,7 @@ fn pointer_event(input: TouchInput) -> PointerEvent {
         buttons: MouseButtons::LEFT,
         modifiers: Modifiers::empty(),
         tilt: None,
-        timestamp: input.timestamp,
+        t_ms,
     }
 }
 

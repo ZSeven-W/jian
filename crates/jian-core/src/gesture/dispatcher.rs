@@ -49,6 +49,21 @@ pub fn dispatch_event(
     }
 }
 
+pub(crate) fn resolve_handler(
+    doc: &RuntimeDocument,
+    event: &SemanticEvent,
+) -> Option<serde_json::Value> {
+    let mut node_key = Some(event.node());
+    for _ in 0..=doc.tree.nodes.len() {
+        let data = doc.tree.nodes.get(node_key?)?;
+        if let Some(list) = extract_handler(&data.schema, event.handler_key()) {
+            return Some(list);
+        }
+        node_key = data.parent;
+    }
+    None
+}
+
 /// Pull `events.<handler>` off a PenNode. Because the schema types are
 /// per-variant, we round-trip through JSON.
 fn extract_handler(n: &jian_ops_schema::node::PenNode, handler: &str) -> Option<serde_json::Value> {

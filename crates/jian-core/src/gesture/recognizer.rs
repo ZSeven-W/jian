@@ -55,5 +55,9 @@ pub trait Recognizer {
 
     /// Called once per frame by the host adapter; enables time-based
     /// recognizers (LongPress, double-tap timeout) to wake up.
-    fn tick(&mut self, _now: std::time::Instant, _arena: &mut ArenaHandle<'_>) {}
+    fn tick(&mut self, _now_ms: u64, _arena: &mut ArenaHandle<'_>) {}
+
+    fn next_wake_ms(&self) -> Option<u64> {
+        None
+    }
 }

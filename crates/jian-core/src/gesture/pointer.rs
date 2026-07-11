@@ -2,7 +2,6 @@
 
 use crate::geometry::Point;
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PointerId(pub u32);
@@ -56,7 +55,7 @@ pub struct PointerEvent {
     pub buttons: MouseButtons,
     pub modifiers: Modifiers,
     pub tilt: Option<(f32, f32)>,
-    pub timestamp: Instant,
+    pub t_ms: u64,
 }
 
 impl PointerEvent {
@@ -71,7 +70,14 @@ impl PointerEvent {
             buttons: MouseButtons::LEFT,
             modifiers: Modifiers::empty(),
             tilt: None,
-            timestamp: Instant::now(),
+            t_ms: 0,
+        }
+    }
+
+    pub fn simple_at(id: u32, phase: PointerPhase, position: Point, t_ms: u64) -> Self {
+        Self {
+            t_ms,
+            ..Self::simple(id, phase, position)
         }
     }
 }
@@ -109,7 +115,7 @@ pub struct WheelEvent {
     /// internal convention (above), not the browser's deltaY sign.
     pub mode: ScrollMode,
     pub modifiers: Modifiers,
-    pub timestamp: Instant,
+    pub t_ms: u64,
 }
 
 /// Mirror of W3C `WheelEvent.deltaMode`. Step 1b shell-web sets this
@@ -133,7 +139,7 @@ impl WheelEvent {
             delta_z: 0.0,
             mode: ScrollMode::Pixel,
             modifiers: Modifiers::empty(),
-            timestamp: Instant::now(),
+            t_ms: 0,
         }
     }
 }

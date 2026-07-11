@@ -24,7 +24,6 @@ use jian_core::gesture::{
     Modifiers as JianModifiers, MouseButtons as JianMouseButtons, PointerEvent, PointerId,
     PointerKind, PointerPhase,
 };
-use std::time::Instant;
 use winit::event::{ElementState, MouseButton, Touch, TouchPhase, WindowEvent};
 use winit::keyboard::ModifiersState;
 
@@ -159,7 +158,7 @@ impl PointerTranslator {
                     buttons: JianMouseButtons::empty(),
                     modifiers: self.modifiers,
                     tilt: None,
-                    timestamp: Instant::now(),
+                    t_ms: 0,
                 })
             }
             _ => None,
@@ -176,7 +175,7 @@ impl PointerTranslator {
             buttons: self.buttons,
             modifiers: self.modifiers,
             tilt: None,
-            timestamp: Instant::now(),
+            t_ms: 0,
         }
     }
 }

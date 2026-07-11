@@ -153,14 +153,14 @@ fn long_press_claim_via_tick_suppresses_subsequent_tap() {
     let cx = rect.min_x() + rect.size.width / 2.0;
     let cy = rect.min_y() + rect.size.height / 2.0;
 
-    let _ = rt.dispatch_pointer(PointerEvent::simple(
+    let _ = rt.dispatch_pointer(PointerEvent::simple_at(
         5,
         PointerPhase::Down,
         jian_core::geometry::point(cx, cy),
+        0,
     ));
     // Advance time past LongPress duration (500ms default).
-    let future = std::time::Instant::now() + std::time::Duration::from_millis(800);
-    let tick_emitted = rt.tick(future);
+    let tick_emitted = rt.tick(800);
     assert!(tick_emitted
         .iter()
         .any(|e| matches!(e, jian_core::gesture::SemanticEvent::LongPress { .. })));
@@ -175,6 +175,22 @@ fn long_press_claim_via_tick_suppresses_subsequent_tap() {
         .iter()
         .any(|e| matches!(e, jian_core::gesture::SemanticEvent::Tap { .. })));
     assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(0));
+}
+
+#[test]
+fn long_press_uses_injected_monotonic_milliseconds() {
+    let mut rt = make_runtime();
+    let btn = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+    let rect = rt.layout.node_rect(btn).unwrap();
+    let at = jian_core::geometry::point(rect.min_x() + 1.0, rect.min_y() + 1.0);
+
+    rt.dispatch_pointer(PointerEvent::simple_at(7, PointerPhase::Down, at, 10_000));
+    assert!(rt.tick(10_499).is_empty());
+    assert!(rt
+        .tick(10_600)
+        .iter()
+        .any(|event| matches!(event, jian_core::gesture::SemanticEvent::LongPress { .. })));
+    assert_eq!(rt.last_now_ms(), 10_600);
 }
 
 #[test]
