@@ -43,6 +43,10 @@ pub struct PenDocument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format_version: Option<String>,
 
+    /// Responsive opt-in. Absent or false preserves legacy behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responsive: Option<bool>,
+
     /// App id (reverse-DNS). Required when `app` is set; otherwise optional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -78,6 +82,8 @@ impl Clone for PenDocument {
             pages: self.pages.clone(),
             children: self.children.clone(),
             format_version: self.format_version.clone(),
+            // Manual Clone: a new field is silently dropped unless listed here.
+            responsive: self.responsive,
             id: self.id.clone(),
             app: self.app.clone(),
             routes: self.routes.clone(),
@@ -89,6 +95,12 @@ impl Clone for PenDocument {
         };
         crate::image_thumbs::propagate_to_clone(self, &mut cloned);
         cloned
+    }
+}
+
+impl PenDocument {
+    pub fn is_responsive(&self) -> bool {
+        self.responsive.unwrap_or(false)
     }
 }
 
@@ -138,5 +150,21 @@ mod tests {
         assert!(d.state.is_some());
         assert!(d.lifecycle.is_some());
         assert_eq!(d.format_version.as_deref(), Some("1.0"));
+    }
+
+    #[test]
+    fn responsive_flag_defaults_false_and_roundtrips() {
+        let d: PenDocument =
+            serde_json::from_str(r#"{"version":"1.1","formatVersion":"1.1","children":[]}"#)
+                .unwrap();
+        assert!(!d.is_responsive());
+        let back = serde_json::to_value(&d).unwrap();
+        assert!(back.get("responsive").is_none());
+
+        let d2: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","formatVersion":"1.2","responsive":true,"children":[]}"#,
+        )
+        .unwrap();
+        assert!(d2.is_responsive());
     }
 }

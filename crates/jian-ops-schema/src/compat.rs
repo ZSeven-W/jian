@@ -65,6 +65,18 @@ pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDo
         }
     }
 
+    if raw.get("responsive").and_then(serde_json::Value::as_bool) == Some(true) {
+        let (major, minor) = version::parse(format_version.or(legacy_version));
+        if major < 1 || (major == 1 && minor < 2) {
+            warnings.push(LoadWarning::ResponsiveBelowMinor {
+                declared: format_version
+                    .or(legacy_version)
+                    .unwrap_or_default()
+                    .to_owned(),
+            });
+        }
+    }
+
     if raw.get("logicModules").is_some() {
         warnings.push(LoadWarning::LogicModulesSkipped {
             reason: "Tier 3 WASM is not implemented in this build",
@@ -106,6 +118,7 @@ pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDo
 
 const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
     "formatVersion",
+    "responsive",
     "version",
     "id",
     "name",
@@ -385,5 +398,16 @@ mod tests {
             load_str(s),
             Err(OpsSchemaError::UnsupportedFormatVersion { .. })
         ));
+    }
+
+    #[test]
+    fn responsive_below_1_2_warns_but_activates() {
+        let src = r#"{"version":"1.1","formatVersion":"1.1","responsive":true,"children":[]}"#;
+        let result = load_str(src).unwrap();
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, LoadWarning::ResponsiveBelowMinor { .. })));
+        assert!(result.value.is_responsive());
     }
 }

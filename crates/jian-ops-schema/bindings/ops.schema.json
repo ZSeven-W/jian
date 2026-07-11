@@ -62,6 +62,13 @@
         "null"
       ]
     },
+    "responsive": {
+      "description": "Responsive opt-in. Absent or false preserves legacy behavior.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
     "id": {
       "description": "App id (reverse-DNS). Required when `app` is set; otherwise optional.",
       "type": [

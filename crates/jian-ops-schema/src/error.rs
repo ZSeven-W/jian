@@ -28,6 +28,9 @@ pub enum LoadWarning {
         found: String,
         supported_max: &'static str,
     },
+    ResponsiveBelowMinor {
+        declared: String,
+    },
     LogicModulesSkipped {
         reason: &'static str,
     },
