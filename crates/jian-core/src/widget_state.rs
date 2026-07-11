@@ -246,6 +246,88 @@ impl WidgetStateStore {
             }
         }
     }
+
+    pub fn revalidate(&mut self, document: &crate::document::RuntimeDocument, state: &StateGraph) {
+        let keys: Vec<(String, String)> = self.map.keys().cloned().collect();
+        for key in keys {
+            let Some(node_key) = document.tree.get(&key.1) else {
+                continue;
+            };
+            let schema = &document.tree.nodes[node_key].schema;
+            let mut fresh_store = WidgetStateStore::default();
+            fresh_store.set_page_key(key.0.clone());
+            let fresh = fresh_store.get_or_init(schema, state).cloned();
+            let Some(current) = self.map.get_mut(&key) else {
+                continue;
+            };
+            let json = serde_json::to_value(schema).unwrap_or_default();
+            match current {
+                WidgetState::Select { value, .. } | WidgetState::Radio { value, .. } => {
+                    let valid = json
+                        .get("options")
+                        .and_then(|options| options.as_array())
+                        .is_some_and(|options| {
+                            value.as_ref().map_or(true, |selected| {
+                                options.iter().any(|option| {
+                                    option.get("value").and_then(|value| value.as_str())
+                                        == Some(selected)
+                                })
+                            })
+                        });
+                    if !valid {
+                        if let Some(fresh) = fresh.clone() {
+                            *current = fresh;
+                        }
+                    }
+                }
+                WidgetState::Tabs { active, .. } => {
+                    let valid = json
+                        .get("tabs")
+                        .and_then(|tabs| tabs.as_array())
+                        .is_some_and(|tabs| {
+                            active.as_ref().map_or(true, |selected| {
+                                tabs.iter().any(|tab| {
+                                    tab.get("value").and_then(|value| value.as_str())
+                                        == Some(selected)
+                                })
+                            })
+                        });
+                    if !valid {
+                        if let Some(fresh) = fresh.clone() {
+                            *current = fresh;
+                        }
+                    }
+                }
+                WidgetState::Slider { value, .. } => {
+                    let min = json
+                        .get("min")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(0.0);
+                    let max = json
+                        .get("max")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(100.0);
+                    *value = value.clamp(min, max);
+                }
+                WidgetState::TextInput(text) if matches!(schema, PenNode::NumberInput(_)) => {
+                    let min = json
+                        .get("min")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(f64::NEG_INFINITY);
+                    let max = json
+                        .get("max")
+                        .and_then(|value| value.as_f64())
+                        .unwrap_or(f64::INFINITY);
+                    if let Ok(value) = text.text().parse::<f64>() {
+                        text.set_text(value.clamp(min, max).to_string());
+                    } else if let Some(fresh) = fresh.clone() {
+                        *current = fresh;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// The node's `bind:value` target as an app-scope key (`$state.<key>`
