@@ -296,7 +296,9 @@ impl RunApp {
         if let Some(window) = self.window.as_ref() {
             window.pre_present_notify();
         }
-        let _ = buf.present();
+        if buf.present().is_ok() {
+            self.host.runtime.frame_presented();
+        }
     }
 
     /// Plan 19 capstone B4 — first-paint trigger that runs the
@@ -725,7 +727,7 @@ impl ApplicationHandler for RunApp {
                     // Native winit emits Pixel deltas; web hosts override per W3C deltaMode.
                     mode: jian_core::gesture::ScrollMode::Pixel,
                     modifiers: self.translator.modifiers,
-                    timestamp: Instant::now(),
+                    t_ms: self.host.launch_epoch.elapsed().as_millis() as u64,
                 });
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
@@ -740,6 +742,7 @@ impl ApplicationHandler for RunApp {
         }
 
         if let Some(mut pe) = self.translator.translate(&event) {
+            pe.t_ms = self.host.launch_epoch.elapsed().as_millis() as u64;
             // winit delivers cursor positions in physical pixels; the
             // runtime hit-tests against logical-coord layout rects, so
             // divide the incoming position by the scale factor.
@@ -775,8 +778,11 @@ impl ApplicationHandler for RunApp {
         // Drive LongPress + other timer-based recognisers each iteration
         // of the event loop; only request a redraw if the tick fired a
         // semantic event.
-        let emitted = self.host.runtime.tick(Instant::now());
-        let mut needs_redraw = !emitted.is_empty();
+        let directive = self
+            .host
+            .runtime
+            .pump(self.host.launch_epoch.elapsed().as_millis() as u64);
+        let mut needs_redraw = directive.needs_paint;
 
         // Plan 8 §T8 deep-link drain. The platform receivers
         // (Apple-Event handler / Windows receiver-window

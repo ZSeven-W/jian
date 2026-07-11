@@ -777,8 +777,8 @@ mod tests {
             }}"##
         );
         let schema = load_str(&json).expect("parse").value;
-        let rt = jian_core::Runtime::new_from_document(schema).expect("runtime");
-        rt.document.expect("document populated")
+        let mut rt = jian_core::Runtime::new_from_document(schema).expect("runtime");
+        rt.document.take().expect("document populated")
     }
 
     fn doc_without_app_block() -> jian_core::document::RuntimeDocument {
@@ -790,8 +790,8 @@ mod tests {
           "children": []
         }"##;
         let schema = load_str(json).expect("parse").value;
-        let rt = jian_core::Runtime::new_from_document(schema).expect("runtime");
-        rt.document.expect("document populated")
+        let mut rt = jian_core::Runtime::new_from_document(schema).expect("runtime");
+        rt.document.take().expect("document populated")
     }
 
     #[test]

@@ -104,7 +104,7 @@ pub fn run_wait_for(runtime: &mut Runtime, expr: &str, timeout_ms: Option<u64>) 
         // and stash the handles so they keep their subscriptions
         // alive for the duration of the wait.
         alive_bindings.extend(runtime.drain_deferred_bindings());
-        runtime.tick(Instant::now());
+        runtime.pump(started.elapsed().as_millis() as u64);
         std::thread::sleep(Duration::from_millis(WAIT_FOR_POLL_MS));
     }
 }

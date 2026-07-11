@@ -13,10 +13,12 @@
 
 use crate::action::services::{
     AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, NullClipboard, NullFeedback,
-    NullNetworkClient, NullRouter, NullStorageBackend, Router as RouterSvc, StorageBackend,
+    NullNetworkClient, NullPlatform, NullRouter, NullStorageBackend, PlatformService,
+    Router as RouterSvc, StorageBackend,
 };
 use crate::action::{
-    default_registry, ActionContext, CancellationToken, ExecOutcome, SharedRegistry,
+    default_registry, ActionContext, CancellationToken, ExecOutcome, SharedRegistry, TaskClock,
+    TaskQueue,
 };
 use crate::binding::{BindingEffect, DeferredBindingQueue};
 use crate::capability::{
@@ -29,7 +31,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::expression::ExpressionCache;
 use crate::geometry::size;
 use crate::gesture::{
-    collect_focus_chain, dispatch_event, FocusManager, PointerEvent, PointerRouter, SemanticEvent,
+    collect_focus_chain, FocusManager, PointerEvent, PointerRouter, SemanticEvent,
 };
 use crate::layout::LayoutEngine;
 use crate::signal::scheduler::Scheduler;
@@ -40,11 +42,13 @@ use jian_ops_schema::{document::PenDocument, load_str};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::time::Instant;
+use std::sync::Arc;
 
 mod ime_handshake;
+mod pump;
 mod variant_swap;
 pub use ime_handshake::{ImeConfirmOutcome, ImeControlOp, ImeHost, ImeSnapshot};
+pub use pump::FrameDirective;
 pub use variant_swap::{ParkedBuild, SwapState};
 
 /// Default audit-log size. 1000 entries is generous for in-session
@@ -165,6 +169,7 @@ pub struct Runtime {
     pub document: Option<RuntimeDocument>,
     pub layout: LayoutEngine,
     pub spatial: SpatialIndex,
+    pub image_store: crate::render::image_store::ImageStore,
     pub viewport: Viewport,
     load_warnings: Vec<String>,
     variant_table: jian_ops_schema::screen_projection::ScreenVariantTable,
@@ -175,9 +180,14 @@ pub struct Runtime {
     swap_state: SwapState,
     variant_source: Option<PenDocument>,
     mutation_counter: Rc<Cell<u64>>,
+    layout_mutation_seen: u64,
     last_variant_build_count: usize,
     action_surface_inputs: Vec<crate::action_surface::ActionDefinition>,
     action_surface_generation: u64,
+    dirty: bool,
+    task_queue: TaskQueue,
+    task_clock: Arc<TaskClock>,
+    document_generation: u64,
 
     // --- Gesture + Action wiring (Plan 5 T15) ---
     pub gestures: PointerRouter,
@@ -209,6 +219,7 @@ pub struct Runtime {
     pub feedback: Rc<dyn FeedbackSink>,
     pub async_feedback: Rc<dyn AsyncFeedback>,
     pub clipboard: Rc<dyn ClipboardService>,
+    pub platform: Rc<dyn PlatformService>,
     pub capabilities: Rc<dyn CapabilityGate>,
     /// Audit log attached to the capability gate. `None` for the default
     /// `Runtime::new()` (DummyCapabilityGate has nothing to audit); set
@@ -221,6 +232,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new() -> Self {
         let scheduler = Rc::new(Scheduler::new());
         let mutation_counter = Rc::new(Cell::new(0));
@@ -228,7 +240,7 @@ impl Runtime {
             crate::widget_state::WidgetStateStore::with_counter(mutation_counter.clone());
         let effects = EffectRegistry::new();
         effects.install_on(&scheduler);
-        Self {
+        let runtime = Self {
             state: Rc::new(StateGraph::new_with_counter(
                 scheduler.clone(),
                 mutation_counter.clone(),
@@ -238,6 +250,7 @@ impl Runtime {
             document: None,
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
+            image_store: Default::default(),
             viewport: Viewport::new(size(800.0, 600.0)),
             load_warnings: Vec::new(),
             variant_table: Default::default(),
@@ -248,9 +261,14 @@ impl Runtime {
             swap_state: Default::default(),
             variant_source: None,
             mutation_counter,
+            layout_mutation_seen: 0,
             last_variant_build_count: 0,
             action_surface_inputs: Vec::new(),
             action_surface_generation: 0,
+            dirty: true,
+            task_queue: TaskQueue::default(),
+            task_clock: Arc::new(TaskClock::default()),
+            document_generation: 0,
 
             gestures: PointerRouter::new(),
             focus: FocusManager::new(),
@@ -266,11 +284,14 @@ impl Runtime {
             feedback: Rc::new(NullFeedback),
             async_feedback: Rc::new(NullFeedback),
             clipboard: Rc::new(NullClipboard),
+            platform: Rc::new(NullPlatform),
             capabilities: Rc::new(DummyCapabilityGate),
             audit: None,
             permissions: Rc::new(NullPermissionBroker),
             logic: Rc::new(crate::logic::NullLogicProvider),
-        }
+        };
+        runtime.state.set_viewport(800.0, 600.0, 1.0);
+        runtime
     }
 
     /// Install a Tier-3 `LogicProvider`. Replaces the default
@@ -288,6 +309,7 @@ impl Runtime {
     /// An undeclared `app.capabilities` field means "no capabilities" —
     /// every IO action will be denied. Ship the `.op` with an explicit
     /// declaration to unlock network/storage/etc.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new_from_document(schema: PenDocument) -> CoreResult<Self> {
         let scheduler = Rc::new(Scheduler::new());
         let effects = EffectRegistry::new();
@@ -324,6 +346,7 @@ impl Runtime {
             scheduler.clone(),
             mutation_counter.clone(),
         ));
+        state.set_responsive(responsive);
         let doc = loader::build(schema, &state)?;
         let action_surface_inputs =
             crate::action_surface::derive_actions(&doc.schema, &crate::action_surface::BUILD_SALT);
@@ -338,6 +361,7 @@ impl Runtime {
             document: Some(doc),
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
+            image_store: Default::default(),
             viewport: Viewport::new(size(800.0, 600.0)),
             load_warnings: prepared.warnings,
             variant_table: prepared.variants,
@@ -347,10 +371,15 @@ impl Runtime {
             ime_registry: Default::default(),
             swap_state: Default::default(),
             variant_source: prepared.source,
+            layout_mutation_seen: mutation_counter.get(),
             mutation_counter,
             last_variant_build_count: 0,
             action_surface_inputs,
             action_surface_generation: 1,
+            dirty: true,
+            task_queue: TaskQueue::default(),
+            task_clock: Arc::new(TaskClock::default()),
+            document_generation: 1,
 
             gestures: PointerRouter::new(),
             focus,
@@ -366,12 +395,14 @@ impl Runtime {
             feedback: Rc::new(NullFeedback),
             async_feedback: Rc::new(NullFeedback),
             clipboard: Rc::new(NullClipboard),
+            platform: Rc::new(NullPlatform),
             capabilities: gate,
             audit: Some(audit),
             permissions: Rc::new(NullPermissionBroker),
             logic: Rc::new(crate::logic::NullLogicProvider),
         };
         runtime.widget_states.set_page_key(active_page_key);
+        runtime.state.set_viewport(800.0, 600.0, 1.0);
         Ok(runtime)
     }
 
@@ -492,14 +523,51 @@ impl Runtime {
     /// already hold a value keep that value; only newly-introduced
     /// keys get their schema default.
     pub fn replace_document(&mut self, schema: PenDocument) -> CoreResult<()> {
+        let closing_sessions: Vec<_> = self
+            .ws_sessions
+            .borrow_mut()
+            .drain()
+            .map(|(_, handle)| handle.session)
+            .collect();
+        self.cancel_all_tasks();
+        for session in closing_sessions {
+            self.task_queue.spawn_future(
+                async move {
+                    let result = session
+                        .close()
+                        .await
+                        .map_err(crate::action::ActionError::Custom);
+                    ExecOutcome {
+                        result,
+                        warnings: Vec::new(),
+                    }
+                },
+                self.document_generation,
+                Some("websocket:reload-close".into()),
+            );
+        }
         let preferred_path = self.active_screen_path.clone();
-        self.replace_document_for_path(schema, preferred_path.as_deref())
+        self.replace_document_for_path_mode(schema, preferred_path.as_deref(), true)
+    }
+
+    pub fn cancel_all_tasks(&mut self) {
+        self.task_queue.cancel_all();
+        self.document_generation = self.document_generation.wrapping_add(1);
     }
 
     pub(crate) fn replace_document_for_path(
         &mut self,
+        schema: PenDocument,
+        preferred_path: Option<&str>,
+    ) -> CoreResult<()> {
+        self.replace_document_for_path_mode(schema, preferred_path, false)
+    }
+
+    fn replace_document_for_path_mode(
+        &mut self,
         mut schema: PenDocument,
         preferred_path: Option<&str>,
+        conform_reload: bool,
     ) -> CoreResult<()> {
         let prepared = prepare_document(
             schema,
@@ -507,6 +575,18 @@ impl Runtime {
             preferred_path,
         );
         schema = prepared.mounted;
+        self.state.set_responsive(schema.is_responsive());
+        let declared_state = schema.state.clone().unwrap_or_default();
+        let staged_defaults: BTreeMap<String, serde_json::Value> = declared_state
+            .iter()
+            .map(|(key, entry)| {
+                (
+                    key.clone(),
+                    entry.default.clone().unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect();
+        let live_state = self.state.app_snapshot();
         // Rebuild the capability gate from the new schema. Reuse the
         // existing AuditLog so the rolling history isn't truncated on
         // every save. If the original Runtime was constructed via
@@ -527,9 +607,18 @@ impl Runtime {
             .audit
             .clone()
             .unwrap_or_else(|| Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY)));
+        let storage_allowed = declared.contains(&crate::action::Capability::Storage);
         let capabilities = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit.clone())));
 
         let doc = loader::build_with(schema, &self.state, loader::SeedMode::PreserveExisting)?;
+        let (merged_state, conformance_warnings) =
+            crate::state::conformance::merge_scope(&live_state, &staged_defaults, &declared_state);
+        if conform_reload {
+            self.state.replace_app(&merged_state);
+            if !storage_allowed {
+                self.state.storage_cache.purge();
+            }
+        }
         let action_surface_inputs =
             crate::action_surface::derive_actions(&doc.schema, &crate::action_surface::BUILD_SALT);
         let focus_chain = collect_focus_chain(&doc);
@@ -538,6 +627,9 @@ impl Runtime {
         self.action_surface_inputs = action_surface_inputs;
         self.action_surface_generation = self.action_surface_generation.wrapping_add(1);
         self.load_warnings = prepared.warnings;
+        if conform_reload {
+            self.load_warnings.extend(conformance_warnings);
+        }
         self.variant_source = prepared.source;
         self.variant_table = prepared.variants;
         self.active_screen_path = prepared.path;
@@ -555,6 +647,7 @@ impl Runtime {
         if let Some(doc) = self.document.as_ref() {
             self.widget_states
                 .retain_ids(&|id| doc.tree.get(id).is_some());
+            self.widget_states.revalidate(doc, &self.state);
         }
         // Hot-reload swaps the SlotMap underneath. SlotMap keys are
         // *not* unique across different SlotMaps — both the old and
@@ -598,37 +691,104 @@ impl Runtime {
             .schema
             .is_responsive();
         if responsive {
-            self.set_viewport_size(available);
+            self.viewport.size = size(available.0, available.1);
+            self.state.set_viewport(available.0, available.1, 1.0);
         }
-        let doc = self.document.as_ref().expect("no document loaded");
-        let roots = self.layout.build_responsive(&doc.tree, responsive)?;
+        let live_doc = self.document.as_ref().expect("no document loaded");
+        let mut materialized;
+        let doc = if responsive {
+            materialized = live_doc.clone();
+            for (_, node) in materialized.tree.nodes.iter_mut() {
+                crate::binding::materialize_layout_bindings(
+                    &mut node.schema,
+                    &self.state,
+                    Some(&self.active_page_key),
+                );
+            }
+            &materialized
+        } else {
+            live_doc
+        };
+        let mut staged = self.layout.build_staged(doc)?;
         if !responsive {
-            for root in roots {
-                self.layout.compute(root, available)?;
+            for root in staged.roots.iter().copied() {
+                staged.engine.compute(root, available)?;
             }
-            return Ok(());
-        }
-
-        for warning in self.layout.constraint_lints().to_vec() {
-            if !self.load_warnings.contains(&warning) {
-                self.load_warnings.push(warning);
-            }
-        }
-        let viewport_root = select_viewport_root(&doc.tree, &mut self.load_warnings);
-        if let Some(root_key) = viewport_root {
-            if root_has_limits(&doc.tree.nodes[root_key].schema) {
-                let warning = "responsive viewport root min/max bounds are ignored".to_owned();
+        } else {
+            for warning in staged.engine.constraint_lints().to_vec() {
                 if !self.load_warnings.contains(&warning) {
                     self.load_warnings.push(warning);
                 }
             }
-            self.layout
-                .override_root_for_viewport(root_key, available)?;
+            let viewport_root = select_viewport_root(&doc.tree, &mut self.load_warnings);
+            if let Some(root_key) = viewport_root {
+                if root_has_limits(&doc.tree.nodes[root_key].schema) {
+                    let warning = "responsive viewport root min/max bounds are ignored".to_owned();
+                    if !self.load_warnings.contains(&warning) {
+                        self.load_warnings.push(warning);
+                    }
+                }
+                staged
+                    .engine
+                    .override_root_for_viewport(root_key, available)?;
+            }
+            for root in staged.roots.iter().copied() {
+                staged.engine.compute_responsive(root, available)?;
+            }
         }
-        for root in roots {
-            self.layout.compute_responsive(root, available)?;
+
+        let items: Vec<NodeBBox> = doc
+            .tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| {
+                serde_json::to_value(&node.schema)
+                    .ok()
+                    .and_then(|json| json.get("visible").and_then(|value| value.as_bool()))
+                    .unwrap_or(true)
+            })
+            .filter_map(|(key, _)| {
+                staged
+                    .engine
+                    .node_rect(key)
+                    .map(|rect| NodeBBox { key, rect })
+            })
+            .collect();
+        let focused_became_hidden = self.focus.current().is_some_and(|focused| {
+            doc.tree.nodes.get(focused).is_some_and(|node| {
+                serde_json::to_value(&node.schema)
+                    .ok()
+                    .and_then(|json| json.get("visible").and_then(|value| value.as_bool()))
+                    == Some(false)
+            })
+        });
+        let mut spatial = SpatialIndex::new();
+        spatial.rebuild(items);
+        self.layout.install(staged);
+        self.spatial = spatial;
+        if focused_became_hidden {
+            self.focus.clear();
         }
+        self.layout_mutation_seen = self.mutation_counter.get();
+        self.mark_dirty();
         Ok(())
+    }
+
+    /// Rebuild geometry at the current host-truth viewport. Both layout and
+    /// spatial indexes are committed together by [`Self::build_layout`].
+    pub fn relayout(&mut self) -> CoreResult<()> {
+        self.build_layout((self.viewport.size.width, self.viewport.size.height))
+    }
+
+    pub fn prepare_frame(
+        &mut self,
+        backend: &mut impl crate::render::RenderBackend,
+        backend_generation: u64,
+    ) {
+        for warning in self.image_store.prepare_frame(backend, backend_generation) {
+            self.load_warnings.push(warning);
+        }
+        self.mark_dirty();
     }
 
     pub fn load_warnings(&self) -> &[String] {
@@ -639,8 +799,21 @@ impl Runtime {
     pub fn set_viewport_size(&mut self, viewport: (f32, f32)) {
         if (self.viewport.size.width, self.viewport.size.height) != viewport {
             self.viewport.size = size(viewport.0, viewport.1);
+            self.state.set_viewport(viewport.0, viewport.1, 1.0);
+            self.scheduler.flush();
             self.mutation_counter
                 .set(self.mutation_counter.get().wrapping_add(1));
+            self.mark_dirty();
+            if self
+                .document
+                .as_ref()
+                .is_some_and(|document| document.schema.is_responsive())
+            {
+                if let Err(error) = self.relayout() {
+                    self.load_warnings
+                        .push(format!("viewport relayout failed: {error}"));
+                }
+            }
         }
     }
 
@@ -738,6 +911,7 @@ impl Runtime {
     /// semantic events are routed to the matching `events.*` handlers.
     /// Returns the semantic events for host inspection/tests.
     pub fn dispatch_pointer(&mut self, event: PointerEvent) -> Vec<SemanticEvent> {
+        self.note_time(event.t_ms);
         if self.input_frozen() {
             return Vec::new();
         }
@@ -989,6 +1163,7 @@ impl Runtime {
         &mut self,
         event: crate::gesture::pointer::WheelEvent,
     ) -> Vec<SemanticEvent> {
+        self.note_time(event.t_ms);
         if self.input_frozen() {
             return Vec::new();
         }
@@ -1240,16 +1415,15 @@ impl Runtime {
     /// Update the host clock (ms). Drives widget caret-blink phase; the
     /// gesture pipeline keeps a separate `Instant` via [`Runtime::tick`].
     pub fn set_now_ms(&mut self, now_ms: u64) {
+        self.note_time(now_ms);
+    }
+
+    pub fn note_time(&mut self, now_ms: u64) {
         self.now_ms = self.now_ms.max(now_ms);
-        let timed_out = match &self.swap_state {
-            SwapState::AwaitingIme { request_id, parked } => {
-                (self.now_ms.saturating_sub(parked.started_at_ms) >= 500).then_some(*request_id)
-            }
-            SwapState::Idle => None,
-        };
-        if let Some(request_id) = timed_out {
-            let _ = self.confirm_ime_cancel(request_id);
-        }
+    }
+
+    pub fn last_now_ms(&self) -> u64 {
+        self.now_ms
     }
 
     /// `&mut TextInputState` for the currently-focused editable widget
@@ -1495,19 +1669,31 @@ impl Runtime {
         if self.input_frozen() {
             return 0;
         }
-        let snapshot: Vec<(
+        type WsSnapshot = (
             String,
             Rc<dyn crate::action::services::WebSocketSession>,
             Option<serde_json::Value>,
-        )> = {
+            u64,
+        );
+        let snapshot: Vec<WsSnapshot> = {
             self.ws_sessions
                 .borrow()
                 .iter()
-                .map(|(id, h)| (id.clone(), h.session.clone(), h.on_message.clone()))
+                .map(|(id, h)| {
+                    (
+                        id.clone(),
+                        h.session.clone(),
+                        h.on_message.clone(),
+                        h.generation,
+                    )
+                })
                 .collect()
         };
         let mut fired = 0usize;
-        for (id, session, on_message) in snapshot {
+        for (id, session, on_message, generation) in snapshot {
+            if generation != self.document_generation {
+                continue;
+            }
             // Re-check the registry before running each session's
             // handler. A previous handler in this same pump pass may
             // have called `ws_close` (drops the entry) or
@@ -1524,7 +1710,10 @@ impl Runtime {
             if !still_live {
                 continue;
             }
-            let messages: Vec<String> = futures::executor::block_on(session.receive());
+            use futures::FutureExt;
+            let Some(messages) = session.receive().now_or_never() else {
+                continue;
+            };
             if messages.is_empty() {
                 continue;
             }
@@ -1532,12 +1721,6 @@ impl Runtime {
                 continue;
             };
             for msg in messages {
-                let registry = self.actions.clone();
-                let parsed = registry.borrow().parse_list(&handler_json);
-                let chain = match parsed {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
                 // The handler we're about to run could itself touch
                 // ws_sessions (close + reconnect). Re-verify per
                 // message so a mid-burst close stops further
@@ -1555,7 +1738,20 @@ impl Runtime {
                     "id": id,
                     "data": msg,
                 }));
-                let _ = futures::executor::block_on(chain.run_serial(&ctx));
+                if self
+                    .task_queue
+                    .spawn(
+                        &self.actions,
+                        &handler_json,
+                        ctx,
+                        self.document_generation,
+                        Some(format!("websocket:{id}")),
+                    )
+                    .is_err()
+                {
+                    continue;
+                }
+                let _ = self.task_queue.poll_all(self.now_ms);
                 self.scheduler.flush();
                 fired += 1;
             }
@@ -1572,8 +1768,9 @@ impl Runtime {
     }
 
     /// Drive timer-based recognizers (LongPress). Host must call each frame.
-    pub fn tick(&mut self, now: Instant) -> Vec<SemanticEvent> {
-        let emitted = self.gestures.tick(now);
+    pub fn tick(&mut self, now_ms: u64) -> Vec<SemanticEvent> {
+        self.note_time(now_ms);
+        let emitted = self.gestures.tick(self.now_ms);
         if self.input_frozen() {
             return Vec::new();
         }
@@ -1583,19 +1780,51 @@ impl Runtime {
         emitted
     }
 
-    fn dispatch_semantic(&self, event: &SemanticEvent) -> ExecOutcome {
-        let doc = self.document.as_ref().expect("no document loaded");
-        let source_node_id = doc
-            .tree
-            .nodes
-            .get(event.node())
-            .map(|node| crate::document::tree::node_schema_id(&node.schema).to_owned());
+    fn dispatch_semantic(&mut self, event: &SemanticEvent) -> ExecOutcome {
+        let (source_node_id, list) = {
+            let doc = self.document.as_ref().expect("no document loaded");
+            let source = doc
+                .tree
+                .nodes
+                .get(event.node())
+                .map(|node| crate::document::tree::node_schema_id(&node.schema).to_owned());
+            (
+                source,
+                crate::gesture::dispatcher::resolve_handler(doc, event),
+            )
+        };
         let mut ctx = match event_payload(event) {
             Some(payload) => self.make_action_ctx_with_event(payload),
             None => self.make_action_ctx(),
         };
         ctx.node_id = source_node_id;
-        let outcome = dispatch_event(doc, event, &self.actions, &ctx);
+        let outcome = if let Some(list) = list {
+            match self.task_queue.spawn(
+                &self.actions,
+                &list,
+                ctx,
+                self.document_generation,
+                Some(event.handler_key().to_owned()),
+            ) {
+                Ok(_) => self
+                    .task_queue
+                    .poll_all(self.now_ms)
+                    .pop()
+                    .unwrap_or(ExecOutcome {
+                        result: Ok(()),
+                        warnings: Vec::new(),
+                    }),
+                Err(error) => ExecOutcome {
+                    result: Err(error),
+                    warnings: Vec::new(),
+                },
+            }
+        } else {
+            ExecOutcome {
+                result: Ok(()),
+                warnings: Vec::new(),
+            }
+        };
         // Actions mutate state via Signals whose effects are scheduled;
         // flush synchronously so bindings / scene observers see the new
         // values before the host's next frame.
@@ -1657,6 +1886,8 @@ impl Runtime {
         ActionContext {
             state: self.state.clone(),
             scheduler: self.scheduler.clone(),
+            clock: Some(self.task_clock.clone()),
+            document_generation: self.document_generation,
             event: None,
             locals: RefCell::new(BTreeMap::new()),
             page_id: Some(self.active_page_key.clone()),
@@ -1668,6 +1899,7 @@ impl Runtime {
             feedback: self.feedback.clone(),
             async_fb: self.async_feedback.clone(),
             clipboard: self.clipboard.clone(),
+            platform: self.platform.clone(),
             capabilities: self.capabilities.clone(),
             logic: self.logic.clone(),
             expr_cache: self.expr_cache.clone(),
@@ -1719,6 +1951,16 @@ fn root_has_limits(node: &jian_ops_schema::node::PenNode) -> bool {
 impl Default for Runtime {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        self.task_queue.cancel_all();
+        for handle in self.ws_sessions.borrow().values() {
+            handle.session.abort();
+        }
+        self.ws_sessions.borrow_mut().clear();
     }
 }
 
@@ -1839,6 +2081,202 @@ fn rects_intersect(a: crate::geometry::Rect, b: crate::geometry::Rect) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_relayout_keeps_live_layout_spatial_and_dispatch_consistent() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,
+            "state":{"hit":{"type":"int","default":0}},
+            "children":[{"type":"frame","id":"root","width":100,"height":100,"children":[
+              {"type":"rectangle","id":"button","width":30,"height":30,
+               "events":{"onTap":[{"set":{"$app.hit":"1"}}]}}]}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(schema).unwrap();
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        let key = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("button")
+            .unwrap();
+        let old_rect = runtime.layout.node_rect(key).unwrap();
+
+        runtime.set_viewport_size((200.0, 100.0));
+        runtime.layout.inject_staged_build_failure();
+        assert!(runtime.relayout().is_err());
+        assert_eq!(runtime.layout.node_rect(key), Some(old_rect));
+
+        runtime.dispatch_pointer(PointerEvent::simple(
+            1,
+            crate::gesture::PointerPhase::Down,
+            crate::geometry::point(5.0, 5.0),
+        ));
+        runtime.dispatch_pointer(PointerEvent::simple(
+            1,
+            crate::gesture::PointerPhase::Up,
+            crate::geometry::point(5.0, 5.0),
+        ));
+        assert_eq!(runtime.state.app_get("hit").unwrap().as_i64(), Some(1));
+    }
+
+    #[test]
+    fn pump_interleaves_event_chains_without_reordering_each_chain() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","state":{"a":{"type":"int","default":0},"b":{"type":"int","default":0}},
+            "children":[{"type":"frame","id":"root","layout":"horizontal","width":100,"height":30,"children":[
+              {"type":"rectangle","id":"slow","width":40,"height":30,"events":{"onTap":[{"delay":{"ms":100}},{"set":{"$app.a":"1"}}]}},
+              {"type":"rectangle","id":"fast","width":40,"height":30,"events":{"onTap":[{"delay":{"ms":50}},{"set":{"$app.b":"1"}}]}}
+            ]}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(schema).unwrap();
+        runtime.build_layout((100.0, 30.0)).unwrap();
+        for (pointer, x) in [(1, 5.0), (2, 45.0)] {
+            runtime.dispatch_pointer(PointerEvent::simple_at(
+                pointer,
+                crate::gesture::PointerPhase::Down,
+                crate::geometry::point(x, 5.0),
+                0,
+            ));
+            runtime.dispatch_pointer(PointerEvent::simple_at(
+                pointer,
+                crate::gesture::PointerPhase::Up,
+                crate::geometry::point(x, 5.0),
+                0,
+            ));
+        }
+        assert_eq!(runtime.state.app_get("a").unwrap().as_i64(), Some(0));
+        assert_eq!(runtime.state.app_get("b").unwrap().as_i64(), Some(0));
+
+        runtime.pump(50);
+        assert_eq!(runtime.state.app_get("a").unwrap().as_i64(), Some(0));
+        assert_eq!(runtime.state.app_get("b").unwrap().as_i64(), Some(1));
+        runtime.pump(100);
+        assert_eq!(runtime.state.app_get("a").unwrap().as_i64(), Some(1));
+    }
+
+    #[test]
+    fn reload_cancels_pending_fetch_and_compensates_loading_before_merge() {
+        struct PendingNetwork;
+        #[async_trait::async_trait(?Send)]
+        impl crate::action::services::NetworkClient for PendingNetwork {
+            async fn request(
+                &self,
+                _request: crate::action::services::HttpRequest,
+            ) -> Result<crate::action::services::HttpResponse, String> {
+                std::future::pending().await
+            }
+        }
+        let schema: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","app":{"name":"t","version":"1","id":"t","capabilities":["network"]},
+            "state":{"loading":{"type":"bool","default":false},"failed":{"type":"bool","default":false}},
+            "children":[{"type":"rectangle","id":"button","width":30,"height":30,
+             "events":{"onTap":[{"fetch":{"url":"'https://example.invalid'","loading":"$app.loading","on_error":[{"set":{"$app.failed":"true"}}]}}]}}]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(schema.clone()).unwrap();
+        runtime.network = Rc::new(PendingNetwork);
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        for phase in [
+            crate::gesture::PointerPhase::Down,
+            crate::gesture::PointerPhase::Up,
+        ] {
+            runtime.dispatch_pointer(PointerEvent::simple(
+                1,
+                phase,
+                crate::geometry::point(5.0, 5.0),
+            ));
+        }
+        assert_eq!(
+            runtime.state.app_get("loading").unwrap().as_bool(),
+            Some(true)
+        );
+        runtime.replace_document(schema).unwrap();
+        assert_eq!(
+            runtime.state.app_get("loading").unwrap().as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            runtime.state.app_get("failed").unwrap().as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn runtime_drop_aborts_websocket_sessions_synchronously() {
+        struct Session(Rc<Cell<bool>>);
+        #[async_trait::async_trait(?Send)]
+        impl crate::action::services::WebSocketSession for Session {
+            fn abort(&self) {
+                self.0.set(true);
+            }
+            async fn send(&self, _: String) -> Result<(), String> {
+                Ok(())
+            }
+            async fn close(&self) -> Result<(), String> {
+                Ok(())
+            }
+        }
+        let aborted = Rc::new(Cell::new(false));
+        {
+            let runtime = Runtime::new();
+            runtime.ws_sessions.borrow_mut().insert(
+                "socket".into(),
+                crate::action::context::WsHandle {
+                    session: Rc::new(Session(aborted.clone())),
+                    on_message: None,
+                    generation: 0,
+                },
+            );
+        }
+        assert!(aborted.get());
+    }
+
+    #[test]
+    fn responsive_storage_read_hydrates_through_expression_and_pump() {
+        struct Store;
+        #[async_trait::async_trait(?Send)]
+        impl StorageBackend for Store {
+            async fn get(
+                &self,
+                key: &str,
+            ) -> Result<Option<serde_json::Value>, crate::action::services::ServiceError>
+            {
+                Ok((key == "theme").then(|| serde_json::json!("dark")))
+            }
+            async fn set(
+                &self,
+                _: &str,
+                _: serde_json::Value,
+            ) -> Result<(), crate::action::services::ServiceError> {
+                Ok(())
+            }
+            async fn delete(&self, _: &str) -> Result<(), crate::action::services::ServiceError> {
+                Ok(())
+            }
+            async fn clear(&self) -> Result<(), crate::action::services::ServiceError> {
+                Ok(())
+            }
+            async fn keys(&self) -> Result<Vec<String>, crate::action::services::ServiceError> {
+                Ok(Vec::new())
+            }
+        }
+        let schema: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,"app":{"name":"t","version":"1","id":"t","capabilities":["storage"]},"children":[]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(schema).unwrap();
+        runtime.storage = Rc::new(Store);
+        let expression = crate::expression::Expression::compile("$storage.theme").unwrap();
+        assert!(expression.eval(&runtime.state, None, None).0.is_null());
+        runtime.pump(1);
+        assert_eq!(
+            expression.eval(&runtime.state, None, None).0.as_str(),
+            Some("dark")
+        );
+    }
 
     #[test]
     fn text_input_keyboard_and_text_routing() {
@@ -2270,6 +2708,26 @@ mod tests {
         assert_eq!(rt.state.app_get("username").unwrap().as_str(), Some(""));
     }
 
+    #[test]
+    fn reload_replaces_nonconforming_live_state_with_staged_default() {
+        let old: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","state":{"value":{"type":"string","default":"old"}},"children":[]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(old).unwrap();
+        runtime.state.app_set("value", serde_json::json!("live"));
+        let new: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","state":{"value":{"type":"int","default":7}},"children":[]}"#,
+        )
+        .unwrap();
+        runtime.replace_document(new).unwrap();
+        assert_eq!(runtime.state.app_get("value").unwrap().as_i64(), Some(7));
+        assert!(runtime
+            .load_warnings()
+            .iter()
+            .any(|warning| warning.contains("no longer conforms")));
+    }
+
     /// Capability gate rebuilds from the new schema, so adding `network`
     /// in the .op edit becomes effective without a process restart.
     #[test]
@@ -2359,6 +2817,7 @@ mod tests {
                 on_message: Some(serde_json::json!([
                     { "set": { "$app.last": "$event.data" } }
                 ])),
+                generation: rt.document_generation,
             },
         );
 
@@ -3082,6 +3541,7 @@ mod tests {
             WsHandle {
                 session: Rc::new(Session(inbox.clone())),
                 on_message: Some(serde_json::json!([{ "set": { "$app.last": "$event.data" } }])),
+                generation: runtime.document_generation,
             },
         );
         freeze_variant_runtime(&mut runtime);
@@ -3119,7 +3579,7 @@ mod tests {
         ));
         freeze_variant_runtime(&mut runtime);
 
-        let emitted = runtime.tick(Instant::now() + std::time::Duration::from_millis(800));
+        let emitted = runtime.tick(800);
         assert!(emitted.is_empty());
         assert_eq!(runtime.state.app_get("long").unwrap().as_i64(), Some(0));
     }
@@ -3240,6 +3700,52 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    #[test]
+    fn pump_reports_swap_deadline_and_times_out_parked_ime_swap() {
+        let mut runtime = variant_runtime();
+        let key = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("field")
+            .unwrap();
+        let node = runtime.document.as_ref().unwrap().tree.nodes[key]
+            .schema
+            .clone();
+        let field = runtime
+            .widget_states
+            .get_or_init(&node, &runtime.state)
+            .unwrap();
+        let crate::widget_state::WidgetState::TextInput(field) = field else {
+            panic!()
+        };
+        field.set_caret(2, 100);
+        runtime.focus_request(key).unwrap();
+        runtime
+            .dispatch_ime(crate::gesture::ime::ImeEvent {
+                kind: crate::gesture::ime::ImeKind::CompositionStart,
+                text: String::new(),
+            })
+            .unwrap();
+        runtime
+            .dispatch_ime(crate::gesture::ime::ImeEvent {
+                kind: crate::gesture::ime::ImeKind::CompositionUpdate { selection: None },
+                text: "IME".into(),
+            })
+            .unwrap();
+        assert!(!runtime.switch_variant("mobile@0-480").unwrap());
+
+        let directive = runtime.pump(100);
+        assert_eq!(directive.next_wake_ms, Some(500));
+        assert!(runtime.input_frozen());
+
+        let directive = runtime.pump(500);
+        assert!(directive.needs_paint);
+        assert!(!runtime.input_frozen());
+        assert_eq!(runtime.selected_variant(), Some("mobile@0-480"));
     }
 
     #[test]
