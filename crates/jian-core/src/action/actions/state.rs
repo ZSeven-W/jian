@@ -65,7 +65,8 @@ pub(crate) fn write_path(ctx: &ActionContext, path: &StatePath, value: Value) ->
         }
         Scope::SelfNode => {
             if let Some(nid) = &ctx.node_id {
-                ctx.state.self_set(nid, &key, value);
+                ctx.state
+                    .self_set(ctx.page_id.as_deref().unwrap_or(""), nid, &key, value);
             } else {
                 return Err(ActionError::Custom(
                     "set: $self write outside node context".into(),
@@ -146,7 +147,10 @@ impl ActionImpl for Reset {
             }
             Scope::SelfNode => {
                 if let Some(nid) = &ctx.node_id {
-                    ctx.state.self_.borrow_mut().remove(nid);
+                    ctx.state
+                        .self_
+                        .borrow_mut()
+                        .remove(&(ctx.page_id.clone().unwrap_or_default(), nid.clone()));
                 }
             }
             _ => {

@@ -39,10 +39,18 @@ pub enum WidgetState {
 
 #[derive(Debug, Default)]
 pub struct WidgetStateStore {
-    map: HashMap<String, WidgetState>,
+    map: HashMap<(String, String), WidgetState>,
+    page_key: String,
 }
 
 impl WidgetStateStore {
+    pub fn set_page_key(&mut self, page_key: impl Into<String>) {
+        self.page_key = page_key.into();
+    }
+
+    pub fn page_key(&self) -> &str {
+        &self.page_key
+    }
     /// Seed-from-node on first access. Returns `None` for nodes that
     /// carry no interactive runtime state (e.g. `progress`, which is
     /// display-only and reads its value straight from the state graph).
@@ -119,7 +127,7 @@ impl WidgetStateStore {
             apply_bound(&mut init, &v);
         }
         use std::collections::hash_map::Entry;
-        match self.map.entry(id.clone()) {
+        match self.map.entry((self.page_key.clone(), id.clone())) {
             Entry::Occupied(mut o) => {
                 // A document swap can reuse an id for a different node
                 // type; re-seed when the stored variant no longer matches
@@ -134,28 +142,44 @@ impl WidgetStateStore {
     }
 
     pub fn get(&self, id: &str) -> Option<&WidgetState> {
-        self.map.get(id)
+        self.map.get(&(self.page_key.clone(), id.to_owned()))
     }
 
     pub fn get_mut(&mut self, id: &str) -> Option<&mut WidgetState> {
-        self.map.get_mut(id)
+        self.map.get_mut(&(self.page_key.clone(), id.to_owned()))
+    }
+
+    pub fn get_for_page(&self, page_key: &str, id: &str) -> Option<&WidgetState> {
+        self.map.get(&(page_key.to_owned(), id.to_owned()))
+    }
+
+    pub fn get_for_page_mut(&mut self, page_key: &str, id: &str) -> Option<&mut WidgetState> {
+        self.map.get_mut(&(page_key.to_owned(), id.to_owned()))
     }
 
     /// Iterate `(id, state)` pairs — used to locate the slider currently
     /// being dragged without re-resolving every node from the document.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &WidgetState)> {
-        self.map.iter().map(|(id, st)| (id.as_str(), st))
+        let page_key = self.page_key.as_str();
+        self.map.iter().filter_map(move |((page, id), state)| {
+            (page == page_key).then_some((id.as_str(), state))
+        })
     }
 
     /// Mutable iterator over the states — used to clear transient flags
     /// (e.g. a slider's `dragging`) on pointer up.
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut WidgetState> {
-        self.map.values_mut()
+        let page_key = self.page_key.clone();
+        self.map
+            .iter_mut()
+            .filter_map(move |((page, _), state)| (page == &page_key).then_some(state))
     }
 
     /// Drop state for nodes that no longer exist (document swap).
     pub fn retain_ids(&mut self, live: &dyn Fn(&str) -> bool) {
-        self.map.retain(|id, _| live(id));
+        let page_key = self.page_key.as_str();
+        self.map
+            .retain(|(page, id), _| page != page_key || live(id));
     }
 
     pub fn clear(&mut self) {
@@ -265,6 +289,27 @@ mod tests {
     /// bound-value read-back.
     fn empty_state() -> StateGraph {
         StateGraph::new(std::rc::Rc::new(crate::signal::scheduler::Scheduler::new()))
+    }
+
+    #[test]
+    fn widget_state_isolated_per_page_key() {
+        let mut store = WidgetStateStore::default();
+        let state = empty_state();
+        let input = node(r#"{"type":"text_input","id":"same","value":"a"}"#);
+        store.set_page_key("mobile");
+        if let Some(WidgetState::TextInput(text)) = store.get_or_init(&input, &state) {
+            text.insert_str("!", 0);
+        }
+        store.set_page_key("desktop");
+        match store.get_or_init(&input, &state) {
+            Some(WidgetState::TextInput(text)) => assert_eq!(text.text(), "a"),
+            _ => panic!(),
+        }
+        store.set_page_key("mobile");
+        match store.get("same") {
+            Some(WidgetState::TextInput(text)) => assert_eq!(text.text(), "a!"),
+            _ => panic!(),
+        }
     }
 
     #[test]

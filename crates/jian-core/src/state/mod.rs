@@ -9,18 +9,22 @@ pub use scope::Scope;
 use crate::signal::{scheduler::Scheduler, Signal};
 use crate::value::RuntimeValue;
 use serde_json::Value;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
 pub type NodeId = String;
 pub type PageId = String;
+pub type PageKey = String;
+type FieldSignals = BTreeMap<String, Signal<RuntimeValue>>;
+type SelfStateMap = BTreeMap<(PageKey, NodeId), FieldSignals>;
 
 pub struct StateGraph {
     scheduler: Rc<Scheduler>,
+    mutation_counter: Rc<Cell<u64>>,
     pub(crate) app: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
     pub(crate) page: RefCell<BTreeMap<PageId, BTreeMap<String, Signal<RuntimeValue>>>>,
-    pub(crate) self_: RefCell<BTreeMap<NodeId, BTreeMap<String, Signal<RuntimeValue>>>>,
+    pub(crate) self_: RefCell<SelfStateMap>,
     pub(crate) route: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
     pub(crate) storage: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
     pub(crate) vars: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
@@ -28,8 +32,13 @@ pub struct StateGraph {
 
 impl StateGraph {
     pub fn new(scheduler: Rc<Scheduler>) -> Self {
+        Self::new_with_counter(scheduler, Rc::new(Cell::new(0)))
+    }
+
+    pub fn new_with_counter(scheduler: Rc<Scheduler>, mutation_counter: Rc<Cell<u64>>) -> Self {
         Self {
             scheduler,
+            mutation_counter,
             app: RefCell::new(BTreeMap::new()),
             page: RefCell::new(BTreeMap::new()),
             self_: RefCell::new(BTreeMap::new()),
@@ -41,6 +50,7 @@ impl StateGraph {
 
     /// Create or update a state variable in the app scope.
     pub fn app_set(&self, name: &str, value: Value) {
+        self.bump_mutation();
         let rv = RuntimeValue(value);
         let mut map = self.app.borrow_mut();
         if let Some(sig) = map.get(name) {
@@ -61,6 +71,7 @@ impl StateGraph {
 
     /// Create or update a design variable in the `$vars` scope.
     pub fn vars_set(&self, name: &str, value: Value) {
+        self.bump_mutation();
         let rv = RuntimeValue(value);
         let mut map = self.vars.borrow_mut();
         if let Some(sig) = map.get(name) {
@@ -76,6 +87,7 @@ impl StateGraph {
     }
 
     pub fn page_set(&self, page_id: &str, name: &str, value: Value) {
+        self.bump_mutation();
         let rv = RuntimeValue(value);
         let mut map = self.page.borrow_mut();
         let entry = map.entry(page_id.to_owned()).or_default();
@@ -87,16 +99,40 @@ impl StateGraph {
         }
     }
 
-    pub fn self_set(&self, node_id: &str, name: &str, value: Value) {
+    pub fn self_set(&self, page_key: &str, node_id: &str, name: &str, value: Value) {
+        self.bump_mutation();
         let rv = RuntimeValue(value);
         let mut map = self.self_.borrow_mut();
-        let entry = map.entry(node_id.to_owned()).or_default();
+        let entry = map
+            .entry((page_key.to_owned(), node_id.to_owned()))
+            .or_default();
         if let Some(sig) = entry.get(name) {
             sig.set(rv);
         } else {
             let sig = Signal::new(rv, self.scheduler.clone());
             entry.insert(name.to_owned(), sig);
         }
+    }
+
+    pub fn self_get(&self, page_key: &str, node_id: &str, name: &str) -> Option<RuntimeValue> {
+        self.self_
+            .borrow()
+            .get(&(page_key.to_owned(), node_id.to_owned()))?
+            .get(name)
+            .map(Signal::get)
+    }
+
+    pub fn self_signal(
+        &self,
+        page_key: &str,
+        node_id: &str,
+        name: &str,
+    ) -> Option<Signal<RuntimeValue>> {
+        self.self_
+            .borrow()
+            .get(&(page_key.to_owned(), node_id.to_owned()))?
+            .get(name)
+            .cloned()
     }
 
     /// Plan 19 D1 cold-start: capture the current value of every
@@ -122,7 +158,10 @@ impl StateGraph {
             }
             snap.page.insert(page.clone(), m);
         }
-        for (node, fields) in self.self_.borrow().iter() {
+        for ((page_key, node), fields) in self.self_.borrow().iter() {
+            if !page_key.is_empty() {
+                continue;
+            }
             let mut m = std::collections::BTreeMap::new();
             for (k, sig) in fields {
                 m.insert(k.clone(), sig.get().0);
@@ -159,7 +198,7 @@ impl StateGraph {
         }
         for (node_id, fields) in &snap.self_node {
             for (name, value) in fields {
-                self.self_set(node_id, name, value.clone());
+                self.self_set("", node_id, name, value.clone());
             }
         }
         for (name, value) in &snap.route {
@@ -177,6 +216,7 @@ impl StateGraph {
     /// [`Self::restore_default_state`] (pack-side AOT seed) and by
     /// hosts that own the route table.
     pub fn route_set(&self, name: &str, value: Value) {
+        self.bump_mutation();
         let rv = RuntimeValue(value);
         let mut map = self.route.borrow_mut();
         if let Some(sig) = map.get(name) {
@@ -191,6 +231,7 @@ impl StateGraph {
     /// [`Self::restore_default_state`]. Hosts that wire a real
     /// storage backend layer their reads on top.
     pub fn storage_set(&self, name: &str, value: Value) {
+        self.bump_mutation();
         let rv = RuntimeValue(value);
         let mut map = self.storage.borrow_mut();
         if let Some(sig) = map.get(name) {
@@ -199,6 +240,11 @@ impl StateGraph {
             let sig = Signal::new(rv, self.scheduler.clone());
             map.insert(name.to_owned(), sig);
         }
+    }
+
+    fn bump_mutation(&self) {
+        self.mutation_counter
+            .set(self.mutation_counter.get().wrapping_add(1));
     }
 
     /// Resolve a StatePath to the underlying RuntimeValue, walking segments.
@@ -226,7 +272,7 @@ impl StateGraph {
                 let nid = context_node?;
                 self.self_
                     .borrow()
-                    .get(nid)?
+                    .get(&(context_page.unwrap_or("").to_owned(), nid.to_owned()))?
                     .get(path.segments.first().and_then(seg_as_key)?)
                     .cloned()?
             }
@@ -319,7 +365,7 @@ mod tests {
         let g = StateGraph::new(s);
         g.app_set("count", json!(7));
         g.page_set("home", "scrollTop", json!(120));
-        g.self_set("btn", "hover", json!(false));
+        g.self_set("", "btn", "hover", json!(false));
         g.route_set("path", json!("/foo"));
         g.storage_set("theme", json!("dark"));
         g.vars_set("primary", json!("#3b82f6"));
@@ -382,5 +428,17 @@ mod tests {
         // reused. (Codex follow-up reminder: a `Signal::new` here
         // would orphan binding subscribers across an AOT seed.)
         assert_eq!(pre_signal.get().0, json!(99));
+    }
+
+    #[test]
+    fn self_state_isolated_per_page_key() {
+        let g = StateGraph::new(Rc::new(Scheduler::new()));
+        g.self_set("home-m@0-480", "card", "count", json!(3));
+        g.self_set("home", "card", "count", json!(9));
+        assert_eq!(
+            g.self_get("home-m@0-480", "card", "count").unwrap().0,
+            json!(3)
+        );
+        assert_eq!(g.self_get("home", "card", "count").unwrap().0, json!(9));
     }
 }

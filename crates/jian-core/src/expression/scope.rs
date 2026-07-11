@@ -73,7 +73,7 @@ impl<'a> EvalContext for StateGraphContext<'a> {
                     self.state
                         .self_
                         .borrow()
-                        .get(nid)
+                        .get(&(self.page_id.unwrap_or("").to_owned(), nid.to_owned()))
                         .and_then(|m| m.get(key).cloned())
                 }),
                 "$route" => self.state.route.borrow().get(key).cloned(),
@@ -85,7 +85,7 @@ impl<'a> EvalContext for StateGraphContext<'a> {
                         self.state
                             .self_
                             .borrow()
-                            .get(nid)
+                            .get(&(self.page_id.unwrap_or("").to_owned(), nid.to_owned()))
                             .and_then(|m| m.get(key).cloned())
                     })
                     .or_else(|| {
@@ -217,7 +217,7 @@ fn scope_to_object(state: &StateGraph, scope: Scope, id: Option<&str>) -> serde_
         }
         Scope::SelfNode => {
             if let Some(nid) = id {
-                if let Some(node_map) = state.self_.borrow().get(nid) {
+                if let Some(node_map) = state.self_.borrow().get(&(String::new(), nid.to_owned())) {
                     for (k, s) in node_map {
                         m.insert(k.clone(), s.get().0);
                     }
@@ -290,7 +290,7 @@ mod tests {
         state
             .self_
             .borrow_mut()
-            .entry("n1".into())
+            .entry((String::new(), "n1".into()))
             .or_default()
             .insert(
                 "count".into(),
