@@ -132,6 +132,10 @@ fn warning_tuple(w: &LoadWarning) -> (&'static str, serde_json::Value) {
             "future_format_version",
             serde_json::json!({ "found": found, "supported_max": supported_max }),
         ),
+        LoadWarning::ResponsiveBelowMinor { declared } => (
+            "responsive_below_minor",
+            serde_json::json!({ "declared": declared, "required": "1.2" }),
+        ),
         LoadWarning::LogicModulesSkipped { reason } => (
             "logic_modules_skipped",
             serde_json::json!({ "reason": reason }),

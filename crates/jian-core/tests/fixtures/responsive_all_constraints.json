@@ -1,0 +1,36 @@
+{
+  "version": "1.2",
+  "formatVersion": "1.2",
+  "responsive": true,
+  "children": [
+    {
+      "type": "frame",
+      "id": "root",
+      "width": 400,
+      "height": 600,
+      "children": [
+        { "type": "rectangle", "id": "left_top", "x": 10, "y": 10, "width": 50, "height": 30, "constraints": { "h": "left", "v": "top" } },
+        { "type": "rectangle", "id": "right_bottom", "x": 340, "y": 550, "width": 40, "height": 30, "constraints": { "h": "right", "v": "bottom" } },
+        { "type": "rectangle", "id": "center", "x": 175, "y": 80, "width": 50, "height": 30, "constraints": { "h": "center", "v": "center" } },
+        { "type": "rectangle", "id": "stretch_both", "x": 20, "y": 140, "width": 360, "height": 50, "constraints": { "h": "left_right", "v": "top_bottom" } },
+        { "type": "rectangle", "id": "scale_both", "x": 40, "y": 220, "width": 80, "height": 40, "constraints": { "h": "scale", "v": "scale" }, "maxWidth": 200 },
+        { "type": "rectangle", "id": "clamped_stretch", "x": 20, "y": 320, "width": 360, "height": 60, "constraints": { "h": "left_right", "v": "top" }, "minWidth": 300, "maxWidth": 700 },
+        {
+          "type": "frame",
+          "id": "panel",
+          "x": 20,
+          "y": 420,
+          "width": 360,
+          "height": 120,
+          "layout": "vertical",
+          "constraints": { "h": "left_right", "v": "top" },
+          "children": [
+            { "type": "text", "id": "wrapping_text", "width": "fill_container", "height": "fit_content", "textGrowth": "fixed-width", "content": "Responsive constraints remeasure this line as the panel width changes.", "fontSize": 16 },
+            { "type": "rectangle", "id": "fill_child", "width": "fill_container", "height": 30 },
+            { "type": "rectangle", "id": "nested_right", "x": 330, "y": 90, "width": 20, "height": 20, "constraints": { "h": "right", "v": "bottom" } }
+          ]
+        }
+      ]
+    }
+  ]
+}

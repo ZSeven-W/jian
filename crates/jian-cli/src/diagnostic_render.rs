@@ -154,6 +154,14 @@ fn describe(source: &str, w: &LoadWarning) -> (Severity, String, Option<Span>) {
                 span,
             )
         }
+        LoadWarning::ResponsiveBelowMinor { declared } => (
+            Severity::Warning,
+            format!(
+                "responsive mode is active with formatVersion `{}`; declare `1.2` or newer",
+                declared
+            ),
+            locate_quoted_key(source, "responsive"),
+        ),
         LoadWarning::LogicModulesSkipped { reason } => (
             Severity::Warning,
             format!("`logicModules` skipped: {}", reason),

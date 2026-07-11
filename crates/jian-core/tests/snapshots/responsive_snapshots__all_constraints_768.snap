@@ -1,0 +1,59 @@
+---
+source: crates/jian-core/tests/responsive_snapshots.rs
+expression: "responsive_rects(width, 800.0)"
+---
+center:
+  - 359
+  - 180
+  - 50
+  - 30
+clamped_stretch:
+  - 34
+  - 320
+  - 700
+  - 60
+fill_child:
+  - 20
+  - 441
+  - 728
+  - 30
+left_top:
+  - 10
+  - 10
+  - 50
+  - 30
+nested_right:
+  - 718
+  - 510
+  - 20
+  - 20
+panel:
+  - 20
+  - 420
+  - 728
+  - 120
+right_bottom:
+  - 708
+  - 750
+  - 40
+  - 30
+root:
+  - 0
+  - 0
+  - 768
+  - 800
+scale_both:
+  - 77
+  - 293
+  - 153
+  - 54
+stretch_both:
+  - 20
+  - 140
+  - 728
+  - 250
+wrapping_text:
+  - 20
+  - 420
+  - 728
+  - 21

@@ -202,6 +202,7 @@ fn touch_document() -> (RuntimeDocument, NodeKey) {
         pages: None,
         children: vec![node],
         format_version: None,
+        responsive: None,
         id: None,
         app: None,
         routes: None,
