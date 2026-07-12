@@ -785,10 +785,16 @@ impl Runtime {
         backend: &mut impl crate::render::RenderBackend,
         backend_generation: u64,
     ) {
+        let changed = self.image_store.has_pending_work();
         for warning in self.image_store.prepare_frame(backend, backend_generation) {
             self.load_warnings.push(warning);
         }
-        self.mark_dirty();
+        // Dirty only when the store actually transitioned something —
+        // unconditional dirtying would defeat the pump idle contract
+        // (needs_paint would be true on every frame forever).
+        if changed {
+            self.mark_dirty();
+        }
     }
 
     pub fn load_warnings(&self) -> &[String] {

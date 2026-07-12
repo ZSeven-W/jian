@@ -213,6 +213,17 @@ impl ImageStore {
         }
     }
 
+    /// True when the next `prepare_frame` will change store or backend
+    /// state (pending releases, un-registered bytes, or budget-deferred
+    /// entries awaiting promotion). Drives the caller's dirty marking.
+    pub fn has_pending_work(&self) -> bool {
+        !self.releases.is_empty()
+            || self
+                .entries
+                .values()
+                .any(|e| matches!(e.state, ImageState::Bytes | ImageState::Deferred))
+    }
+
     pub fn prepare_frame(
         &mut self,
         backend: &mut impl RenderBackend,

@@ -44,10 +44,21 @@ pub enum InvalidationClass {
 
 pub fn classify_binding(property: &str) -> InvalidationClass {
     match property {
-        "content" | "text" | "x" | "y" | "width" | "height" | "layout" | "minWidth"
-        | "maxWidth" | "minHeight" | "maxHeight" => InvalidationClass::LayoutSpatial,
+        "content" | "text" | "x" | "y" | "width" | "height" | "layout" | "gap"
+        | "padding" | "alignItems" | "justifyContent" | "minWidth" | "maxWidth"
+        | "minHeight" | "maxHeight" => InvalidationClass::LayoutSpatial,
         "visible" | "disabled" => InvalidationClass::Interactive,
-        _ => InvalidationClass::PaintOnly,
+        other => {
+            // Spec table: unlisted properties default to paint-only, with a
+            // debug diagnostic so silently misclassified layout props surface.
+            #[cfg(debug_assertions)]
+            if matches!(other, "fill" | "fills" | "opacity" | "color") == false
+                && other.starts_with("bind:") == false
+            {
+                eprintln!("binding property `{other}` unclassified; treated as paint-only");
+            }
+            InvalidationClass::PaintOnly
+        }
     }
 }
 
