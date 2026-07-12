@@ -207,7 +207,7 @@ fn walk(
 
     let mut overrides = BindingOverrides::default();
     if let (Some(_), Some(j), Some(state)) = (r, json.as_mut(), state) {
-        overrides = apply_bindings(j, state, !doc.schema.is_responsive());
+        overrides = apply_bindings(j, state, doc.schema.is_responsive());
     }
 
     if let Some(json) = json.as_ref() {
@@ -309,8 +309,14 @@ impl BindingOverrides {
 fn apply_bindings(
     node: &mut Value,
     state: &crate::state::StateGraph,
-    allow_rect_overrides: bool,
+    responsive: bool,
 ) -> BindingOverrides {
+    // Legacy documents keep today's draw-time rect overrides (M1c
+    // suppresses them only for responsive docs, where geometry comes
+    // from the installed layout) — and today's string-only `content`
+    // coercion: widening it to numbers/bools would change legacy
+    // rendered output, violating the §1.1 bit-identical promise.
+    let allow_rect_overrides = !responsive;
     let mut overrides = BindingOverrides::default();
     let Some(obj) = node.as_object_mut() else {
         return overrides;
@@ -329,7 +335,13 @@ fn apply_bindings(
         let (value, _warns) = compiled.eval(state, None, node_id.as_deref());
         match prop.as_str() {
             "content" => {
-                if let Some(projected) = bound_scalar_to_string(&value) {
+                let projected = if responsive {
+                    bound_scalar_to_string(&value)
+                } else {
+                    // Legacy: strings only (pre-M1 behavior).
+                    value.as_str().map(str::to_owned)
+                };
+                if let Some(projected) = projected {
                     obj.insert("content".into(), Value::String(projected));
                 }
             }

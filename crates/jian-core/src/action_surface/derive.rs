@@ -1515,3 +1515,46 @@ mod tests {
         assert_eq!(a[1].name.slug, "keep_me");
     }
 }
+
+#[cfg(test)]
+mod page_filter_tests {
+    use super::*;
+
+    /// Mutation-sensitive proof that the filter REJECTS a physically
+    /// present inactive page. The runtime's mount path happens to
+    /// reduce `pages` to the selected one, so a test built from a
+    /// mounted document would pass even with an unfiltered derivation
+    /// — this one hands the builder both pages directly.
+    #[test]
+    fn inactive_page_actions_are_never_derived_when_both_pages_are_present() {
+        let doc: PenDocument = serde_json::from_str(
+            r#"{
+              "version": "0.8.0",
+              "formatVersion": "1.2",
+              "responsive": true,
+              "pages": [
+                {"id": "home", "name": "Home", "children": [
+                  {"type":"rectangle","id":"desk_btn","width":10,"height":10,
+                   "events":{"onTap":[{"set":{"$app.x":"1"}}]}}]},
+                {"id": "home@0-480", "name": "Home Mobile", "children": [
+                  {"type":"rectangle","id":"mob_btn","width":10,"height":10,
+                   "events":{"onTap":[{"set":{"$app.x":"2"}}]}}]}
+              ]
+            }"#,
+        )
+        .unwrap();
+
+        let salt = [0u8; 16];
+        let desktop = derive_actions_for_page(&doc, "home", &salt);
+        let mobile = derive_actions_for_page(&doc, "home@0-480", &salt);
+
+        let ids = |actions: &[ActionDefinition]| -> Vec<String> {
+            actions.iter().map(|a| a.source_node_id.clone()).collect()
+        };
+        assert_eq!(ids(&desktop), vec!["desk_btn".to_string()]);
+        assert_eq!(ids(&mobile), vec!["mob_btn".to_string()]);
+        // The unfiltered derivation would see BOTH nodes; the filter is
+        // what makes each list exactly one action.
+        assert_eq!(derive_actions(&doc, &salt).len(), 2);
+    }
+}
