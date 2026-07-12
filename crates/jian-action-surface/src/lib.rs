@@ -66,7 +66,7 @@ pub use runtime_dispatch::RuntimeDispatcher;
 
 use crate::concurrency::ConcurrencyTracker;
 use crate::rate_limit::TokenBucket;
-use jian_core::action_surface::{derive_actions, ActionDefinition};
+use jian_core::action_surface::{derive_actions, derive_actions_for_page, ActionDefinition};
 use jian_ops_schema::document::PenDocument;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -215,6 +215,18 @@ impl ActionSurface {
         }
     }
 
+    /// Build a surface whose derived storage contains only the active page's
+    /// actions (plus document-level globals). This physical filter prevents an
+    /// `All` listing request from exposing inactive responsive variants.
+    pub fn from_document_for_page(doc: &PenDocument, page_key: &str, salt: &BuildSalt) -> Self {
+        Self {
+            actions: derive_actions_for_page(doc, page_key, salt),
+            session: Session::new(),
+            audit: None,
+            session_id: "default".to_owned(),
+        }
+    }
+
     /// Attach an audit log — every `execute` call writes one
     /// `ActionSurfaceAuditEntry` (success or failure) per spec §8.1.
     pub fn with_audit(mut self, log: Rc<ActionAuditLog>) -> Self {
@@ -234,6 +246,12 @@ impl ActionSurface {
     /// requires the surface to track the current document tree.
     pub fn refresh(&mut self, doc: &PenDocument, salt: &BuildSalt) {
         self.actions = derive_actions(doc, salt);
+    }
+
+    /// Re-derive only the active page after navigation, variant swap, or
+    /// reload while retaining session rate-limit and audit state.
+    pub fn refresh_for_page(&mut self, doc: &PenDocument, page_key: &str, salt: &BuildSalt) {
+        self.actions = derive_actions_for_page(doc, page_key, salt);
     }
 
     /// Read-only view of the underlying action list (test + debug).
@@ -775,5 +793,84 @@ mod tests {
         let mut sink = SinkDispatcher;
         let r = surface.execute("home.plus", None, &mut sink);
         assert!(matches!(r, ExecuteOutcome::Ok));
+    }
+
+    #[test]
+    fn responsive_runtime_switch_rebuilds_a_physically_page_scoped_list() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{
+              "version":"1.2","responsive":true,"children":[
+                {"type":"frame","id":"desktop","screen":"/","children":[
+                  {"type":"frame","id":"desktop-action","semantics":{"aiName":"desktop"},
+                   "events":{"onTap":[{"set":{"$app.hit":"desktop"}}]}}]},
+                {"type":"frame","id":"mobile","screen":"/","breakpoint":{"maxWidth":480},"children":[
+                  {"type":"frame","id":"mobile-action","semantics":{"aiName":"mobile"},
+                   "events":{"onTap":[{"set":{"$app.hit":"mobile"}}]}}]}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let mut runtime = jian_core::Runtime::new_from_document(schema).unwrap();
+        let doc = &runtime.document.as_ref().unwrap().schema;
+        let mut surface =
+            ActionSurface::from_document_for_page(doc, runtime.active_page_key(), &[0u8; 16]);
+
+        let listed = surface.list(ListOptions {
+            page_scope: PageScope::All,
+            ..ListOptions::default()
+        });
+        assert_eq!(
+            listed
+                .actions
+                .iter()
+                .map(|action| action.name.as_str())
+                .collect::<Vec<_>>(),
+            ["desktop.desktop"]
+        );
+
+        runtime.switch_variant("mobile@0-480").unwrap();
+        let doc = &runtime.document.as_ref().unwrap().schema;
+        surface.refresh_for_page(doc, runtime.active_page_key(), &[0u8; 16]);
+        let listed = surface.list(ListOptions {
+            page_scope: PageScope::All,
+            ..ListOptions::default()
+        });
+        assert_eq!(
+            listed
+                .actions
+                .iter()
+                .map(|action| action.name.as_str())
+                .collect::<Vec<_>>(),
+            ["mobile@0-480.mobile"]
+        );
+    }
+
+    #[test]
+    fn legacy_multi_page_list_snapshot_remains_unchanged() {
+        let doc: PenDocument = serde_json::from_str(
+            r#"{
+              "version":"1.1","pages":[
+                {"id":"one","name":"One","children":[
+                  {"type":"frame","id":"one-action","semantics":{"aiName":"first"},
+                   "events":{"onTap":[{"set":{"$app.hit":"one"}}]}}]},
+                {"id":"two","name":"Two","children":[
+                  {"type":"frame","id":"two-action","semantics":{"aiName":"second"},
+                   "events":{"onTap":[{"set":{"$app.hit":"two"}}]}}]}
+              ],"children":[]
+            }"#,
+        )
+        .unwrap();
+        let listed = ActionSurface::from_document(&doc, &[0u8; 16]).list(ListOptions {
+            page_scope: PageScope::All,
+            ..ListOptions::default()
+        });
+        assert_eq!(
+            listed
+                .actions
+                .iter()
+                .map(|action| action.name.as_str())
+                .collect::<Vec<_>>(),
+            ["one.first", "two.second"]
+        );
     }
 }

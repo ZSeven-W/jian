@@ -63,6 +63,17 @@ pub fn derive_actions(doc: &PenDocument, build_salt: &[u8; 16]) -> Vec<ActionDef
     derive_actions_with_warnings(doc, build_salt).0
 }
 
+/// Derive actions from one mounted page plus document-level global actions.
+/// An empty `page_key` preserves the legacy all-pages behavior used by
+/// non-responsive documents.
+pub fn derive_actions_for_page(
+    doc: &PenDocument,
+    page_key: &str,
+    build_salt: &[u8; 16],
+) -> Vec<ActionDefinition> {
+    derive_actions_for_page_with_warnings(doc, page_key, build_salt).0
+}
+
 /// Walk `doc` and emit the deterministic action list **plus**
 /// load-time §3.4 warnings. Same bitwise-stable derivation as
 /// `derive_actions` — the warnings are populated as a side-product
@@ -85,6 +96,24 @@ pub fn derive_actions_with_warnings(
     doc: &PenDocument,
     build_salt: &[u8; 16],
 ) -> (Vec<ActionDefinition>, Vec<DeriveWarning>) {
+    derive_actions_with_page_filter(doc, None, build_salt)
+}
+
+/// Page-filtered counterpart to [`derive_actions_with_warnings`].
+pub fn derive_actions_for_page_with_warnings(
+    doc: &PenDocument,
+    page_key: &str,
+    build_salt: &[u8; 16],
+) -> (Vec<ActionDefinition>, Vec<DeriveWarning>) {
+    let page_filter = (!page_key.is_empty()).then_some(page_key);
+    derive_actions_with_page_filter(doc, page_filter, build_salt)
+}
+
+fn derive_actions_with_page_filter(
+    doc: &PenDocument,
+    page_filter: Option<&str>,
+    build_salt: &[u8; 16],
+) -> (Vec<ActionDefinition>, Vec<DeriveWarning>) {
     let mut out = Vec::new();
     let doc_json = match serde_json::to_value(doc) {
         Ok(v) => v,
@@ -98,6 +127,9 @@ pub fn derive_actions_with_warnings(
                 .and_then(|v| v.as_str())
                 .unwrap_or("page")
                 .to_owned();
+            if page_filter.is_some_and(|active| active != page_id) {
+                continue;
+            }
             let scope_resolver = ScopeResolver::page(&page_id);
             if let Some(children) = page.get("children").and_then(|v| v.as_array()) {
                 for child in children {

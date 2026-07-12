@@ -180,6 +180,19 @@ struct SoftbufferState {
     skia: SkiaSurface,
 }
 
+/// Recreate only the raster target when its dimensions change. The
+/// `SkiaBackend` and its decoded-image cache remain intact, so this path must
+/// not advance `DesktopHost::backend_generation`.
+fn recreate_raster_surface_if_needed(surface: &mut SkiaSurface, width: u32, height: u32) -> bool {
+    let width = width.max(1) as i32;
+    let height = height.max(1) as i32;
+    if surface.width() == width && surface.height() == height {
+        return false;
+    }
+    *surface = SkiaSurface::new_raster(width, height);
+    true
+}
+
 impl RunApp {
     fn new(host: DesktopHost) -> Self {
         let initial = host.config.initial_size;
@@ -222,8 +235,18 @@ impl RunApp {
         let w = NonZeroU32::new(width.max(1)).unwrap();
         let h = NonZeroU32::new(height.max(1)).unwrap();
         let _ = state.surface.resize(w, h);
-        if state.skia.width() != width as i32 || state.skia.height() != height as i32 {
-            state.skia = SkiaSurface::new_raster(width.max(1) as i32, height.max(1) as i32);
+        recreate_raster_surface_if_needed(&mut state.skia, width, height);
+    }
+
+    /// Recover from a renderer readback/context loss. This is the only run-loop
+    /// path that replaces `SkiaBackend`, and therefore the only one that bumps
+    /// the backend generation. Ordinary resize remains surface-only.
+    fn recover_renderer_after_context_loss(&mut self, width: u32, height: u32) {
+        self.softbuffer = None;
+        self.host.recreate_backend_after_context_loss();
+        self.ensure_surface(width, height);
+        if let Some(window) = self.window.as_ref() {
+            window.request_redraw();
         }
     }
 
@@ -258,7 +281,9 @@ impl RunApp {
             inner: &mut self.host.backend,
             images: &mut self.host.image_registry,
         };
-        self.host.runtime.prepare_frame(&mut backend, 0);
+        self.host
+            .runtime
+            .prepare_frame(&mut backend, self.host.backend_generation);
         backend.begin_frame(&mut state.skia, 0xffffffff);
         let dpr_scaled = (scale - 1.0).abs() > f32::EPSILON;
         if dpr_scaled {
@@ -286,6 +311,7 @@ impl RunApp {
         // 2. Snapshot raster bytes as RGBA8888 via SkiaSurface helper.
         let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
         if !state.skia.read_rgba8(&mut rgba) {
+            self.recover_renderer_after_context_loss(w, h);
             return;
         }
 
@@ -988,17 +1014,20 @@ impl RunApp {
         {
             let host = &mut self.host;
             if host.mcp_drain.is_some() {
+                let active_page = host.runtime.active_page_key().to_owned();
                 if let Some(doc) = host.runtime.document.as_ref() {
                     match host.mcp_surface.as_mut() {
                         Some(surface) => {
-                            surface.refresh(&doc.schema, &host.mcp_salt);
+                            surface.refresh_for_page(&doc.schema, &active_page, &host.mcp_salt);
                         }
                         None => {
-                            let mut surface = jian_action_surface::ActionSurface::from_document(
-                                &doc.schema,
-                                &host.mcp_salt,
-                            )
-                            .with_session_id("mcp");
+                            let mut surface =
+                                jian_action_surface::ActionSurface::from_document_for_page(
+                                    &doc.schema,
+                                    &active_page,
+                                    &host.mcp_salt,
+                                )
+                                .with_session_id("mcp");
                             if let Some(audit) = host.mcp_audit.as_ref() {
                                 surface = surface.with_audit(audit.clone());
                             }
@@ -1296,5 +1325,25 @@ mod debug_overlay_tests {
             DrawOp::Text(run) => assert!(run.content.contains("scale 1.50")),
             other => panic!("expected text op, got {:?}", other),
         }
+    }
+}
+
+#[cfg(test)]
+mod backend_generation_tests {
+    use super::recreate_raster_surface_if_needed;
+    use crate::DesktopHost;
+    use jian_core::Runtime;
+    use jian_skia::surface::SkiaSurface;
+
+    #[test]
+    fn surface_resize_preserves_generation_but_backend_recreation_bumps_it() {
+        let mut host = DesktopHost::new(Runtime::new(), "generation");
+        let mut surface = SkiaSurface::new_raster(320, 240);
+
+        assert!(recreate_raster_surface_if_needed(&mut surface, 640, 480));
+        assert_eq!(host.backend_generation, 0);
+
+        host.recreate_backend_after_context_loss();
+        assert_eq!(host.backend_generation, 1);
     }
 }

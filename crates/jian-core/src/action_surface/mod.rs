@@ -27,7 +27,10 @@ pub mod state_gate;
 pub mod types;
 
 pub use build_salt::{BUILD_SALT, BUILD_SALT_SOURCE};
-pub use derive::{derive_actions, derive_actions_with_warnings, DeriveWarning};
+pub use derive::{
+    derive_actions, derive_actions_for_page, derive_actions_for_page_with_warnings,
+    derive_actions_with_warnings, DeriveWarning,
+};
 pub use naming::{compute_slug, normalize_slug, short_hash};
 pub use state_gate::RuntimeStateGate;
 pub use types::{

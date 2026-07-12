@@ -465,6 +465,45 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_list_actions_tracks_the_active_responsive_variant() {
+        let doc = r#"{
+          "version":"1.2","responsive":true,"children":[
+            {"type":"frame","id":"desktop","screen":"/","children":[
+              {"type":"frame","id":"desktop-action","semantics":{"aiName":"desktop"},
+               "events":{"onTap":[{"set":{"$app.hit":"desktop"}}]}}]},
+            {"type":"frame","id":"mobile","screen":"/","breakpoint":{"maxWidth":480},"children":[
+              {"type":"frame","id":"mobile-action","semantics":{"aiName":"mobile"},
+               "events":{"onTap":[{"set":{"$app.hit":"mobile"}}]}}]}
+          ]
+        }"#;
+        let mut runtime = make_runtime_with_doc(doc);
+        let mut session = Session::new(Permission::Observe, "test", "0.1");
+        let list = |runtime: &mut Runtime, session: &mut Session| {
+            let (out, _) = dispatch(
+                &Verb::ListActions {
+                    cursor: None,
+                    limit: None,
+                },
+                runtime,
+                session,
+            );
+            match out.detail {
+                Some(DetailKind::ActionList { actions, .. }) => actions,
+                other => panic!("expected ActionList, got {other:?}"),
+            }
+        };
+
+        let desktop = list(&mut runtime, &mut session);
+        assert!(desktop.iter().any(|action| action.id.contains("desktop")));
+        assert!(!desktop.iter().any(|action| action.id.contains("mobile")));
+
+        runtime.switch_variant("mobile@0-480").unwrap();
+        let mobile = list(&mut runtime, &mut session);
+        assert!(mobile.iter().any(|action| action.id.contains("mobile")));
+        assert!(!mobile.iter().any(|action| action.id.contains("desktop")));
+    }
+
+    #[test]
     fn dispatch_list_actions_drops_actions_under_aihidden_ancestor() {
         // Plan 18 §3 / C2 end-to-end: an action whose source node
         // sits inside an aiHidden subtree must not appear in
@@ -1291,7 +1330,7 @@ fn unsupported_in_prod_build(verb: &'static str) -> OutcomePayload {
 /// `bindings.disabled` is C2's job.
 #[cfg(any(feature = "dev-asp", feature = "prod-asp"))]
 fn run_list_actions(runtime: &Runtime, cursor: Option<&str>, limit: Option<u32>) -> OutcomePayload {
-    use jian_core::action_surface::{derive_actions, BUILD_SALT};
+    use jian_core::action_surface::{derive_actions_for_page, BUILD_SALT};
     if let Some(0) = limit {
         return OutcomePayload::invalid("list_actions", "limit must be > 0");
     }
@@ -1313,7 +1352,7 @@ fn run_list_actions(runtime: &Runtime, cursor: Option<&str>, limit: Option<u32>)
             },
         );
     };
-    let derived = derive_actions(&doc.schema, &BUILD_SALT);
+    let derived = derive_actions_for_page(&doc.schema, runtime.active_page_key(), &BUILD_SALT);
     // C2: project_actions_with_doc filters out rows whose source
     // node sits inside an `aiHidden` subtree, not just nodes
     // flagged aiHidden directly (which `derive_actions` already

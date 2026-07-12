@@ -73,6 +73,9 @@ pub struct DesktopHost {
     pub runtime: Runtime,
     pub confirm_overlay: crate::confirm_overlay::ConfirmOverlay,
     pub backend: SkiaBackend,
+    /// Generation of the renderer image cache. Bumped only when the
+    /// `SkiaBackend` is replaced and its decoded-image cache is destroyed.
+    pub backend_generation: u64,
     /// Registered encoded image bytes owned by this runtime/renderer pair.
     pub image_registry: jian_skia::InstanceImageRegistry,
     pub config: HostConfig,
@@ -275,6 +278,7 @@ impl DesktopHost {
             runtime,
             confirm_overlay,
             backend: SkiaBackend::new(),
+            backend_generation: 0,
             image_registry: Default::default(),
             config: HostConfig {
                 title: title.into(),
@@ -323,6 +327,7 @@ impl DesktopHost {
             runtime,
             confirm_overlay,
             backend: SkiaBackend::new(),
+            backend_generation: 0,
             image_registry: Default::default(),
             config,
             reload_rx: None,
@@ -363,6 +368,14 @@ impl DesktopHost {
     pub fn with_startup_report(mut self, report: StartupReport) -> Self {
         self.startup_report = report;
         self
+    }
+
+    /// Replace the renderer after a context-loss recovery. Replacing the
+    /// backend destroys its decoded-image cache, so the generation bump tells
+    /// `Runtime::prepare_frame` to re-register every live image.
+    pub(crate) fn recreate_backend_after_context_loss(&mut self) {
+        self.backend = SkiaBackend::new();
+        self.backend_generation = self.backend_generation.wrapping_add(1);
     }
 
     /// Stash the off-viewport bbox set the data-path bootstrap
@@ -568,8 +581,9 @@ impl DesktopHost {
     #[cfg(feature = "mcp")]
     pub fn with_mcp(mut self, drain: McpDrain, salt: BuildSalt) -> Self {
         let audit = Rc::new(ActionAuditLog::new(256));
+        let active_page = self.runtime.active_page_key().to_owned();
         let surface = self.runtime.document.as_ref().map(|doc| {
-            ActionSurface::from_document(&doc.schema, &salt)
+            ActionSurface::from_document_for_page(&doc.schema, &active_page, &salt)
                 .with_audit(audit.clone())
                 .with_session_id("mcp")
         });
@@ -588,13 +602,19 @@ impl DesktopHost {
         if generation == self.mcp_surface_generation || self.mcp_drain.is_none() {
             return;
         }
+        let active_page = self.runtime.active_page_key().to_owned();
         if let Some(document) = self.runtime.document.as_ref() {
             match self.mcp_surface.as_mut() {
-                Some(surface) => surface.refresh(&document.schema, &self.mcp_salt),
+                Some(surface) => {
+                    surface.refresh_for_page(&document.schema, &active_page, &self.mcp_salt)
+                }
                 None => {
-                    let mut surface =
-                        ActionSurface::from_document(&document.schema, &self.mcp_salt)
-                            .with_session_id("mcp");
+                    let mut surface = ActionSurface::from_document_for_page(
+                        &document.schema,
+                        &active_page,
+                        &self.mcp_salt,
+                    )
+                    .with_session_id("mcp");
                     if let Some(audit) = self.mcp_audit.as_ref() {
                         surface = surface.with_audit(audit.clone());
                     }
@@ -912,24 +932,42 @@ mod tests {
         let runtime = Runtime::new_from_document(schema).unwrap();
         let (_bridge, drain) = jian_action_surface::mcp::Bridge::new();
         let mut host = DesktopHost::new(runtime, "Mcp").with_mcp(drain, [7u8; 16]);
-        assert!(host
+        let desktop = host
             .mcp_surface
             .as_ref()
             .unwrap()
-            .actions()
+            .list(jian_action_surface::ListOptions {
+                page_scope: jian_action_surface::PageScope::All,
+                ..Default::default()
+            });
+        assert!(desktop
+            .actions
             .iter()
-            .any(|action| action.name.full().contains("desktop")));
+            .any(|action| action.name.contains("desktop")));
+        assert!(!desktop
+            .actions
+            .iter()
+            .any(|action| action.name.contains("mobile")));
 
         host.runtime.switch_variant("mobile@0-480").unwrap();
         host.refresh_mcp_surface_if_needed();
 
-        let actions = host.mcp_surface.as_ref().unwrap().actions();
-        assert!(actions
+        let mobile = host
+            .mcp_surface
+            .as_ref()
+            .unwrap()
+            .list(jian_action_surface::ListOptions {
+                page_scope: jian_action_surface::PageScope::All,
+                ..Default::default()
+            });
+        assert!(mobile
+            .actions
             .iter()
-            .any(|action| action.name.full().contains("mobile")));
-        assert!(!actions
+            .any(|action| action.name.contains("mobile")));
+        assert!(!mobile
+            .actions
             .iter()
-            .any(|action| action.name.full().contains("desktop")));
+            .any(|action| action.name.contains("desktop")));
     }
 
     #[cfg(feature = "mcp")]
