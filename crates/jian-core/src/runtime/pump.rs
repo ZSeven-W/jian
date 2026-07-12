@@ -24,7 +24,11 @@ impl Runtime {
         for (key, result) in completions {
             self.image_requests.remove(&key);
             match result {
-                Ok(bytes) => self.image_store.resolve(&key, bytes),
+                Ok(bytes) => {
+                    if let Err(error) = self.image_store.resolve(&key, bytes) {
+                        self.load_warnings.push(format!("image `{key}`: {error}"));
+                    }
+                }
                 Err(error) => {
                     self.image_store.fail(&key, &error);
                     self.load_warnings.push(format!("image `{key}`: {error}"));

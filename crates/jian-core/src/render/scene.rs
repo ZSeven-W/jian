@@ -247,7 +247,7 @@ fn walk(
             })
             .is_some();
         if !handled {
-            emit_for_node(r, json, doc.schema.is_responsive(), out);
+            emit_for_node(r, json, doc.schema.is_responsive(), state, out);
         }
     }
 
@@ -463,7 +463,13 @@ fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
     }
 }
 
-fn emit_for_node(r: crate::geometry::Rect, json: &Value, responsive: bool, out: &mut Vec<DrawOp>) {
+fn emit_for_node(
+    r: crate::geometry::Rect,
+    json: &Value,
+    responsive: bool,
+    state: Option<&crate::state::StateGraph>,
+    out: &mut Vec<DrawOp>,
+) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
 
     // --- Image emission. Image nodes and `image` fills both paint
@@ -471,7 +477,7 @@ fn emit_for_node(r: crate::geometry::Rect, json: &Value, responsive: bool, out: 
     // *under* and any stroke *around* the image. Compute shadow/stroke
     // up-front so the emit ordering is shadow → image → stroke even
     // when this branch returns early.
-    let image_source = image_source_for(json, responsive);
+    let image_source = image_source_for(json, responsive, state);
     if let Some((source, opacity)) = image_source {
         let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
         if let Some(shadow) = first_shadow(json) {
@@ -1309,24 +1315,36 @@ fn node_opacity(json: &Value) -> f32 {
 /// Treat `data:` strings as inline base64 payloads; everything else is
 /// a host-resolved URL (the skia backend's image cache draws a grey
 /// placeholder if no resolver is wired up).
-fn classify_source(src: &str, responsive: bool) -> ImageSource {
+fn classify_source(
+    src: &str,
+    responsive: bool,
+    state: Option<&crate::state::StateGraph>,
+) -> ImageSource {
     if src.starts_with("data:") && responsive {
         ImageSource::Url(super::image_store::data_url_key(src))
     } else if src.starts_with("data:") {
         ImageSource::DataUrl(src.to_owned())
     } else {
-        ImageSource::Url(src.to_owned())
+        ImageSource::Url(
+            state
+                .and_then(|state| state.image_key(src))
+                .unwrap_or_else(|| src.to_owned()),
+        )
     }
 }
 
 /// Resolve which image source (if any) a node should paint with. Image
 /// nodes win over image fills; fills only fire on non-image nodes with
 /// `fill[0].type == "image"`. Returns `(source, opacity)`.
-fn image_source_for(json: &Value, responsive: bool) -> Option<(ImageSource, f32)> {
+fn image_source_for(
+    json: &Value,
+    responsive: bool,
+    state: Option<&crate::state::StateGraph>,
+) -> Option<(ImageSource, f32)> {
     if json.get("type").and_then(|t| t.as_str()) == Some("image") {
         let src = json.get("src").and_then(|v| v.as_str())?;
         let opacity = json.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-        return Some((classify_source(src, responsive), opacity));
+        return Some((classify_source(src, responsive, state), opacity));
     }
     let first_fill = json
         .get("fill")
@@ -1338,7 +1356,7 @@ fn image_source_for(json: &Value, responsive: bool) -> Option<(ImageSource, f32)
     }
     let url = obj.get("url").and_then(|v| v.as_str())?.to_owned();
     let opacity = obj.get("opacity").and_then(|v| v.as_f64()).unwrap_or(1.0) as f32;
-    Some((classify_source(&url, responsive), opacity))
+    Some((classify_source(&url, responsive, state), opacity))
 }
 
 fn try_linear_gradient(fill: &Value) -> Option<LinearGradient> {

@@ -5,7 +5,15 @@ use jian_core::action::services::{
     HttpRequest, HttpResponse, NetworkClient, NullClipboard, NullFeedback, NullRouter,
     NullStorageBackend,
 };
-use jian_core::action::{default_registry, execute_list_shared, ActionContext};
+use jian_core::action::{default_registry, execute_list_async, ActionContext};
+fn execute_list_blocking_for_test(
+    reg: &std::rc::Rc<std::cell::RefCell<jian_core::action::ActionRegistry>>,
+    list: &serde_json::Value,
+    ctx: &ActionContext,
+) -> jian_core::action::ExecOutcome {
+    let registry = reg.borrow();
+    futures::executor::block_on(execute_list_async(&registry, list, ctx))
+}
 use jian_core::expression::ExpressionCache;
 use jian_core::signal::scheduler::Scheduler;
 use jian_core::state::StateGraph;
@@ -85,7 +93,7 @@ fn fetch_writes_into_state() {
         "into": "$app.user",
         "loading": "$app.isLoading"
     }}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok(), "{:?}", out.result);
     assert_eq!(state.app_get("user").unwrap().0, json!({"name": "Alice"}));
     assert_eq!(state.app_get("isLoading").unwrap().as_bool(), Some(false));
@@ -105,7 +113,7 @@ fn fetch_on_error_runs() {
         "url": "\"/x\"",
         "on_error": [{"set": {"$app.lastError": "\"failed\""}}]
     }}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert_eq!(state.app_get("lastError").unwrap().as_str(), Some("failed"));
 }
 
@@ -118,7 +126,7 @@ fn fetch_without_capability_denied() {
     let (_state, ctx) = setup_with_net(net.clone(), false);
     let reg = default_registry();
     let list = json!([{"fetch": {"url": "\"/x\""}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(matches!(
         out.result,
         Err(jian_core::action::error::ActionError::CapabilityDenied { .. })

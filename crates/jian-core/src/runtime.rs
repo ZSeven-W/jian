@@ -240,6 +240,8 @@ pub struct Runtime {
     /// Tier-3 logic provider — how `call` actions dispatch. Null by
     /// default; hosts override with `set_logic_provider`.
     pub logic: Rc<dyn crate::logic::LogicProvider>,
+    #[cfg(test)]
+    fail_next_loader: bool,
 }
 
 impl Runtime {
@@ -306,6 +308,8 @@ impl Runtime {
             audit: None,
             permissions: Rc::new(NullPermissionBroker),
             logic: Rc::new(crate::logic::NullLogicProvider),
+            #[cfg(test)]
+            fail_next_loader: false,
         };
         runtime.state.set_viewport(800.0, 600.0, 1.0);
         runtime
@@ -423,6 +427,8 @@ impl Runtime {
             audit: Some(audit),
             permissions: Rc::new(NullPermissionBroker),
             logic: Rc::new(crate::logic::NullLogicProvider),
+            #[cfg(test)]
+            fail_next_loader: false,
         };
         runtime.widget_states.set_page_key(active_page_key);
         runtime.state.set_viewport(800.0, 600.0, 1.0);
@@ -547,29 +553,6 @@ impl Runtime {
     /// already hold a value keep that value; only newly-introduced
     /// keys get their schema default.
     pub fn replace_document(&mut self, schema: PenDocument) -> CoreResult<()> {
-        let closing_sessions: Vec<_> = self
-            .ws_sessions
-            .borrow_mut()
-            .drain()
-            .map(|(_, handle)| handle.session)
-            .collect();
-        self.cancel_all_tasks();
-        for session in closing_sessions {
-            self.task_queue.spawn_future(
-                async move {
-                    let result = session
-                        .close()
-                        .await
-                        .map_err(crate::action::ActionError::Custom);
-                    ExecOutcome {
-                        result,
-                        warnings: Vec::new(),
-                    }
-                },
-                self.document_generation,
-                Some("websocket:reload-close".into()),
-            );
-        }
         let preferred_path = self.active_screen_path.clone();
         self.replace_document_for_path_mode(schema, preferred_path.as_deref(), true)
     }
@@ -598,13 +581,65 @@ impl Runtime {
         preferred_path: Option<&str>,
         conform_reload: bool,
     ) -> CoreResult<()> {
+        let route_snapshot = conform_reload.then(|| self.nav.current());
+        let reload_declaration_schema = schema.clone();
         let prepared = prepare_document(
             schema,
             (self.viewport.size.width, self.viewport.size.height),
             preferred_path,
         );
+        let declaration_source = &reload_declaration_schema;
+        let page_declarations: BTreeMap<String, jian_ops_schema::state::StateSchema> =
+            declaration_source
+                .pages
+                .as_ref()
+                .into_iter()
+                .flatten()
+                .filter_map(|page| page.state.clone().map(|state| (page.id.clone(), state)))
+                .collect();
+        fn collect_self_declarations(
+            value: &serde_json::Value,
+            page_key: &str,
+            output: &mut BTreeMap<(String, String), jian_ops_schema::state::StateSchema>,
+        ) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if map.get("type").and_then(|value| value.as_str()).is_some() {
+                        if let (Some(id), Some(state)) =
+                            (map.get("id").and_then(|v| v.as_str()), map.get("state"))
+                        {
+                            if let Ok(schema) = serde_json::from_value(state.clone()) {
+                                output.insert((page_key.to_owned(), id.to_owned()), schema);
+                            }
+                        }
+                    }
+                    if let Some(children) = map.get("children") {
+                        collect_self_declarations(children, page_key, output);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        collect_self_declarations(value, page_key, output);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut self_declarations = BTreeMap::new();
+        if let Some(pages) = declaration_source.pages.as_ref() {
+            for page in pages {
+                if let Ok(children) = serde_json::to_value(&page.children) {
+                    collect_self_declarations(&children, &page.id, &mut self_declarations);
+                }
+            }
+        }
         schema = prepared.mounted;
         let responsive = schema.is_responsive();
+        let valid_paths: Vec<String> = schema
+            .routes
+            .as_ref()
+            .map(|routes| routes.routes.keys().cloned().collect())
+            .unwrap_or_default();
         let declared_state = schema.state.clone().unwrap_or_default();
         let staged_defaults: BTreeMap<String, serde_json::Value> = declared_state
             .iter()
@@ -615,7 +650,6 @@ impl Runtime {
                 )
             })
             .collect();
-        let live_state = self.state.app_snapshot();
         // Rebuild the capability gate from the new schema. Reuse the
         // existing AuditLog so the rolling history isn't truncated on
         // every save. If the original Runtime was constructed via
@@ -644,21 +678,55 @@ impl Runtime {
         // graph so failure cannot alter responsive mode or any live scope.
         let staged_state = Rc::new(StateGraph::new(Rc::new(Scheduler::new())));
         staged_state.set_responsive(responsive);
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_loader) {
+            return Err(CoreError::Layout("injected loader failure".into()));
+        }
         let doc = loader::build_with(schema, &staged_state, loader::SeedMode::Initial)?;
+        if conform_reload {
+            let closing_sessions: Vec<_> = self
+                .ws_sessions
+                .borrow_mut()
+                .drain()
+                .map(|(_, handle)| handle.session)
+                .collect();
+            self.cancel_all_tasks();
+            for session in closing_sessions {
+                self.task_queue.spawn_future(
+                    async move {
+                        let result = session
+                            .close()
+                            .await
+                            .map_err(crate::action::ActionError::Custom);
+                        ExecOutcome {
+                            result,
+                            warnings: Vec::new(),
+                        }
+                    },
+                    self.document_generation,
+                    Some("websocket:reload-close".into()),
+                );
+            }
+        }
+        // Cancellation compensations (for example `fetch.loading = false`)
+        // run only after detached loading succeeds, but must be captured by
+        // the conformance merge that is about to become the committed state.
+        let live_state = self.state.app_snapshot();
         let (merged_state, mut conformance_warnings) =
             crate::state::conformance::merge_scope(&live_state, &staged_defaults, &declared_state);
         if conform_reload {
             self.state.replace_app(&merged_state);
             self.state.replace_vars(&staged_state.vars_snapshot());
-            let page_key = prepared.selected_page_id.as_deref().unwrap_or("");
-            if let Some(page_schema) = doc
-                .schema
-                .pages
-                .as_ref()
-                .and_then(|pages| pages.first())
-                .and_then(|page| page.state.as_ref())
-            {
-                let staged = staged_state.page_snapshot(page_key);
+            for (page_key, page_schema) in &page_declarations {
+                let staged: BTreeMap<String, serde_json::Value> = page_schema
+                    .iter()
+                    .map(|(name, entry)| {
+                        (
+                            name.clone(),
+                            entry.default.clone().unwrap_or(serde_json::Value::Null),
+                        )
+                    })
+                    .collect();
                 let (merged, warnings) = crate::state::conformance::merge_scope(
                     &self.state.page_snapshot(page_key),
                     &staged,
@@ -671,24 +739,20 @@ impl Runtime {
                         .map(|warning| format!("$page[{page_key}]: {warning}")),
                 );
             }
-            for (_, node) in doc.tree.nodes.iter() {
-                let node_id = crate::document::tree::node_schema_id(&node.schema);
-                let Ok(json) = serde_json::to_value(&node.schema) else {
-                    continue;
-                };
-                let Some(raw) = json.get("state") else {
-                    continue;
-                };
-                let Ok(declared) =
-                    serde_json::from_value::<jian_ops_schema::state::StateSchema>(raw.clone())
-                else {
-                    continue;
-                };
-                let staged = staged_state.self_snapshot(page_key, node_id);
+            for ((page_key, node_id), declared) in &self_declarations {
+                let staged: BTreeMap<String, serde_json::Value> = declared
+                    .iter()
+                    .map(|(name, entry)| {
+                        (
+                            name.clone(),
+                            entry.default.clone().unwrap_or(serde_json::Value::Null),
+                        )
+                    })
+                    .collect();
                 let (merged, warnings) = crate::state::conformance::merge_scope(
                     &self.state.self_snapshot(page_key, node_id),
                     &staged,
-                    &declared,
+                    declared,
                 );
                 self.state.replace_self(page_key, node_id, &merged);
                 conformance_warnings.extend(
@@ -710,6 +774,9 @@ impl Runtime {
         let focus_chain = collect_focus_chain(&doc);
         self.audit = Some(audit);
         self.capabilities = capabilities;
+        if let Some(route_snapshot) = route_snapshot {
+            self.nav.restore(route_snapshot, &valid_paths);
+        }
         self.action_surface_inputs = action_surface_inputs;
         self.action_surface_generation = self.action_surface_generation.wrapping_add(1);
         self.load_warnings = prepared.warnings;
@@ -767,6 +834,7 @@ impl Runtime {
         // a doc with a fresh `.op.pack` re-call `preload_initial_layout`
         // explicitly.
         self.layout.drop_preload();
+        self.state.clear_image_keys();
         self.admit_document_images();
         self.image_store.finish_reload_ownership();
         Ok(())
@@ -888,6 +956,7 @@ impl Runtime {
 
     pub fn set_image_document_dir(&mut self, directory: impl Into<PathBuf>) {
         self.image_document_dir = directory.into();
+        self.state.clear_image_keys();
         self.admit_document_images();
     }
 
@@ -898,29 +967,22 @@ impl Runtime {
         if !doc.schema.is_responsive() {
             return;
         }
-        fn sources(value: &serde_json::Value, output: &mut Vec<String>) {
-            match value {
-                serde_json::Value::Object(map) => {
-                    for (key, value) in map {
-                        if matches!(key.as_str(), "src" | "url") {
-                            if let Some(source) = value.as_str() {
-                                output.push(source.to_owned());
-                            }
-                        }
-                        sources(value, output);
-                    }
-                }
-                serde_json::Value::Array(values) => {
-                    for value in values {
-                        sources(value, output);
-                    }
-                }
-                _ => {}
-            }
-        }
         let mut found = Vec::new();
-        if let Ok(json) = serde_json::to_value(&doc.schema) {
-            sources(&json, &mut found);
+        for (_, node) in doc.tree.nodes.iter() {
+            if let jian_ops_schema::node::PenNode::Image(image) = &node.schema {
+                found.push(image.src.as_ref().to_owned());
+            }
+            if let Ok(json) = serde_json::to_value(&node.schema) {
+                if let Some(fills) = json.get("fill").cloned().and_then(|value| {
+                    serde_json::from_value::<Vec<jian_ops_schema::style::PenFill>>(value).ok()
+                }) {
+                    for fill in fills {
+                        if let jian_ops_schema::style::PenFill::Image(image) = fill {
+                            found.push(image.url.as_ref().to_owned());
+                        }
+                    }
+                }
+            }
         }
         for source in found {
             let key = match crate::render::image_store::canonical_url_key(
@@ -933,6 +995,7 @@ impl Runtime {
                     continue;
                 }
             };
+            self.state.set_image_key(&source, &key);
             if source.starts_with("data:") {
                 match crate::render::image_store::decode_data_url(&source) {
                     Ok(bytes) => self.image_store.admit_inline(&key, bytes),
@@ -2922,6 +2985,89 @@ mod tests {
             .load_warnings()
             .iter()
             .any(|warning| warning.contains("no longer conforms")));
+    }
+
+    #[test]
+    fn loader_failure_leaves_tasks_sessions_hydration_and_generation_untouched() {
+        use crate::action::context::WsHandle;
+        use crate::action::services::WebSocketSession;
+        use async_trait::async_trait;
+        struct Session;
+        #[async_trait(?Send)]
+        impl WebSocketSession for Session {
+            async fn send(&self, _: String) -> Result<(), String> {
+                Ok(())
+            }
+            async fn close(&self) -> Result<(), String> {
+                Ok(())
+            }
+            async fn receive(&self) -> Vec<String> {
+                Vec::new()
+            }
+        }
+        let schema: PenDocument =
+            serde_json::from_str(r#"{"version":"1.2","children":[]}"#).unwrap();
+        let mut runtime = Runtime::new_from_document(schema.clone()).unwrap();
+        runtime.ws_sessions.borrow_mut().insert(
+            "live".into(),
+            WsHandle {
+                session: Rc::new(Session),
+                on_message: None,
+                generation: runtime.document_generation,
+            },
+        );
+        runtime.task_queue.spawn_future(
+            std::future::pending::<ExecOutcome>(),
+            runtime.document_generation,
+            Some("pending".into()),
+        );
+        let _ = runtime.state.storage_cache.read("theme");
+        let generation = runtime.document_generation;
+        runtime.fail_next_loader = true;
+        assert!(runtime.replace_document(schema).is_err());
+        assert_eq!(runtime.document_generation, generation);
+        assert!(runtime.ws_sessions.borrow().contains_key("live"));
+        assert!(!runtime.task_queue.is_empty());
+        assert!(runtime.state.storage_cache.is_hydrating("theme"));
+    }
+
+    #[test]
+    fn successful_reload_restores_route_snapshot_against_new_valid_paths() {
+        use crate::action::services::RouteState;
+        struct RecordingRouter {
+            restored: RefCell<Option<(RouteState, Vec<String>)>>,
+        }
+        impl RouterSvc for RecordingRouter {
+            fn current(&self) -> RouteState {
+                RouteState {
+                    path: "/stats".into(),
+                    params: [("id".into(), "7".into())].into(),
+                    query: [("tab".into(), "all".into())].into(),
+                    stack: vec!["/".into(), "/stats".into()],
+                }
+            }
+            fn push(&self, _: &str) {}
+            fn replace(&self, _: &str) {}
+            fn pop(&self) {}
+            fn reset(&self, _: &str) {}
+            fn restore(&self, state: RouteState, valid: &[String]) {
+                *self.restored.borrow_mut() = Some((state, valid.to_vec()));
+            }
+        }
+        let old: PenDocument = serde_json::from_str(r#"{"version":"1.2","children":[]}"#).unwrap();
+        let mut runtime = Runtime::new_from_document(old).unwrap();
+        let router = Rc::new(RecordingRouter {
+            restored: RefCell::new(None),
+        });
+        runtime.nav = router.clone();
+        let new: PenDocument = serde_json::from_str(r#"{
+          "version":"1.2","routes":{"entry":"/","routes":{"/":{"pageId":"home"},"/stats":{"pageId":"stats"}}},
+          "pages":[{"id":"home","name":"Home","children":[]},{"id":"stats","name":"Stats","children":[]}],"children":[]}"#).unwrap();
+        runtime.replace_document(new).unwrap();
+        let restored = router.restored.borrow();
+        let (state, valid) = restored.as_ref().expect("restore called");
+        assert_eq!(state.path, "/stats");
+        assert!(valid.contains(&"/".to_owned()) && valid.contains(&"/stats".to_owned()));
     }
 
     /// Capability gate rebuilds from the new schema, so adding `network`

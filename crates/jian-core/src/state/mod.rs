@@ -33,6 +33,7 @@ pub struct StateGraph {
     responsive: Cell<bool>,
     pub(crate) vars: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
     pub(crate) viewport: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
+    image_keys: RefCell<BTreeMap<String, String>>,
 }
 
 impl StateGraph {
@@ -52,6 +53,12 @@ impl StateGraph {
             .flat_map(|fields| fields.iter())
             .map(|(key, signal)| (key.clone(), signal.get().0))
             .collect()
+    }
+    pub fn page_keys(&self) -> Vec<String> {
+        self.page.borrow().keys().cloned().collect()
+    }
+    pub fn self_keys(&self) -> Vec<(String, String)> {
+        self.self_.borrow().keys().cloned().collect()
     }
     pub fn self_snapshot(&self, page_key: &str, node_id: &str) -> BTreeMap<String, Value> {
         self.self_
@@ -124,7 +131,22 @@ impl StateGraph {
             responsive: Cell::new(false),
             vars: RefCell::new(BTreeMap::new()),
             viewport: RefCell::new(BTreeMap::new()),
+            image_keys: RefCell::new(BTreeMap::new()),
         }
+    }
+
+    pub fn set_image_key(&self, authored: &str, canonical: &str) {
+        self.image_keys
+            .borrow_mut()
+            .insert(authored.to_owned(), canonical.to_owned());
+    }
+
+    pub fn image_key(&self, authored: &str) -> Option<String> {
+        self.image_keys.borrow().get(authored).cloned()
+    }
+
+    pub fn clear_image_keys(&self) {
+        self.image_keys.borrow_mut().clear();
     }
 
     /// Create or update a state variable in the app scope.

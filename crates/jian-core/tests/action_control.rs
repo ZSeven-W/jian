@@ -3,7 +3,15 @@ use jian_core::action::capability::DummyCapabilityGate;
 use jian_core::action::services::{
     NullClipboard, NullFeedback, NullNetworkClient, NullRouter, NullStorageBackend,
 };
-use jian_core::action::{default_registry, execute_list_shared, ActionContext};
+use jian_core::action::{default_registry, execute_list_async, ActionContext};
+fn execute_list_blocking_for_test(
+    reg: &std::rc::Rc<std::cell::RefCell<jian_core::action::ActionRegistry>>,
+    list: &serde_json::Value,
+    ctx: &ActionContext,
+) -> jian_core::action::ExecOutcome {
+    let registry = reg.borrow();
+    futures::executor::block_on(execute_list_async(&registry, list, ctx))
+}
 use jian_core::expression::ExpressionCache;
 use jian_core::signal::scheduler::Scheduler;
 use jian_core::state::StateGraph;
@@ -53,7 +61,7 @@ fn if_then_branch_runs() {
             "then": [{"set": {"$app.count": "42"}}]
         }
     }]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok(), "{:?}", out.result);
     assert_eq!(state.app_get("count").unwrap().as_i64(), Some(42));
 }
@@ -71,7 +79,7 @@ fn if_else_branch_runs() {
             "else": [{"set": {"$app.count": "99"}}]
         }
     }]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert_eq!(state.app_get("count").unwrap().as_i64(), Some(99));
 }
 
@@ -86,21 +94,10 @@ fn abort_stops_remaining_chain() {
         {"abort": null},
         {"set": {"$app.b": "1"}}
     ]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_err());
     assert_eq!(state.app_get("a").unwrap().as_i64(), Some(1));
     assert_eq!(state.app_get("b").unwrap().as_i64(), Some(0));
-}
-
-#[test]
-#[allow(clippy::arc_with_non_send_sync)]
-fn compatibility_facade_reports_pending_delay_instead_of_dropping_it() {
-    let (_s, _state, mut ctx) = setup();
-    ctx.clock = Some(std::sync::Arc::new(jian_core::action::TaskClock::default()));
-    let reg = default_registry();
-    let list = json!([{"delay": {"ms": 10}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
-    assert!(out.result.unwrap_err().to_string().contains("TaskQueue"));
 }
 
 #[test]
@@ -116,7 +113,7 @@ fn for_each_iterates_with_item() {
             "do": [{"set": {"$app.sum": "$app.sum + $item"}}]
         }
     }]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok(), "{:?}", out.result);
     assert_eq!(state.app_get("sum").unwrap().as_i64(), Some(6));
 }
@@ -128,7 +125,7 @@ fn for_each_respects_max_iter() {
     state.app_set("items", json!(huge));
     let reg = default_registry();
     let list = json!([{"for_each": {"in": "$app.items", "as": "x", "do": []}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_err());
 }
 
@@ -144,7 +141,7 @@ fn parallel_all_run() {
             [{"set": {"$app.b": "2"}}]
         ]
     }]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok());
     assert_eq!(state.app_get("a").unwrap().as_i64(), Some(1));
     assert_eq!(state.app_get("b").unwrap().as_i64(), Some(2));
@@ -161,7 +158,7 @@ fn race_returns_first() {
             [{"set": {"$app.winner": "\"b\""}}]
         ]
     }]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok());
     // Both sync branches complete sequentially; `race` just picks the first
     // resolved. With sync actions the last-writer effectively wins but we

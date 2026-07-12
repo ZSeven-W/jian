@@ -1,4 +1,4 @@
-//! `rfd::MessageDialog`-backed `FeedbackSink + AsyncFeedback`.
+//! Desktop feedback: native toast/alert dialogs plus an in-window async confirm overlay.
 //!
 //! Gated behind the `feedback` cargo feature. `rfd` 0.14 wraps each
 //! platform's native dialog API:
@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use jian_core::action::services::feedback::{AsyncFeedback, FeedbackLevel, FeedbackSink};
 use rfd::{MessageButtons, MessageDialog, MessageLevel};
 
-/// Native-dialog `FeedbackSink + AsyncFeedback` for the desktop host.
+/// Desktop `FeedbackSink + AsyncFeedback`; confirm never opens a native dialog.
 ///
 /// `Default` is the canonical constructor — `rfd::MessageDialog` has
 /// no per-instance state to thread through.

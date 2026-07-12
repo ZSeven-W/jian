@@ -3,7 +3,15 @@ use jian_core::action::capability::DummyCapabilityGate;
 use jian_core::action::services::{
     NullClipboard, NullFeedback, NullNetworkClient, NullRouter, NullStorageBackend,
 };
-use jian_core::action::{default_registry, execute_list_shared, ActionContext};
+use jian_core::action::{default_registry, execute_list_async, ActionContext};
+fn execute_list_blocking_for_test(
+    reg: &std::rc::Rc<std::cell::RefCell<jian_core::action::ActionRegistry>>,
+    list: &serde_json::Value,
+    ctx: &ActionContext,
+) -> jian_core::action::ExecOutcome {
+    let registry = reg.borrow();
+    futures::executor::block_on(execute_list_async(&registry, list, ctx))
+}
 use jian_core::expression::ExpressionCache;
 use jian_core::signal::scheduler::Scheduler;
 use jian_core::state::StateGraph;
@@ -47,7 +55,7 @@ fn set_shorthand() {
     state.app_set("count", json!(0));
     let reg = default_registry();
     let list = json!([{"set": {"$app.count": "$app.count + 1"}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok(), "{:?}", out.result);
     assert_eq!(state.app_get("count").unwrap().as_i64(), Some(1));
 }
@@ -58,7 +66,7 @@ fn set_full_form() {
     state.app_set("x", json!(10));
     let reg = default_registry();
     let list = json!([{"set": {"target": "$app.x", "value": "$app.x * 2"}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok());
     assert_eq!(state.app_get("x").unwrap().as_i64(), Some(20));
 }
@@ -70,7 +78,7 @@ fn set_multi_pair() {
     state.app_set("b", json!(2));
     let reg = default_registry();
     let list = json!([{"set": {"$app.a": "10", "$app.b": "20"}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok());
     assert_eq!(state.app_get("a").unwrap().as_i64(), Some(10));
     assert_eq!(state.app_get("b").unwrap().as_i64(), Some(20));
@@ -82,7 +90,7 @@ fn delete_nulls_target() {
     state.app_set("tmp", json!("some data"));
     let reg = default_registry();
     let list = json!([{"delete": "$app.tmp"}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(state.app_get("tmp").unwrap().is_null());
 }
 
@@ -93,7 +101,7 @@ fn reset_clears_scope() {
     state.app_set("b", json!(2));
     let reg = default_registry();
     let list = json!([{"reset": "$app"}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(state.app_get("a").is_none());
     assert!(state.app_get("b").is_none());
 }

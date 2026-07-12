@@ -58,6 +58,13 @@ impl StorageCache {
         std::mem::take(&mut *self.requests.borrow_mut())
     }
 
+    pub fn is_hydrating(&self, key: &str) -> bool {
+        self.entries
+            .borrow()
+            .get(key)
+            .is_some_and(|entry| matches!(entry.state, StorageEntryState::Hydrating { .. }))
+    }
+
     pub fn complete(&self, key: &str, gen: u64, value: Result<Option<Value>, String>) {
         let mut entries = self.entries.borrow_mut();
         let Some(entry) = entries.get_mut(key) else {

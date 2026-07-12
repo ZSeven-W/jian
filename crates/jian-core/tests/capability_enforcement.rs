@@ -4,7 +4,15 @@
 //! `app.capabilities`, builds a `DeclaredCapabilityGate` with an
 //! `AuditLog`, and every IO action consults the gate before running.
 
-use jian_core::action::{execute_list_shared, ActionError};
+use jian_core::action::{execute_list_async, ActionContext, ActionError};
+fn execute_list_blocking_for_test(
+    reg: &std::rc::Rc<std::cell::RefCell<jian_core::action::ActionRegistry>>,
+    list: &serde_json::Value,
+    ctx: &ActionContext,
+) -> jian_core::action::ExecOutcome {
+    let registry = reg.borrow();
+    futures::executor::block_on(execute_list_async(&registry, list, ctx))
+}
 use jian_core::capability::{AuditLog, Capability, Verdict};
 use jian_core::Runtime;
 use jian_ops_schema::load_str;
@@ -51,7 +59,7 @@ fn fetch_without_network_is_denied_and_audited() {
     let rt = load(OP_NO_CAPS);
     let ctx = rt.make_action_ctx();
     let list = json!([{ "fetch": { "url": "\"/api\"" } }]);
-    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    let out = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
 
     assert!(matches!(
         out.result,
@@ -74,7 +82,7 @@ fn fetch_with_network_declared_passes_gate() {
     let rt = load(OP_WITH_NETWORK);
     let ctx = rt.make_action_ctx();
     let list = json!([{ "fetch": { "url": "\"/api\"" } }]);
-    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    let out = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
 
     // The gate allowed fetch; NullNetworkClient then returns an error,
     // but that error is captured inside the action chain. What we care
@@ -96,17 +104,17 @@ fn mixed_actions_accumulate_audit() {
     // next — the audit log spans the runtime, not a single execute_list.
     let rt = load(OP_WITH_NETWORK);
     let ctx = rt.make_action_ctx();
-    let _ = execute_list_shared(
+    let _ = execute_list_blocking_for_test(
         &rt.actions,
         &json!([{ "fetch": { "url": "\"/a\"", "on_error": [] } }]),
         &ctx,
     );
-    let _ = execute_list_shared(
+    let _ = execute_list_blocking_for_test(
         &rt.actions,
         &json!([{ "storage_set": { "k": "\"v\"" } }]),
         &ctx,
     );
-    let _ = execute_list_shared(
+    let _ = execute_list_blocking_for_test(
         &rt.actions,
         &json!([{ "fetch": { "url": "\"/b\"", "on_error": [] } }]),
         &ctx,
@@ -135,7 +143,7 @@ fn denial_short_circuits_current_list() {
         { "storage_set": { "k": "\"v\"" } },
         { "storage_set": { "other": "\"z\"" } },
     ]);
-    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    let out = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
     assert!(matches!(
         out.result,
         Err(ActionError::CapabilityDenied { .. })
@@ -149,7 +157,7 @@ fn storage_allowed_when_declared() {
     let rt = load(OP_WITH_NETWORK_STORAGE);
     let ctx = rt.make_action_ctx();
     let list = json!([{ "storage_set": { "theme": "\"dark\"" } }]);
-    let _ = execute_list_shared(&rt.actions, &list, &ctx);
+    let _ = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
 
     let snap = rt.audit.as_deref().unwrap().snapshot();
     assert_eq!(snap.len(), 1);
@@ -163,7 +171,7 @@ fn pure_actions_bypass_audit_entirely() {
     let ctx = rt.make_action_ctx();
     rt.state.app_set("count", json!(0));
     let list = json!([{ "set": { "$app.count": "$app.count + 1" } }]);
-    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    let out = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
     assert!(out.result.is_ok());
     // No IO capability consulted -> audit stays empty.
     assert!(rt.audit.as_deref().unwrap().is_empty());
@@ -219,7 +227,7 @@ fn open_url_without_network_is_denied_and_audited() {
     let rt = load(OP_NO_CAPS);
     let ctx = rt.make_action_ctx();
     let list = json!([{ "open_url": { "url": "\"https://example.com\"" } }]);
-    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    let out = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
 
     assert!(matches!(
         out.result,
@@ -239,7 +247,7 @@ fn open_url_with_network_declared_is_allowed() {
     let rt = load(OP_WITH_NETWORK);
     let ctx = rt.make_action_ctx();
     let list = json!([{ "open_url": { "url": "\"https://example.com\"" } }]);
-    let _ = execute_list_shared(&rt.actions, &list, &ctx);
+    let _ = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
     let snap = rt.audit.as_deref().unwrap().snapshot();
     assert_eq!(snap.len(), 1);
     assert_eq!(snap[0].action, "open_url");
@@ -253,7 +261,7 @@ fn share_without_network_is_denied_and_audited() {
     let rt = load(OP_NO_CAPS);
     let ctx = rt.make_action_ctx();
     let list = json!([{ "share": { "url": "\"https://example.com\"" } }]);
-    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    let out = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
 
     assert!(matches!(
         out.result,
@@ -278,7 +286,7 @@ fn focus_and_blur_are_registered_actions() {
         { "focus": { "node": "\"my-input\"" } },
         { "blur": { "node": "\"my-input\"" } },
     ]);
-    let out = execute_list_shared(&rt.actions, &list, &ctx);
+    let out = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
     assert!(out.result.is_ok(), "{:?}", out.result);
     // No IO capability consulted → audit stays empty.
     assert!(rt.audit.as_deref().unwrap().is_empty());
@@ -292,7 +300,7 @@ fn audit_log_shared_rc_reflects_runtime_activity() {
 
     let ctx = rt.make_action_ctx();
     let list = json!([{ "storage_set": { "k": "\"v\"" } }]);
-    let _ = execute_list_shared(&rt.actions, &list, &ctx);
+    let _ = execute_list_blocking_for_test(&rt.actions, &list, &ctx);
 
     assert_eq!(log.len(), 1);
     assert_eq!(log.snapshot()[0].verdict, Verdict::Denied);

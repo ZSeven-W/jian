@@ -111,14 +111,14 @@ impl ConfirmOverlay {
         }
     }
     fn dismiss(&self, id: u64) {
-        let active = self
-            .0
-            .borrow()
-            .active
-            .as_ref()
-            .is_some_and(|dialog| dialog.id == id);
-        if active {
-            self.resolve_active(false);
+        let mut state = self.0.borrow_mut();
+        if state.active.as_ref().is_some_and(|dialog| dialog.id == id) {
+            if let Some(mut dialog) = state.active.take() {
+                dialog.result = Some(false);
+                if let Some(waker) = dialog.waker.take() {
+                    waker.wake();
+                }
+            }
         }
     }
     fn dismiss_active(&self) {
@@ -238,12 +238,18 @@ mod tests {
         let (mut future, _) = overlay.present("Delete?", "This cannot be undone");
         let waker = futures::task::noop_waker();
         let mut context = Context::from_waker(&waker);
-        assert!(matches!(Pin::new(&mut future).poll(&mut context), Poll::Pending));
+        assert!(matches!(
+            Pin::new(&mut future).poll(&mut context),
+            Poll::Pending
+        ));
         assert!(overlay.handle_key("Enter"));
         assert!(futures::executor::block_on(future));
         let (future, dismiss) = overlay.present("Delete?", "Again");
         dismiss.dismiss();
         assert!(!futures::executor::block_on(future));
+        assert!(!overlay.is_active());
+        let (future, _) = overlay.present("Drop?", "Compensate");
+        drop(future);
         assert!(!overlay.is_active());
     }
 }

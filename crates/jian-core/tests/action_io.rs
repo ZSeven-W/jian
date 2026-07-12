@@ -7,7 +7,15 @@ use jian_core::action::services::{
     AsyncFeedback, ClipboardService, FeedbackLevel, FeedbackSink, NetworkClient, NullClipboard,
     NullNetworkClient, NullRouter, StorageBackend,
 };
-use jian_core::action::{default_registry, execute_list_shared, ActionContext};
+use jian_core::action::{default_registry, execute_list_async, ActionContext};
+fn execute_list_blocking_for_test(
+    reg: &std::rc::Rc<std::cell::RefCell<jian_core::action::ActionRegistry>>,
+    list: &serde_json::Value,
+    ctx: &ActionContext,
+) -> jian_core::action::ExecOutcome {
+    let registry = reg.borrow();
+    futures::executor::block_on(execute_list_async(&registry, list, ctx))
+}
 use jian_core::expression::ExpressionCache;
 use jian_core::signal::scheduler::Scheduler;
 use jian_core::state::StateGraph;
@@ -134,12 +142,12 @@ fn storage_set_and_clear() {
     );
     let reg = default_registry();
     let list = json!([{"storage_set": {"theme": "\"dark\""}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok(), "{:?}", out.result);
     assert_eq!(store.map.borrow().get("theme"), Some(&json!("dark")));
 
     let list = json!([{"storage_clear": {"key": "theme"}}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(store.map.borrow().get("theme").is_none());
 }
 
@@ -157,7 +165,7 @@ fn storage_denied_without_capability() {
     );
     let reg = default_registry();
     let list = json!([{"storage_set": {"x": "1"}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(matches!(
         out.result,
         Err(jian_core::action::error::ActionError::CapabilityDenied { .. })
@@ -179,7 +187,7 @@ fn toast_and_alert_record() {
         {"toast": "\"hello\""},
         {"alert": {"title": "\"Title\"", "message": "\"Body\""}}
     ]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert_eq!(fb.toasts.borrow()[0].0, "hello");
     assert_eq!(fb.alerts.borrow()[0], ("Title".into(), "Body".into()));
 }
@@ -203,7 +211,7 @@ fn confirm_branches_to_on_confirm() {
         "on_confirm": [{"set": {"$app.picked": "\"yes\""}}],
         "on_cancel":  [{"set": {"$app.picked": "\"no\""}}]
     }}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert_eq!(state.app_get("picked").unwrap().as_str(), Some("yes"));
 }
 
@@ -226,7 +234,7 @@ fn confirm_cancel_runs_on_cancel() {
         "on_confirm": [{"set": {"$app.picked": "\"yes\""}}],
         "on_cancel":  [{"set": {"$app.picked": "\"no\""}}]
     }}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert_eq!(state.app_get("picked").unwrap().as_str(), Some("no"));
 }
 
@@ -242,7 +250,7 @@ fn platform_stubs_warn() {
     );
     let reg = default_registry();
     let list = json!([{"share": {"url": "https://example.com"}}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok());
     assert!(!out.warnings.is_empty());
 }
@@ -265,7 +273,7 @@ fn call_null_provider_goes_to_on_error() {
         "args": ["1", "2"],
         "on_error": [{"set": {"$app.failed": "true"}}]
     }}]);
-    let out = execute_list_shared(&reg, &list, &ctx);
+    let out = execute_list_blocking_for_test(&reg, &list, &ctx);
     assert!(out.result.is_ok());
     assert_eq!(state.app_get("failed").unwrap().as_bool(), Some(true));
 }

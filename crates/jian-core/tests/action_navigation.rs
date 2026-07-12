@@ -3,7 +3,15 @@ use jian_core::action::capability::DummyCapabilityGate;
 use jian_core::action::services::{
     NullClipboard, NullFeedback, NullNetworkClient, NullStorageBackend, RouteState, Router,
 };
-use jian_core::action::{default_registry, execute_list_shared, ActionContext};
+use jian_core::action::{default_registry, execute_list_async, ActionContext};
+fn execute_list_blocking_for_test(
+    reg: &std::rc::Rc<std::cell::RefCell<jian_core::action::ActionRegistry>>,
+    list: &serde_json::Value,
+    ctx: &ActionContext,
+) -> jian_core::action::ExecOutcome {
+    let registry = reg.borrow();
+    futures::executor::block_on(execute_list_async(&registry, list, ctx))
+}
 use jian_core::expression::ExpressionCache;
 use jian_core::signal::scheduler::Scheduler;
 use jian_core::state::StateGraph;
@@ -76,7 +84,7 @@ fn push_literal_path() {
     let (_s, ctx) = setup(rec.clone());
     let reg = default_registry();
     let list = json!([{"push": "\"/detail/42\""}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert_eq!(rec.ops.borrow().as_slice(), ["push:/detail/42"]);
 }
 
@@ -89,7 +97,7 @@ fn push_with_template() {
     state.app_set("id", json!(99));
     let reg = default_registry();
     let list = json!([{"push": "`/detail/${$app.id}`"}]);
-    execute_list_shared(&reg, &list, &ctx);
+    execute_list_blocking_for_test(&reg, &list, &ctx);
     assert_eq!(rec.ops.borrow().as_slice(), ["push:/detail/99"]);
 }
 
@@ -100,7 +108,7 @@ fn pop_no_body() {
     });
     let (_s, ctx) = setup(rec.clone());
     let reg = default_registry();
-    execute_list_shared(&reg, &json!([{"pop": null}]), &ctx);
+    execute_list_blocking_for_test(&reg, &json!([{"pop": null}]), &ctx);
     assert_eq!(rec.ops.borrow().as_slice(), ["pop"]);
 }
 
@@ -111,7 +119,7 @@ fn reset_nav_string() {
     });
     let (_s, ctx) = setup(rec.clone());
     let reg = default_registry();
-    execute_list_shared(&reg, &json!([{"reset": "\"/\""}]), &ctx);
+    execute_list_blocking_for_test(&reg, &json!([{"reset": "\"/\""}]), &ctx);
     assert_eq!(rec.ops.borrow().as_slice(), ["reset:/"]);
 }
 
@@ -123,7 +131,7 @@ fn reset_scope_still_works() {
     let (state, ctx) = setup(rec.clone());
     state.app_set("x", json!(1));
     let reg = default_registry();
-    execute_list_shared(&reg, &json!([{"reset": "$app"}]), &ctx);
+    execute_list_blocking_for_test(&reg, &json!([{"reset": "$app"}]), &ctx);
     assert!(state.app_get("x").is_none());
     // Router should not have been called.
     assert!(rec.ops.borrow().is_empty());

@@ -20,7 +20,7 @@ pub mod value;
 pub use action_trait::{ActionChain, ActionFactory, ActionImpl, BoxedAction};
 pub use capability::{Capability, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate};
 pub use context::ActionContext;
-pub use executor::{execute_list, execute_list_shared, ExecOutcome};
+pub use executor::{execute_list_async, ExecOutcome};
 pub use registry::ActionRegistry;
 pub use task_queue::{TaskClock, TaskQueue};
 

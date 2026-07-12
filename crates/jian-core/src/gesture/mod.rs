@@ -14,7 +14,6 @@ pub mod recognizers;
 pub mod router;
 pub mod semantic;
 
-pub use dispatcher::dispatch_event;
 pub use focus::{collect_focus_chain, FocusChange, FocusEvent, FocusManager};
 pub use raw::find_raw_root;
 pub use router::PointerRouter;

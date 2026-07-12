@@ -46,26 +46,43 @@ pub fn canonical_url_key(source: &str, document_dir: &Path) -> Result<String, St
     Ok(normalized.to_string_lossy().into_owned())
 }
 
-#[cfg(unix)]
 pub fn read_confined_local(path: &Path, asset_root: &Path) -> Result<Vec<u8>, String> {
     use std::fs::OpenOptions;
     use std::io::Read;
+    #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     let root = asset_root
         .canonicalize()
         .map_err(|error| error.to_string())?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|error| error.to_string())?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW);
+    #[cfg(windows)]
+    let before_open = path.canonicalize().map_err(|error| error.to_string())?;
+    let file = options.open(path).map_err(|error| error.to_string())?;
+    #[cfg(target_os = "linux")]
     let opened = PathBuf::from(format!(
         "/proc/self/fd/{}",
         std::os::fd::AsRawFd::as_raw_fd(&file)
     ))
     .canonicalize()
-    .or_else(|_| path.canonicalize())
     .map_err(|error| error.to_string())?;
+    #[cfg(target_os = "macos")]
+    let opened = {
+        use std::os::fd::AsRawFd;
+        let mut buffer = [0i8; libc::PATH_MAX as usize];
+        let rc = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) };
+        if rc == -1 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let path = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) };
+        PathBuf::from(path.to_string_lossy().into_owned())
+    };
+    #[cfg(windows)]
+    let opened = before_open;
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    let opened = path.canonicalize().map_err(|error| error.to_string())?;
     if !opened.starts_with(&root) {
         return Err("image path escapes asset root".into());
     }
@@ -163,7 +180,7 @@ impl ImageStore {
                     ImageState::Pending | ImageState::Deferred | ImageState::Bytes
                 )
             {
-                if entry.state == ImageState::Pending {
+                if matches!(entry.state, ImageState::Pending | ImageState::Bytes) {
                     self.reserved = self.reserved.saturating_sub(entry.reservation);
                 }
                 entry.bytes = None;
@@ -254,21 +271,32 @@ impl ImageStore {
         }
     }
 
-    pub fn resolve(&mut self, key: &str, bytes: Vec<u8>) {
+    pub fn resolve(&mut self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
         let Some(entry) = self.entries.get_mut(key) else {
-            return;
+            return Ok(());
         };
         if entry.state != ImageState::Pending {
-            return;
+            return Ok(());
         }
         self.reserved = self.reserved.saturating_sub(entry.reservation);
         if bytes.len() > 64 * 1024 * 1024 {
             entry.state = ImageState::Failed;
+            entry.reservation = 0;
+            self.promote();
+            return Err("image response exceeds 64 MiB".into());
+        }
+        entry.reservation = bytes.len();
+        if self.reserved.saturating_add(entry.reservation) > self.reservation_budget {
+            entry.bytes = Some(bytes);
+            entry.state = ImageState::Deferred;
+            self.deferred.push_back(key.to_owned());
         } else {
+            self.reserved += entry.reservation;
             entry.bytes = Some(bytes);
             entry.state = ImageState::Bytes;
         }
         self.promote();
+        Ok(())
     }
 
     pub fn admit_inline(&mut self, key: &str, bytes: Vec<u8>) {
@@ -277,12 +305,19 @@ impl ImageStore {
             if entry.state == ImageState::Failed {
                 entry.bytes = Some(bytes);
                 entry.reservation = entry.bytes.as_ref().map_or(0, Vec::len);
-                entry.state = ImageState::Bytes;
+                if self.reserved.saturating_add(entry.reservation) <= self.reservation_budget {
+                    self.reserved += entry.reservation;
+                    entry.state = ImageState::Bytes;
+                } else {
+                    entry.state = ImageState::Deferred;
+                    self.deferred.push_back(key.to_owned());
+                }
             }
             return;
         }
         let reservation = bytes.len();
         let state = if self.reserved.saturating_add(reservation) <= self.reservation_budget {
+            self.reserved += reservation;
             ImageState::Bytes
         } else {
             ImageState::Deferred
@@ -305,7 +340,7 @@ impl ImageStore {
 
     pub fn fail(&mut self, key: &str, _reason: &str) {
         if let Some(entry) = self.entries.get_mut(key) {
-            if entry.state == ImageState::Pending {
+            if matches!(entry.state, ImageState::Pending | ImageState::Bytes) {
                 self.reserved = self.reserved.saturating_sub(entry.reservation);
             }
             entry.state = ImageState::Failed;
@@ -320,12 +355,12 @@ impl ImageStore {
                 continue;
             };
             if self.reserved.saturating_add(entry.reservation) <= self.reservation_budget {
-                if entry.inline {
-                    entry.state = ImageState::Bytes;
+                self.reserved += entry.reservation;
+                entry.state = if entry.bytes.is_some() {
+                    ImageState::Bytes
                 } else {
-                    self.reserved += entry.reservation;
-                    entry.state = ImageState::Pending;
-                }
+                    ImageState::Pending
+                };
             } else {
                 remaining.push_back(key);
             }
@@ -340,10 +375,16 @@ impl ImageStore {
             .ok_or_else(|| DecodeError("unknown image".into()))?;
         let bytes = entry.bytes.as_ref().map_or(0, Vec::len);
         if self.pinned.saturating_add(bytes) > self.pinned_budget {
+            if entry.state == ImageState::Bytes {
+                self.reserved = self.reserved.saturating_sub(entry.reservation);
+            }
             entry.state = ImageState::Failed;
             return Err(DecodeError("pinned image budget exceeded".into()));
         }
         self.pinned += bytes;
+        if entry.state == ImageState::Bytes {
+            self.reserved = self.reserved.saturating_sub(entry.reservation);
+        }
         entry.state = ImageState::Registered;
         entry.backend_generation = generation;
         Ok(())
@@ -356,10 +397,21 @@ impl ImageStore {
         self.backend_generation = generation;
         self.pinned = 0;
         self.releases.clear();
-        for entry in self.entries.values_mut() {
+        let keys: Vec<String> = self.entries.keys().cloned().collect();
+        for key in keys {
+            let entry = self
+                .entries
+                .get_mut(&key)
+                .expect("key collected from entries");
             if entry.state == ImageState::Registered {
                 entry.state = if entry.inline {
-                    ImageState::Bytes
+                    if self.reserved.saturating_add(entry.reservation) <= self.reservation_budget {
+                        self.reserved += entry.reservation;
+                        ImageState::Bytes
+                    } else {
+                        self.deferred.push_back(key.clone());
+                        ImageState::Deferred
+                    }
                 } else {
                     ImageState::Pending
                 };
@@ -379,7 +431,7 @@ impl ImageStore {
             return;
         }
         let entry = self.entries.remove(key).expect("entry still present");
-        if entry.state == ImageState::Pending {
+        if matches!(entry.state, ImageState::Pending | ImageState::Bytes) {
             self.reserved = self.reserved.saturating_sub(entry.reservation);
         }
         if entry.state == ImageState::Registered {

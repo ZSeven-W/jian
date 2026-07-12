@@ -3,10 +3,12 @@ use jian_core::action::services::{
     HttpRequest, HttpResponse, NetworkClient, ServiceError, StorageBackend,
 };
 use jian_core::expression::Expression;
+use jian_core::geometry::{Affine2, Rect, Size};
 use jian_core::gesture::{PointerEvent, PointerPhase};
 use jian_core::render::image_store::ImageResolver;
-use jian_core::render::CaptureBackend;
-use jian_core::render::{collect_draws_with_state, DrawOp, ImageSource};
+use jian_core::render::{
+    collect_draws_with_state, DecodeError, DrawOp, ImageSource, RenderBackend, ShadowSpec,
+};
 use jian_core::Runtime;
 use jian_ops_schema::document::PenDocument;
 use serde_json::json;
@@ -53,6 +55,48 @@ impl ImageResolver for Images {
     }
 }
 
+#[derive(Default)]
+struct RegisteredCapture {
+    images: std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
+    served: Vec<ImageSource>,
+}
+impl RenderBackend for RegisteredCapture {
+    type Surface = ();
+    fn new_surface(&mut self, _: Size) {}
+    fn begin_frame(&mut self, _: &mut (), _: u32) {}
+    fn end_frame(&mut self, _: &mut ()) {}
+    fn push_clip(&mut self, _: Rect) {}
+    fn push_transform(&mut self, _: &Affine2) {}
+    fn pop(&mut self) {}
+    fn push_layer(&mut self, _: Rect) {}
+    fn pop_layer(&mut self) {}
+    fn apply_blur(&mut self, _: f32) {}
+    fn apply_shadow(&mut self, _: &ShadowSpec) {}
+    fn draw(&mut self, op: &DrawOp) {
+        if let DrawOp::Image {
+            source: ImageSource::Url(key),
+            ..
+        } = op
+        {
+            if let Some(bytes) = self.images.get(key) {
+                self.served.push(ImageSource::Bytes(bytes.clone()));
+                return;
+            }
+        }
+        if let DrawOp::Image { source, .. } = op {
+            self.served.push(source.clone());
+        }
+    }
+    fn register_image(&mut self, key: &str, bytes: &[u8]) -> Result<(), DecodeError> {
+        self.images
+            .insert(key.to_owned(), std::sync::Arc::new(bytes.to_vec()));
+        Ok(())
+    }
+    fn release_image(&mut self, key: &str) {
+        self.images.remove(key);
+    }
+}
+
 #[test]
 fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
     let source = include_str!("fixtures/runtime_substrate.json");
@@ -91,7 +135,7 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
 
     runtime.pump(2);
     runtime.pump(3);
-    let mut backend = CaptureBackend::new();
+    let mut backend = RegisteredCapture::default();
     runtime.prepare_frame(&mut backend, 0);
     assert_eq!(
         runtime
@@ -99,15 +143,16 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
             .state("https://example.invalid/hero.png"),
         Some(jian_core::render::image_store::ImageState::Registered)
     );
-    assert!(collect_draws_with_state(
+    let registered_draws = collect_draws_with_state(
         runtime.document.as_ref().unwrap(),
         &runtime.layout,
-        &runtime.state
-    )
-    .iter()
-    .any(
-        |op| matches!(op, DrawOp::Image { source: ImageSource::Url(key), .. }
-            if key == "https://example.invalid/hero.png")
+        &runtime.state,
+    );
+    for draw in &registered_draws {
+        backend.draw(draw);
+    }
+    assert!(backend.served.iter().any(
+        |source| matches!(source, ImageSource::Bytes(bytes) if bytes.as_slice() == [1, 2, 3])
     ));
 
     let button = runtime
@@ -144,19 +189,29 @@ fn reload_merges_page_and_self_per_page_key_and_replaces_vars_from_staged_doc() 
         "variables":{"accent":{"type":"string","value":"old-default"}},
         "pages":[{"id":"main","name":"Main","state":{"count":{"type":"int","default":1}},
             "children":[{"type":"rectangle","id":"card","width":10,"height":10,
-                "state":{"label":{"type":"string","default":"old"}}}]}], "children":[]
+                "state":{"label":{"type":"string","default":"old"}}}]},
+            {"id":"other","name":"Other","state":{"count":{"type":"string","default":"old-other"}},
+             "children":[{"type":"rectangle","id":"card2","width":10,"height":10,
+                "state":{"label":{"type":"string","default":"old-2"}}}]}], "children":[]
     }))
     .unwrap();
     let mut runtime = Runtime::new_from_document(before).unwrap();
     runtime.state.page_set("main", "count", json!(7));
     runtime.state.self_set("main", "card", "label", json!(99));
     runtime.state.vars_set("accent", json!("live-edit"));
+    runtime.state.page_set("other", "count", json!("bad"));
+    runtime
+        .state
+        .self_set("other", "card2", "label", json!(false));
     let after: PenDocument = serde_json::from_value(json!({
         "version":"1.2", "responsive":true,
         "variables":{"accent":{"type":"string","value":"new-default"}},
         "pages":[{"id":"main","name":"Main","state":{"count":{"type":"int","default":2}},
             "children":[{"type":"rectangle","id":"card","width":10,"height":10,
-                "state":{"label":{"type":"string","default":"new"}}}]}], "children":[]
+                "state":{"label":{"type":"string","default":"new"}}}]},
+            {"id":"other","name":"Other","state":{"count":{"type":"int","default":8}},
+             "children":[{"type":"rectangle","id":"card2","width":10,"height":10,
+                "state":{"label":{"type":"string","default":"new-2"}}}]}], "children":[]
     }))
     .unwrap();
     runtime.replace_document(after).unwrap();
@@ -176,8 +231,75 @@ fn reload_merges_page_and_self_per_page_key_and_replaces_vars_from_staged_doc() 
         runtime.state.vars_get("accent").unwrap().as_str(),
         Some("new-default")
     );
+    assert_eq!(
+        runtime.state.page_get("other", "count").unwrap().as_i64(),
+        Some(8)
+    );
+    assert_eq!(
+        runtime
+            .state
+            .self_get("other", "card2", "label")
+            .unwrap()
+            .as_str(),
+        Some("new-2")
+    );
     assert!(runtime
         .load_warnings()
         .iter()
         .any(|warning| warning.contains("$self[main/card]")));
+}
+
+#[test]
+fn relative_image_draw_uses_canonical_key_and_non_image_urls_are_not_admitted() {
+    let dir = tempfile::tempdir().unwrap();
+    let image_path = dir.path().join("hero.bin");
+    std::fs::write(&image_path, [1, 2, 3]).unwrap();
+    let schema: PenDocument = serde_json::from_value(json!({
+        "version":"1.2", "responsive":true,
+        "app":{"name":"x","version":"1","id":"x","capabilities":["network"]},
+        "children":[{"type":"image","id":"hero","src":"hero.bin","width":20,"height":20},
+          {"type":"rectangle","id":"button","width":20,"height":20,
+           "events":{"onTap":[{"fetch":{"url":"'https://api.example/x'"}}]}}]
+    }))
+    .unwrap();
+    let mut runtime = Runtime::new_from_document(schema).unwrap();
+    runtime.set_image_document_dir(dir.path());
+    runtime.build_layout((100.0, 100.0)).unwrap();
+    let canonical = image_path
+        .canonicalize()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let draws = collect_draws_with_state(
+        runtime.document.as_ref().unwrap(),
+        &runtime.layout,
+        &runtime.state,
+    );
+    assert!(draws.iter().any(|draw| matches!(draw, DrawOp::Image { source: ImageSource::Url(key), .. } if key == &canonical)));
+    assert!(runtime.state.image_key("'https://api.example/x'").is_none());
+}
+
+struct OversizedImages;
+#[async_trait(?Send)]
+impl ImageResolver for OversizedImages {
+    async fn resolve(&self, _: &str) -> Result<Vec<u8>, String> {
+        Ok(vec![0; 64 * 1024 * 1024 + 1])
+    }
+}
+
+#[test]
+fn oversized_resolver_completion_warns_through_runtime_pump() {
+    let schema: PenDocument = serde_json::from_value(json!({
+        "version":"1.2", "responsive":true,
+        "app":{"name":"x","version":"1","id":"x","capabilities":["network"]},
+        "children":[{"type":"image","id":"hero","src":"https://example.invalid/large.png","width":1,"height":1}]
+    })).unwrap();
+    let mut runtime = Runtime::new_from_document(schema).unwrap();
+    runtime.image_resolver = Rc::new(OversizedImages);
+    runtime.pump(1);
+    runtime.pump(2);
+    assert!(runtime
+        .load_warnings()
+        .iter()
+        .any(|warning| warning.contains("64 MiB")));
 }
