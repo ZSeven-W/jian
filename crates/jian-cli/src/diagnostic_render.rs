@@ -27,6 +27,7 @@
 //! alone.
 
 use jian_ops_schema::error::LoadWarning;
+use jian_ops_schema::screen_projection::ProjectionWarning;
 use std::io::IsTerminal;
 
 const C_RESET: &str = "\x1b[0m";
@@ -127,6 +128,13 @@ pub fn render_warning(
 ) {
     let (severity, message, span) = describe(source, w);
     push_diagnostic(buf, source, path_label, severity, &message, span, style);
+}
+
+/// Convert a screen-projection warning into the common diagnostic shape.
+/// Projection warnings describe synthesized page state rather than a single
+/// authored token, so callers render them without a source span.
+pub fn render_projection_warning(warning: &ProjectionWarning) -> (Severity, String) {
+    (Severity::Warning, warning.to_string())
 }
 
 fn describe(source: &str, w: &LoadWarning) -> (Severity, String, Option<Span>) {

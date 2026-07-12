@@ -6,11 +6,14 @@
 //! - `2` — parse / validation error (unsupported version, malformed
 //!   JSON, …). Caller-visible `anyhow::Error`.
 
-use crate::diagnostic_render::{push_diagnostic, render_warnings, Severity, Span, Style};
+use crate::diagnostic_render::{
+    push_diagnostic, render_projection_warning, render_warnings, Severity, Span, Style,
+};
 use crate::CheckArgs;
 use anyhow::{anyhow, Context, Result};
 use jian_ops_schema::document::PenDocument;
 use jian_ops_schema::error::LoadWarning;
+use jian_ops_schema::screen_projection::ProjectionWarning;
 use std::fs;
 use std::process::ExitCode;
 
@@ -53,22 +56,28 @@ pub fn run(args: CheckArgs) -> Result<ExitCode> {
         return Ok(ExitCode::from(2));
     }
 
+    let (_, projection_warnings) =
+        jian_ops_schema::screen_projection::project_screens(&loaded.value);
+
     if args.json {
-        print_json(&loaded.warnings);
+        print_json(&loaded.warnings, &projection_warnings);
     } else {
         print_human(
             &src,
             &args.path.display().to_string(),
             &loaded.warnings,
+            &projection_warnings,
             args.quiet,
         );
     }
 
-    Ok(if loaded.warnings.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    })
+    Ok(
+        if loaded.warnings.is_empty() && projection_warnings.is_empty() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        },
+    )
 }
 
 /// Post-deserialisation semantic checks. These express invariants the
@@ -86,8 +95,14 @@ fn semantic_check(doc: &PenDocument) -> Result<()> {
     Ok(())
 }
 
-fn print_human(source: &str, path: &str, warnings: &[LoadWarning], quiet: bool) {
-    if warnings.is_empty() {
+fn print_human(
+    source: &str,
+    path: &str,
+    warnings: &[LoadWarning],
+    projection_warnings: &[ProjectionWarning],
+    quiet: bool,
+) {
+    if warnings.is_empty() && projection_warnings.is_empty() {
         if !quiet {
             println!("jian check: {} — OK, no diagnostics", path);
         }
@@ -99,17 +114,42 @@ fn print_human(source: &str, path: &str, warnings: &[LoadWarning], quiet: bool) 
     println!(
         "jian check: {} — {} diagnostic{}",
         path,
-        warnings.len(),
-        if warnings.len() == 1 { "" } else { "s" }
+        warnings.len() + projection_warnings.len(),
+        if warnings.len() + projection_warnings.len() == 1 {
+            ""
+        } else {
+            "s"
+        }
     );
     let mut buf = String::new();
     render_warnings(&mut buf, source, path, warnings, Style::auto());
+    for warning in projection_warnings {
+        let (severity, message) = render_projection_warning(warning);
+        push_diagnostic(
+            &mut buf,
+            source,
+            path,
+            severity,
+            &message,
+            Some(Span::NONE),
+            Style::auto(),
+        );
+    }
     print!("{}", buf);
 }
 
-fn print_json(warnings: &[LoadWarning]) {
+fn print_json(warnings: &[LoadWarning], projection_warnings: &[ProjectionWarning]) {
     for w in warnings {
         let (kind, detail) = warning_tuple(w);
+        let line = serde_json::json!({
+            "severity": "warning",
+            "kind": kind,
+            "detail": detail,
+        });
+        println!("{}", line);
+    }
+    for warning in projection_warnings {
+        let (kind, detail) = projection_warning_tuple(warning);
         let line = serde_json::json!({
             "severity": "warning",
             "kind": kind,
@@ -155,6 +195,55 @@ fn warning_tuple(w: &LoadWarning) -> (&'static str, serde_json::Value) {
         LoadWarning::ViewportWrite { path } => (
             "viewport_write",
             serde_json::json!({ "path": path, "message": "$viewport is read-only" }),
+        ),
+    }
+}
+
+fn projection_warning_tuple(warning: &ProjectionWarning) -> (&'static str, serde_json::Value) {
+    match warning {
+        ProjectionWarning::MarkerIgnored { node_id, reason } => (
+            "marker_ignored",
+            serde_json::json!({ "nodeId": node_id, "reason": reason }),
+        ),
+        ProjectionWarning::DuplicatePath { path, node_id } => (
+            "duplicate_path",
+            serde_json::json!({ "path": path, "nodeId": node_id }),
+        ),
+        ProjectionWarning::NoEntryScreen { fallback_node_id } => (
+            "no_entry_screen",
+            serde_json::json!({ "fallbackNodeId": fallback_node_id }),
+        ),
+        ProjectionWarning::AuthoredRoutesIgnored => (
+            "authored_routes_ignored",
+            serde_json::json!({ "message": warning.to_string() }),
+        ),
+        ProjectionWarning::InvalidRangeStripped { node_id } => (
+            "invalid_range_stripped",
+            serde_json::json!({ "nodeId": node_id }),
+        ),
+        ProjectionWarning::DuplicateDefault { path, node_id } => (
+            "duplicate_default",
+            serde_json::json!({ "path": path, "nodeId": node_id }),
+        ),
+        ProjectionWarning::PromotedDefault { path, page_id } => (
+            "promoted_default",
+            serde_json::json!({ "path": path, "pageId": page_id }),
+        ),
+        ProjectionWarning::InteriorOverlap {
+            path,
+            first,
+            second,
+        } => (
+            "interior_overlap",
+            serde_json::json!({ "path": path, "first": first, "second": second }),
+        ),
+        ProjectionWarning::BreakpointWithoutScreen { node_id } => (
+            "breakpoint_without_screen",
+            serde_json::json!({ "nodeId": node_id }),
+        ),
+        ProjectionWarning::PageIdRekeyed { from, to } => (
+            "page_id_rekeyed",
+            serde_json::json!({ "from": from, "to": to }),
         ),
     }
 }
