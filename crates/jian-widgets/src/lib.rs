@@ -19,13 +19,11 @@ pub use painter::{ImageAdjustments, ImageDrawMode, Painter, TextLayout, TextMetr
 pub use text_box::{HorizontalAlign, TextBox, VerticalAlign};
 pub use tokens::{Density, Tokens};
 
-/// The baseline `y` that vertically centers `font_size` text in the box
-/// `rect`. **`Painter::draw_text` positions text by its BASELINE** — every host
-/// backend (op-host-native, op-host-web) draws at `origin.y` directly (Skia
-/// `draw_str` is baseline-relative), so centering is `center + ~cap-height/2`,
-/// not the `(height - font_size)/2` top-left form. Components MUST route every
-/// label's `y` through this so jian text lines up with the host chrome instead
-/// of riding ~`font_size` too high.
+/// Legacy baseline-like helper retained temporarily for downstream callers.
+///
+/// `Painter::draw_text` now has a top-left contract. New and migrated controls
+/// must use [`TextBox`] so host font metrics determine the visible ink center.
+#[deprecated(note = "use TextBox with VerticalAlign::Center")]
 pub fn centered_text_baseline_y(rect: Rect, font_size: f32) -> f32 {
     rect.origin.y + rect.size.y / 2.0 + font_size * 0.35
 }

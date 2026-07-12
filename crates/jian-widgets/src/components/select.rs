@@ -1,4 +1,4 @@
-use crate::{Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 pub const MAX_VISIBLE_ROWS: usize = 8;
 const FONT_FAMILY: &str = "Inter";
@@ -178,24 +178,29 @@ impl Select<'_> {
             };
             // shadcn SelectItem indents the label past a left-aligned check
             // column (TS `pl-8`), so selected + unselected rows align.
-            let origin = Point2D::new(
-                row_rect.origin.x + 26.0,
-                crate::centered_text_baseline_y(row_rect, font_size),
-            );
-            let layout = TextLayout::single_run(
-                item.label,
-                FONT_FAMILY,
-                font_size,
-                color.to_jian(),
-                Point2D::new(0.0, 0.0),
-            );
-            p.draw_text(&layout, origin);
+            TextBox::new(item.label)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(font_size)
+                .with_color(color)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(
+                    p,
+                    Rect::xywh(
+                        row_rect.origin.x + 26.0,
+                        row_rect.origin.y,
+                        (row_rect.size.x - 34.0).max(0.0),
+                        row_rect.size.y,
+                    ),
+                );
 
             if item.selected {
                 // Left-aligned check (shadcn), in the indent reserved above.
                 p.stroke_svg_path(
                     CHECK_D,
-                    Point2D::new(row_rect.origin.x + 6.0, row_rect.origin.y + 7.0),
+                    Point2D::new(
+                        row_rect.origin.x + 6.0,
+                        row_rect.origin.y + (row_rect.size.y - 14.0) / 2.0,
+                    ),
                     14.0,
                     t.primary,
                     1.75,
@@ -455,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn paint_places_first_row_text_baseline_inside_popup_clip() {
+    fn paint_places_first_row_top_left_origin_inside_popup_clip() {
         let t = Tokens::dark();
         let anchor = Rect::xywh(20.0, 20.0, 100.0, 20.0);
         let viewport = Rect::xywh(0.0, 0.0, 300.0, 400.0);
@@ -478,10 +483,12 @@ mod tests {
         select.paint(&mut p, anchor, viewport, &t);
 
         let (_, first_origin, _) = p.texts().next().expect("first row text");
+        let expected = popup.origin.y + (t.density.row_height() - t.density.font_size()) / 2.0;
         assert!(
-            first_origin.y >= popup.origin.y + t.density.font_size(),
-            "first-row text baseline should leave enough ascent inside the popup clip: baseline={}, popup_top={}, font_size={}",
+            (first_origin.y - expected).abs() <= 0.01,
+            "first-row top-left text origin should be centered inside the popup row: origin={}, expected={}, popup_top={}, font_size={}",
             first_origin.y,
+            expected,
             popup.origin.y,
             t.density.font_size()
         );
