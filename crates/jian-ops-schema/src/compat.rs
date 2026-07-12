@@ -103,6 +103,11 @@ const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
     "state",
     "lifecycle",
     "logicModules",
+    // Both are real `PenDocument` fields (`design_md` / `conversion`); they
+    // were missing from this list, so every document carrying a design brief
+    // warned "UnknownField: designMd" on open.
+    "designMd",
+    "conversion",
 ];
 
 #[cfg(test)]
