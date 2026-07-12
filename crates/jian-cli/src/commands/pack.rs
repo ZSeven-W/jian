@@ -104,7 +104,11 @@ pub fn run(args: PackArgs) -> Result<ExitCode> {
     // probe runtime so the rect set, the seeded state, and the
     // compiled-expression cache agree on which document was hashed —
     // walking the schema twice would race a future loader change.
-    let aot_payload: Option<AotPayload> = if args.aot {
+    let skip_responsive_aot = args.aot && loaded.value.is_responsive();
+    if skip_responsive_aot {
+        eprintln!("jian pack: warning: responsive documents skip AOT stages");
+    }
+    let aot_payload: Option<AotPayload> = if args.aot && !skip_responsive_aot {
         let viewport = parse_viewport(&args.aot_viewport)?;
         let (layout_snap, state_snap, exprs_snap) = compute_aot_payload(&loaded.value, viewport)
             .context(
