@@ -329,8 +329,8 @@ fn apply_bindings(
         let (value, _warns) = compiled.eval(state, None, node_id.as_deref());
         match prop.as_str() {
             "content" => {
-                if let Some(s) = value.as_str() {
-                    obj.insert("content".into(), Value::String(s.to_owned()));
+                if let Some(projected) = bound_scalar_to_string(&value) {
+                    obj.insert("content".into(), Value::String(projected));
                 }
             }
             "visible" => {
@@ -380,7 +380,7 @@ fn apply_bindings(
             // way an author-set placeholder/seed isn't silently
             // wiped by a path that hasn't been seeded yet.
             "bind:value" => {
-                if let Some(projected) = bind_value_to_string(&value) {
+                if let Some(projected) = bound_scalar_to_string(&value) {
                     obj.insert("value".into(), Value::String(projected));
                 }
             }
@@ -397,13 +397,13 @@ fn number_from_runtime(v: &crate::value::RuntimeValue) -> Option<f64> {
     v.as_i64().map(|i| i as f64)
 }
 
-/// Stringify a bound runtime value for an input's `value` field.
+/// Stringify a bound runtime value for textual `content` / `value` fields.
 /// Strings come through unchanged; numbers / bools take their
 /// natural display form; object / array values stringify to empty
 /// so a misuse doesn't paint stale text. Null returns `None` —
 /// the caller leaves the existing `value` alone, preserving any
 /// static schema seed when the bound path hasn't been initialised.
-fn bind_value_to_string(v: &crate::value::RuntimeValue) -> Option<String> {
+fn bound_scalar_to_string(v: &crate::value::RuntimeValue) -> Option<String> {
     if v.is_null() {
         return None;
     }

@@ -59,6 +59,14 @@ impl Runtime {
         self.last_variant_build_count
     }
 
+    /// Debug-only fault injection for the M1 transactional-swap acceptance
+    /// test. Release builds do not expose or branch on this seam.
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn inject_staged_variant_build_failure(&self) {
+        self.fail_next_variant_build.set(true);
+    }
+
     pub fn switch_variant(&mut self, target_page_id: &str) -> CoreResult<bool> {
         if matches!(self.swap_state, SwapState::Idle)
             && self.active_variant_page_id.as_deref() == Some(target_page_id)
@@ -119,6 +127,12 @@ impl Runtime {
             .and_then(|pages| pages.iter().find(|page| page.id == target_page_id))
             .cloned()
             .ok_or_else(|| CoreError::Layout(format!("unknown variant page `{target_page_id}`")))?;
+        #[cfg(debug_assertions)]
+        if self.fail_next_variant_build.replace(false) {
+            return Err(CoreError::Layout(
+                "injected staged variant build failure".into(),
+            ));
+        }
         let mut schema: PenDocument = source.clone();
         schema.pages = Some(vec![page]);
 

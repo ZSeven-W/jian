@@ -242,6 +242,8 @@ pub struct Runtime {
     pub logic: Rc<dyn crate::logic::LogicProvider>,
     #[cfg(test)]
     fail_next_loader: bool,
+    #[cfg(debug_assertions)]
+    fail_next_variant_build: Cell<bool>,
 }
 
 impl Runtime {
@@ -310,6 +312,8 @@ impl Runtime {
             logic: Rc::new(crate::logic::NullLogicProvider),
             #[cfg(test)]
             fail_next_loader: false,
+            #[cfg(debug_assertions)]
+            fail_next_variant_build: Cell::new(false),
         };
         runtime.state.set_viewport(800.0, 600.0, 1.0);
         runtime
@@ -429,6 +433,8 @@ impl Runtime {
             logic: Rc::new(crate::logic::NullLogicProvider),
             #[cfg(test)]
             fail_next_loader: false,
+            #[cfg(debug_assertions)]
+            fail_next_variant_build: Cell::new(false),
         };
         runtime.widget_states.set_page_key(active_page_key);
         runtime.state.set_viewport(800.0, 600.0, 1.0);
@@ -728,7 +734,9 @@ impl Runtime {
                 }
             }
             for page_key in &page_keys {
-                let page_schema = page_declarations.get(page_key).unwrap_or(&empty_page_schema);
+                let page_schema = page_declarations
+                    .get(page_key)
+                    .unwrap_or(&empty_page_schema);
                 let staged: BTreeMap<String, serde_json::Value> = page_schema
                     .iter()
                     .map(|(name, entry)| {

@@ -29,6 +29,23 @@ const WARNING_OP: &str = r##"{
 
 const MALFORMED_OP: &str = r##"{ "formatVersion": "1.0", "version": " }"##;
 
+const PROJECTION_WARNINGS_OP: &str = r##"{
+  "formatVersion": "1.2",
+  "version": "1.2",
+  "responsive": true,
+  "children": [
+    {"type":"frame","id":"orphan","breakpoint":{"minWidth":0}},
+    {"type":"frame","id":"default","screen":"/"},
+    {"type":"frame","id":"duplicate-default","screen":"/"},
+    {"type":"frame","id":"invalid","screen":"/","breakpoint":{"minWidth":500,"maxWidth":480}},
+    {"type":"frame","id":"overlap-a","screen":"/","breakpoint":{"minWidth":0,"maxWidth":300}},
+    {"type":"frame","id":"overlap-b","screen":"/","breakpoint":{"minWidth":200,"maxWidth":400}},
+    {"type":"frame","id":"promoted","screen":"/promoted","breakpoint":{"minWidth":0,"maxWidth":480}},
+    {"type":"frame","id":"same","screen":"/id-a"},
+    {"type":"frame","id":"same","screen":"/id-b"}
+  ]
+}"##;
+
 fn write_tmp(dir: &TempDir, name: &str, body: &str) -> std::path::PathBuf {
     let p = dir.path().join(name);
     fs::write(&p, body).unwrap();
@@ -195,6 +212,55 @@ fn check_json_emits_ndjson_per_warning() {
     assert_eq!(lines.len(), 1);
     let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(parsed["kind"], "unknown_field");
+}
+
+#[test]
+fn check_prints_all_projection_warning_kinds_in_human_and_json_modes() {
+    let dir = TempDir::new().unwrap();
+    let path = write_tmp(&dir, "projection-warnings.op", PROJECTION_WARNINGS_OP);
+
+    let human = jian_cmd()
+        .args(["check", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(human.status.code(), Some(1));
+    let human = String::from_utf8_lossy(&human.stdout);
+    for message in [
+        "invalid breakpoint on `invalid` stripped",
+        "duplicate default for `/`",
+        "variant `promoted@0-480` promoted to default for `/promoted`",
+        "overlap on `/`",
+        "page id `same` re-keyed to `same~2`",
+        "breakpoint on `orphan` ignored without a screen path",
+    ] {
+        assert!(
+            human.contains(message),
+            "missing projection warning {message:?} in human output:\n{human}"
+        );
+    }
+
+    let json = jian_cmd()
+        .args(["check", "--json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(json.status.code(), Some(1));
+    let values: Vec<serde_json::Value> = String::from_utf8_lossy(&json.stdout)
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for kind in [
+        "invalid_range_stripped",
+        "duplicate_default",
+        "promoted_default",
+        "interior_overlap",
+        "page_id_rekeyed",
+        "breakpoint_without_screen",
+    ] {
+        assert!(
+            values.iter().any(|value| value["kind"] == kind),
+            "missing projection warning kind {kind:?} in JSON output: {values:#?}"
+        );
+    }
 }
 
 #[test]
@@ -667,6 +733,102 @@ const AOT_OP_FIXTURE: &str = r##"{
     }
   ]
 }"##;
+
+const RESPONSIVE_AOT_OP_FIXTURE: &str = r##"{
+  "formatVersion": "1.2",
+  "version": "1.2",
+  "responsive": true,
+  "state": { "count": { "type": "int", "default": 1 } },
+  "children": [
+    { "type": "frame", "id": "desktop", "screen": "/", "width": 800, "height": 600,
+      "children": [
+        { "type": "text", "id": "label", "content": "${$app.count}",
+          "bindings": { "content": "$app.count" } }
+      ]
+    },
+    { "type": "frame", "id": "mobile", "screen": "/", "width": 320, "height": 600,
+      "breakpoint": { "maxWidth": 480 } }
+  ]
+}"##;
+
+#[test]
+fn pack_responsive_document_skips_the_coupled_aot_payload_with_one_warning() {
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "responsive.op", RESPONSIVE_AOT_OP_FIXTURE);
+    let packed = dir.path().join("responsive.op.pack");
+
+    let output = jian_cmd()
+        .args([
+            "pack",
+            "--aot",
+            "--aot-viewport",
+            "320x600",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .collect::<Vec<_>>(),
+        ["jian pack: warning: responsive documents skip AOT stages"]
+    );
+
+    let extracted = dir.path().join("extracted");
+    jian_cmd()
+        .args([
+            "unpack",
+            packed.to_str().unwrap(),
+            extracted.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(extracted.join("manifest.json")).unwrap()).unwrap();
+    assert!(manifest.get("aot").is_none());
+    for entry in [
+        "aot/initial_layout.bin",
+        "aot/default_state.bin",
+        "aot/expressions.bin",
+    ] {
+        assert!(
+            !extracted.join(entry).exists(),
+            "unexpected AOT entry {entry}"
+        );
+        assert!(
+            !manifest["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == entry),
+            "manifest listed skipped AOT entry {entry}"
+        );
+    }
+}
+
+#[test]
+fn pack_legacy_aot_bytes_match_the_pre_responsive_skip_snapshot() {
+    let dir = TempDir::new().unwrap();
+    let src = write_tmp(&dir, "legacy.op", AOT_OP_FIXTURE);
+    let packed = dir.path().join("legacy.op.pack");
+    jian_cmd()
+        .args([
+            "pack",
+            "--aot",
+            "--aot-viewport",
+            "800x600",
+            src.to_str().unwrap(),
+            packed.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        blake3::hash(&fs::read(packed).unwrap()).to_hex().as_str(),
+        "6c2861eecf307e075b27b83778ce5d615fe3fe587ba633efe0e062b2891340c9"
+    );
+}
 
 #[test]
 fn pack_aot_writes_initial_layout_bin_and_manifest_records_it() {
