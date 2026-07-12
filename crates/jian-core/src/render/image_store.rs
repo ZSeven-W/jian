@@ -1,6 +1,8 @@
 use super::{DecodeError, RenderBackend};
 use std::collections::{BTreeMap, VecDeque};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(any(unix, windows))]
+use std::path::PathBuf;
 
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
@@ -46,6 +48,16 @@ pub fn canonical_url_key(source: &str, document_dir: &Path) -> Result<String, St
     Ok(normalized.to_string_lossy().into_owned())
 }
 
+/// Read a local asset with containment enforcement.
+///
+/// Unsupported on targets without a filesystem (wasm): callers there use
+/// host-provided bytes, so a local read is always a programming error.
+#[cfg(not(any(unix, windows)))]
+pub fn read_confined_local(_path: &Path, _asset_root: &Path) -> Result<Vec<u8>, String> {
+    Err("local image paths are unsupported on this target".into())
+}
+
+#[cfg(any(unix, windows))]
 pub fn read_confined_local(path: &Path, asset_root: &Path) -> Result<Vec<u8>, String> {
     use std::fs::OpenOptions;
     use std::io::Read;

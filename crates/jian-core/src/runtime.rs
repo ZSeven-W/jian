@@ -717,7 +717,18 @@ impl Runtime {
         if conform_reload {
             self.state.replace_app(&merged_state);
             self.state.replace_vars(&staged_state.vars_snapshot());
-            for (page_key, page_schema) in &page_declarations {
+            // Union of newly declared keys and RETAINED live keys: a page
+            // whose `state` declaration disappeared must still be merged —
+            // against an empty declaration, which prunes its stale fields.
+            let empty_page_schema = jian_ops_schema::state::StateSchema::default();
+            let mut page_keys: Vec<String> = page_declarations.keys().cloned().collect();
+            for key in self.state.page_keys() {
+                if !page_declarations.contains_key(&key) {
+                    page_keys.push(key);
+                }
+            }
+            for page_key in &page_keys {
+                let page_schema = page_declarations.get(page_key).unwrap_or(&empty_page_schema);
                 let staged: BTreeMap<String, serde_json::Value> = page_schema
                     .iter()
                     .map(|(name, entry)| {
@@ -739,7 +750,17 @@ impl Runtime {
                         .map(|warning| format!("$page[{page_key}]: {warning}")),
                 );
             }
-            for ((page_key, node_id), declared) in &self_declarations {
+            let empty_self_schema = jian_ops_schema::state::StateSchema::default();
+            let mut self_keys: Vec<(String, String)> = self_declarations.keys().cloned().collect();
+            for key in self.state.self_keys() {
+                if !self_declarations.contains_key(&key) {
+                    self_keys.push(key);
+                }
+            }
+            for (page_key, node_id) in &self_keys {
+                let declared = self_declarations
+                    .get(&(page_key.clone(), node_id.clone()))
+                    .unwrap_or(&empty_self_schema);
                 let staged: BTreeMap<String, serde_json::Value> = declared
                     .iter()
                     .map(|(name, entry)| {
