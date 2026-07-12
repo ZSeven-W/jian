@@ -4,7 +4,9 @@ use jian_core::action::services::{
 };
 use jian_core::expression::Expression;
 use jian_core::gesture::{PointerEvent, PointerPhase};
+use jian_core::render::image_store::ImageResolver;
 use jian_core::render::CaptureBackend;
+use jian_core::render::{collect_draws_with_state, DrawOp, ImageSource};
 use jian_core::Runtime;
 use jian_ops_schema::document::PenDocument;
 use serde_json::json;
@@ -42,6 +44,15 @@ impl NetworkClient for Network {
     }
 }
 
+struct Images;
+#[async_trait(?Send)]
+impl ImageResolver for Images {
+    async fn resolve(&self, url: &str) -> Result<Vec<u8>, String> {
+        assert_eq!(url, "https://example.invalid/hero.png");
+        Ok(vec![1, 2, 3])
+    }
+}
+
 #[test]
 fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
     let source = include_str!("fixtures/runtime_substrate.json");
@@ -49,7 +60,17 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
     let mut runtime = Runtime::new_from_document(schema).unwrap();
     runtime.storage = Rc::new(Storage);
     runtime.network = Rc::new(Network);
+    runtime.image_resolver = Rc::new(Images);
     runtime.build_layout((200.0, 160.0)).unwrap();
+
+    let placeholder = collect_draws_with_state(
+        runtime.document.as_ref().unwrap(),
+        &runtime.layout,
+        &runtime.state,
+    );
+    assert!(placeholder.iter().any(|op| matches!(op, DrawOp::Image {
+        source: ImageSource::Url(key), ..
+    } if key == "https://example.invalid/hero.png")));
 
     let storage = Expression::compile("$storage.theme").unwrap();
     assert!(storage.eval(&runtime.state, None, None).0.is_null());
@@ -68,12 +89,8 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
         Some(320.0)
     );
 
-    runtime
-        .image_store
-        .admit_resolver("https://example.invalid/hero.png", 3);
-    runtime
-        .image_store
-        .resolve("https://example.invalid/hero.png", vec![1, 2, 3]);
+    runtime.pump(2);
+    runtime.pump(3);
     let mut backend = CaptureBackend::new();
     runtime.prepare_frame(&mut backend, 0);
     assert_eq!(
@@ -82,6 +99,16 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
             .state("https://example.invalid/hero.png"),
         Some(jian_core::render::image_store::ImageState::Registered)
     );
+    assert!(collect_draws_with_state(
+        runtime.document.as_ref().unwrap(),
+        &runtime.layout,
+        &runtime.state
+    )
+    .iter()
+    .any(
+        |op| matches!(op, DrawOp::Image { source: ImageSource::Url(key), .. }
+            if key == "https://example.invalid/hero.png")
+    ));
 
     let button = runtime
         .document
@@ -94,7 +121,7 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
     let point = jian_core::geometry::point(rect.min_x() + 2.0, rect.min_y() + 2.0);
     runtime.dispatch_pointer(PointerEvent::simple(1, PointerPhase::Down, point));
     runtime.dispatch_pointer(PointerEvent::simple(1, PointerPhase::Up, point));
-    runtime.pump(2);
+    runtime.pump(4);
     assert_eq!(
         runtime.state.app_get("result").unwrap().as_str(),
         Some("fetched")
@@ -108,4 +135,49 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
     .unwrap();
     runtime.replace_document(replacement).unwrap();
     assert_eq!(runtime.state.app_get("result").unwrap().as_i64(), Some(7));
+}
+
+#[test]
+fn reload_merges_page_and_self_per_page_key_and_replaces_vars_from_staged_doc() {
+    let before: PenDocument = serde_json::from_value(json!({
+        "version":"1.2", "responsive":true,
+        "variables":{"accent":{"type":"string","value":"old-default"}},
+        "pages":[{"id":"main","name":"Main","state":{"count":{"type":"int","default":1}},
+            "children":[{"type":"rectangle","id":"card","width":10,"height":10,
+                "state":{"label":{"type":"string","default":"old"}}}]}], "children":[]
+    }))
+    .unwrap();
+    let mut runtime = Runtime::new_from_document(before).unwrap();
+    runtime.state.page_set("main", "count", json!(7));
+    runtime.state.self_set("main", "card", "label", json!(99));
+    runtime.state.vars_set("accent", json!("live-edit"));
+    let after: PenDocument = serde_json::from_value(json!({
+        "version":"1.2", "responsive":true,
+        "variables":{"accent":{"type":"string","value":"new-default"}},
+        "pages":[{"id":"main","name":"Main","state":{"count":{"type":"int","default":2}},
+            "children":[{"type":"rectangle","id":"card","width":10,"height":10,
+                "state":{"label":{"type":"string","default":"new"}}}]}], "children":[]
+    }))
+    .unwrap();
+    runtime.replace_document(after).unwrap();
+    assert_eq!(
+        runtime.state.page_get("main", "count").unwrap().as_i64(),
+        Some(7)
+    );
+    assert_eq!(
+        runtime
+            .state
+            .self_get("main", "card", "label")
+            .unwrap()
+            .as_str(),
+        Some("new")
+    );
+    assert_eq!(
+        runtime.state.vars_get("accent").unwrap().as_str(),
+        Some("new-default")
+    );
+    assert!(runtime
+        .load_warnings()
+        .iter()
+        .any(|warning| warning.contains("$self[main/card]")));
 }

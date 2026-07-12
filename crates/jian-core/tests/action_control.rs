@@ -93,12 +93,14 @@ fn abort_stops_remaining_chain() {
 }
 
 #[test]
-fn delay_passes_through_for_mvp() {
-    let (_s, _state, ctx) = setup();
+#[allow(clippy::arc_with_non_send_sync)]
+fn compatibility_facade_reports_pending_delay_instead_of_dropping_it() {
+    let (_s, _state, mut ctx) = setup();
+    ctx.clock = Some(std::sync::Arc::new(jian_core::action::TaskClock::default()));
     let reg = default_registry();
     let list = json!([{"delay": {"ms": 10}}]);
     let out = execute_list_shared(&reg, &list, &ctx);
-    assert!(out.result.is_ok());
+    assert!(out.result.unwrap_err().to_string().contains("TaskQueue"));
 }
 
 #[test]

@@ -105,6 +105,7 @@ softbuffer      = { version = "0.4", optional = true }
 muda            = { version = "0.13", optional = true }
 reqwest         = { version = "0.12", optional = true, default-features = false, features = ["rustls-tls", "json", "gzip", "blocking"] }
 futures-channel = { version = "0.3", optional = true }
+futures         = "0.3"
 rfd             = { version = "0.14", optional = true }
 self_update     = { version = "0.41", optional = true, default-features = false, features = ["rustls", "compression-flate2", "compression-zip-deflate"] }
 # `is_strictly_newer` uses `semver::Version` to compare release

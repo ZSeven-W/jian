@@ -260,6 +260,12 @@ impl WidgetStateStore {
             let Some(current) = self.map.get_mut(&key) else {
                 continue;
             };
+            if fresh.as_ref().is_some_and(|fresh| {
+                std::mem::discriminant(fresh) != std::mem::discriminant(current)
+            }) {
+                *current = fresh.expect("checked above");
+                continue;
+            }
             let json = serde_json::to_value(schema).unwrap_or_default();
             match current {
                 WidgetState::Select { value, .. } | WidgetState::Radio { value, .. } => {

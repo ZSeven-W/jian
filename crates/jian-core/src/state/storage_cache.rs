@@ -118,6 +118,19 @@ impl StorageCache {
             .update(|version| *version = version.wrapping_add(1));
     }
 
+    /// Cancellation compensation for hydration tasks. Entries whose request
+    /// future was dropped must be readable again on the next evaluation.
+    pub fn cancel_hydrations(&self) {
+        let mut entries = self.entries.borrow_mut();
+        for entry in entries.values_mut() {
+            if matches!(entry.state, StorageEntryState::Hydrating { .. }) {
+                entry.gen = entry.gen.wrapping_add(1);
+                entry.state = StorageEntryState::Unhydrated;
+            }
+        }
+        self.requests.borrow_mut().clear();
+    }
+
     pub fn remove(&self, key: &str) {
         if let Some(entry) = self.entries.borrow_mut().remove(key) {
             if let StorageEntryState::Present(signal) = entry.state {

@@ -14,19 +14,32 @@
 //! transient strip in the window) ship in a future host-side widget,
 //! tracked separately.
 
+use crate::confirm_overlay::ConfirmOverlay;
 use async_trait::async_trait;
 use jian_core::action::services::feedback::{AsyncFeedback, FeedbackLevel, FeedbackSink};
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use rfd::{MessageButtons, MessageDialog, MessageLevel};
 
 /// Native-dialog `FeedbackSink + AsyncFeedback` for the desktop host.
 ///
 /// `Default` is the canonical constructor — `rfd::MessageDialog` has
 /// no per-instance state to thread through.
-pub struct DesktopFeedback;
+#[derive(Clone)]
+pub struct DesktopFeedback {
+    overlay: ConfirmOverlay,
+}
 
 impl DesktopFeedback {
     pub fn new() -> Self {
-        Self
+        Self {
+            overlay: ConfirmOverlay::default(),
+        }
+    }
+
+    pub fn with_overlay(overlay: ConfirmOverlay) -> Self {
+        Self { overlay }
+    }
+    pub fn overlay(&self) -> ConfirmOverlay {
+        self.overlay.clone()
     }
 }
 
@@ -74,23 +87,8 @@ impl FeedbackSink for DesktopFeedback {
 #[async_trait(?Send)]
 impl AsyncFeedback for DesktopFeedback {
     async fn confirm(&self, title: &str, message: &str) -> bool {
-        let title = title.to_owned();
-        let message = message.to_owned();
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        std::thread::spawn(move || {
-            let result = MessageDialog::new()
-                .set_level(MessageLevel::Info)
-                .set_title(title)
-                .set_description(message)
-                .set_buttons(MessageButtons::YesNo)
-                .show();
-            let _ = sender.send(result);
-        });
-        let result = receiver.await.unwrap_or(MessageDialogResult::Cancel);
-        matches!(
-            result,
-            MessageDialogResult::Yes | MessageDialogResult::Ok | MessageDialogResult::Custom(_)
-        )
+        let (future, _dismiss) = self.overlay.present(title, message);
+        future.await
     }
 }
 

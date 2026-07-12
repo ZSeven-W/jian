@@ -71,7 +71,10 @@ where
 
 pub struct DesktopHost {
     pub runtime: Runtime,
+    pub confirm_overlay: crate::confirm_overlay::ConfirmOverlay,
     pub backend: SkiaBackend,
+    /// Registered encoded image bytes owned by this runtime/renderer pair.
+    pub image_registry: jian_skia::InstanceImageRegistry,
     pub config: HostConfig,
     /// When `Some`, the run loop wakes every ~200ms to drain new
     /// documents and rebuild layout. `None` keeps the original
@@ -257,10 +260,22 @@ impl Default for HostConfig {
 }
 
 impl DesktopHost {
-    pub fn new(runtime: Runtime, title: impl Into<String>) -> Self {
+    #[allow(unused_mut)]
+    pub fn new(mut runtime: Runtime, title: impl Into<String>) -> Self {
+        let confirm_overlay = crate::confirm_overlay::ConfirmOverlay::default();
+        #[cfg(feature = "feedback")]
+        {
+            let feedback = std::rc::Rc::new(crate::services::DesktopFeedback::with_overlay(
+                confirm_overlay.clone(),
+            ));
+            runtime.feedback = feedback.clone();
+            runtime.async_feedback = feedback;
+        }
         Self {
             runtime,
+            confirm_overlay,
             backend: SkiaBackend::new(),
+            image_registry: Default::default(),
             config: HostConfig {
                 title: title.into(),
                 ..HostConfig::default()
@@ -293,10 +308,22 @@ impl DesktopHost {
         }
     }
 
-    pub fn with_config(runtime: Runtime, config: HostConfig) -> Self {
+    #[allow(unused_mut)]
+    pub fn with_config(mut runtime: Runtime, config: HostConfig) -> Self {
+        let confirm_overlay = crate::confirm_overlay::ConfirmOverlay::default();
+        #[cfg(feature = "feedback")]
+        {
+            let feedback = std::rc::Rc::new(crate::services::DesktopFeedback::with_overlay(
+                confirm_overlay.clone(),
+            ));
+            runtime.feedback = feedback.clone();
+            runtime.async_feedback = feedback;
+        }
         Self {
             runtime,
+            confirm_overlay,
             backend: SkiaBackend::new(),
+            image_registry: Default::default(),
             config,
             reload_rx: None,
             menu_handler: None,

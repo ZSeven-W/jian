@@ -2421,6 +2421,7 @@ name = "jian-core"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "base64",
  "bitflags 2.11.1",
  "criterion",
  "deunicode",
@@ -2428,14 +2429,18 @@ dependencies = [
  "futures",
  "insta",
  "jian-ops-schema",
+ "libc",
  "proptest",
  "rstar",
  "serde",
  "serde_json",
+ "sha2",
  "slotmap",
  "smallvec",
  "taffy",
+ "tempfile",
  "thiserror 1.0.69",
+ "url",
 ]
 
 [[package]]

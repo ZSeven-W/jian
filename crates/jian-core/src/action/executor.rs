@@ -12,8 +12,9 @@ pub struct ExecOutcome {
 }
 
 /// Parse + execute a JSON ActionList blob in the given ActionContext.
-/// Polls once. Runtime-owned event chains use `TaskQueue` and are resumed by
-/// `Runtime::pump`; this facade remains for immediately-ready unit/host calls.
+/// Runtime-owned event chains use `TaskQueue` and are resumed by
+/// `Runtime::pump`; this compatibility facade accepts only immediately-ready
+/// chains and reports (rather than silently dropping) a parked future.
 pub fn execute_list(registry: &ActionRegistry, list: &Value, ctx: &ActionContext) -> ExecOutcome {
     let chain = match registry.parse_list(list) {
         Ok(c) => c,
@@ -31,7 +32,9 @@ pub fn execute_list(registry: &ActionRegistry, list: &Value, ctx: &ActionContext
     let mut task_context = Context::from_waker(&waker);
     let result: ActionResult = match future.as_mut().poll(&mut task_context) {
         Poll::Ready(result) => result,
-        Poll::Pending => Ok(()),
+        Poll::Pending => Err(ActionError::Custom(
+            "asynchronous action list must be dispatched through Runtime's TaskQueue".into(),
+        )),
     };
 
     ExecOutcome {

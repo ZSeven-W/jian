@@ -1310,7 +1310,9 @@ fn node_opacity(json: &Value) -> f32 {
 /// a host-resolved URL (the skia backend's image cache draws a grey
 /// placeholder if no resolver is wired up).
 fn classify_source(src: &str, responsive: bool) -> ImageSource {
-    if src.starts_with("data:") && !responsive {
+    if src.starts_with("data:") && responsive {
+        ImageSource::Url(super::image_store::data_url_key(src))
+    } else if src.starts_with("data:") {
         ImageSource::DataUrl(src.to_owned())
     } else {
         ImageSource::Url(src.to_owned())

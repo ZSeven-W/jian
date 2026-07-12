@@ -22,6 +22,8 @@ pub struct RejectedNav {
 pub struct ScreenRouter {
     known: BTreeSet<String>,
     stack: RefCell<Vec<String>>,
+    params: RefCell<BTreeMap<String, String>>,
+    query: RefCell<BTreeMap<String, String>>,
     /// Accumulates until drained by `take_rejections()`.
     /// `reconcile_screens` is the designated drainer — it calls
     /// `take_rejections()` once per pass so hosts see every rejected
@@ -34,6 +36,8 @@ impl ScreenRouter {
         Self {
             known: known.into_iter().collect(),
             stack: RefCell::new(vec![entry.to_owned()]),
+            params: RefCell::new(BTreeMap::new()),
+            query: RefCell::new(BTreeMap::new()),
             rejections: RefCell::new(Vec::new()),
         }
     }
@@ -60,8 +64,8 @@ impl Router for ScreenRouter {
         let stack = self.stack.borrow();
         RouteState {
             path: stack.last().cloned().unwrap_or_else(|| "/".to_owned()),
-            params: Default::default(),
-            query: Default::default(),
+            params: self.params.borrow().clone(),
+            query: self.query.borrow().clone(),
             stack: stack.clone(),
         }
     }
@@ -96,6 +100,38 @@ impl Router for ScreenRouter {
             s.clear();
             s.push(path.to_owned());
         }
+    }
+
+    fn restore(&self, state: RouteState, valid_paths: &[String]) {
+        let valid: BTreeSet<&str> = valid_paths.iter().map(String::as_str).collect();
+        let mut stack: Vec<String> = state
+            .stack
+            .into_iter()
+            .filter(|path| valid.contains(path.as_str()))
+            .collect();
+        let path_survives = valid.contains(state.path.as_str());
+        let path = if path_survives {
+            state.path
+        } else {
+            valid_paths.first().cloned().unwrap_or_else(|| "/".into())
+        };
+        if stack.last() != Some(&path) {
+            stack.push(path);
+        }
+        if stack.is_empty() {
+            stack.push("/".into());
+        }
+        *self.stack.borrow_mut() = stack;
+        *self.params.borrow_mut() = if path_survives {
+            state.params
+        } else {
+            BTreeMap::new()
+        };
+        *self.query.borrow_mut() = if path_survives {
+            state.query
+        } else {
+            BTreeMap::new()
+        };
     }
 }
 

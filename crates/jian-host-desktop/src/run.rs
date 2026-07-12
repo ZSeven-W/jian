@@ -254,28 +254,34 @@ impl RunApp {
         } else {
             Vec::new()
         };
-        self.host.backend.begin_frame(&mut state.skia, 0xffffffff);
+        let mut backend = jian_skia::RegisteredBackend {
+            inner: &mut self.host.backend,
+            images: &mut self.host.image_registry,
+        };
+        self.host.runtime.prepare_frame(&mut backend, 0);
+        backend.begin_frame(&mut state.skia, 0xffffffff);
         let dpr_scaled = (scale - 1.0).abs() > f32::EPSILON;
         if dpr_scaled {
-            self.host
-                .backend
-                .push_transform(&jian_core::geometry::Affine2::scale(scale, scale));
+            backend.push_transform(&jian_core::geometry::Affine2::scale(scale, scale));
         }
         for op in &ops {
-            self.host.backend.draw(op);
+            backend.draw(op);
         }
         if dpr_scaled {
-            self.host.backend.pop();
+            backend.pop();
         }
         if self.host.config.debug_overlay {
             // Draw the HUD in physical pixel space (after the DPR pop)
             // so the strip is the same size on every monitor regardless
             // of OS scale.
             for hud in build_debug_overlay(w, h, scale, ops.len()) {
-                self.host.backend.draw(&hud);
+                backend.draw(&hud);
             }
         }
-        self.host.backend.end_frame(&mut state.skia);
+        for op in self.host.confirm_overlay.draw_ops(w as f32, h as f32) {
+            backend.draw(&op);
+        }
+        backend.end_frame(&mut state.skia);
 
         // 2. Snapshot raster bytes as RGBA8888 via SkiaSurface helper.
         let mut rgba = vec![0u8; (w as usize) * (h as usize) * 4];
@@ -642,6 +648,20 @@ impl ApplicationHandler for RunApp {
                 event_loop.exit();
                 return;
             }
+            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
+                use winit::keyboard::{Key, NamedKey};
+                let key = match &event.logical_key {
+                    Key::Named(NamedKey::Enter) => Some("Enter"),
+                    Key::Named(NamedKey::Escape) => Some("Escape"),
+                    _ => None,
+                };
+                if key.is_some_and(|key| self.host.confirm_overlay.handle_key(key)) {
+                    if let Some(window) = self.window.as_ref() {
+                        window.request_redraw();
+                    }
+                    return;
+                }
+            }
             WindowEvent::Resized(new) => {
                 self.last_size = (new.width.max(1), new.height.max(1));
                 self.ensure_surface(self.last_size.0, self.last_size.1);
@@ -739,6 +759,24 @@ impl ApplicationHandler for RunApp {
                 return;
             }
             _ => {}
+        }
+
+        if matches!(&event, WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } if state.is_pressed())
+            && self.host.confirm_overlay.is_active()
+        {
+            let position = self
+                .translator
+                .cursor
+                .unwrap_or(self.translator.last_known_cursor);
+            let logical = (position.x, position.y);
+            let size = (self.last_size.0 as f32, self.last_size.1 as f32);
+            self.host
+                .confirm_overlay
+                .handle_click(logical.0, logical.1, size.0, size.1);
+            if let Some(window) = self.window.as_ref() {
+                window.request_redraw();
+            }
+            return;
         }
 
         if let Some(mut pe) = self.translator.translate(&event) {

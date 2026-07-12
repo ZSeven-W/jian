@@ -19,6 +19,19 @@ impl Runtime {
     pub fn pump(&mut self, now_ms: u64) -> FrameDirective {
         self.note_time(now_ms);
         self.task_clock.advance_to(self.now_ms);
+        self.dispatch_image_requests();
+        let completions = std::mem::take(&mut *self.image_completions.borrow_mut());
+        for (key, result) in completions {
+            self.image_requests.remove(&key);
+            match result {
+                Ok(bytes) => self.image_store.resolve(&key, bytes),
+                Err(error) => {
+                    self.image_store.fail(&key, &error);
+                    self.load_warnings.push(format!("image `{key}`: {error}"));
+                }
+            }
+            self.mark_dirty();
+        }
         for (key, generation) in self.state.storage_cache.take_requests() {
             if !self
                 .capabilities

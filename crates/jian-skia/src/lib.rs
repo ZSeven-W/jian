@@ -43,7 +43,7 @@ pub mod font_lock;
 pub mod font_resolve;
 pub mod icons;
 pub(crate) mod image;
-pub(crate) mod image_registry;
+pub mod image_registry;
 #[cfg(feature = "textlayout")]
 pub mod measure;
 pub mod path;
@@ -63,6 +63,7 @@ pub use font_lock::with_font_lock;
 pub use font_resolve::{
     FontResolver, FontSegment, ResolvedTypeface, SYNTHETIC_BOLD_WIDTH_FACTOR, SYNTHETIC_ITALIC_SKEW,
 };
+pub use image_registry::{InstanceImageRegistry, RegisteredBackend};
 #[cfg(feature = "textlayout")]
 pub use measure::SkiaMeasure;
 pub use shader_cache::ShaderCache;

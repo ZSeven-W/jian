@@ -167,9 +167,7 @@ fn decode(source: &ImageSource) -> Option<SkImage> {
             decode_bytes(&bytes)
         }
         ImageSource::Bytes(b) => decode_bytes(b.as_slice()),
-        ImageSource::Url(key) => {
-            crate::image_registry::registered_bytes(key).and_then(|bytes| decode_bytes(&bytes))
-        }
+        ImageSource::Url(_) => None,
     }
 }
 

@@ -41,8 +41,13 @@ use crate::viewport::Viewport;
 use jian_ops_schema::{document::PenDocument, load_str};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+
+type ImageCompletionQueue = Rc<RefCell<Vec<(String, Result<Vec<u8>, String>)>>>;
+type WebSocketMessageQueue = Rc<RefCell<Vec<(String, u64, Vec<String>)>>>;
 
 mod ime_handshake;
 mod pump;
@@ -170,6 +175,10 @@ pub struct Runtime {
     pub layout: LayoutEngine,
     pub spatial: SpatialIndex,
     pub image_store: crate::render::image_store::ImageStore,
+    pub image_resolver: Rc<dyn crate::render::image_store::ImageResolver>,
+    image_completions: ImageCompletionQueue,
+    image_requests: BTreeSet<String>,
+    image_document_dir: PathBuf,
     pub viewport: Viewport,
     load_warnings: Vec<String>,
     variant_table: jian_ops_schema::screen_projection::ScreenVariantTable,
@@ -214,6 +223,8 @@ pub struct Runtime {
     /// Live WebSocket sessions, populated by `ws_connect` / drained by
     /// `ws_close`. Shared with every `ActionContext` the runtime makes.
     pub ws_sessions: crate::action::context::WsSessionRegistry,
+    ws_receive_active: BTreeSet<String>,
+    ws_messages: WebSocketMessageQueue,
     pub storage: Rc<dyn StorageBackend>,
     pub nav: Rc<dyn RouterSvc>,
     pub feedback: Rc<dyn FeedbackSink>,
@@ -251,6 +262,10 @@ impl Runtime {
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
             image_store: Default::default(),
+            image_resolver: Rc::new(crate::render::image_store::NullImageResolver),
+            image_completions: Rc::new(RefCell::new(Vec::new())),
+            image_requests: BTreeSet::new(),
+            image_document_dir: PathBuf::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
             load_warnings: Vec::new(),
             variant_table: Default::default(),
@@ -279,6 +294,8 @@ impl Runtime {
             deferred_bindings: DeferredBindingQueue::new(),
             network: Rc::new(NullNetworkClient),
             ws_sessions: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            ws_receive_active: BTreeSet::new(),
+            ws_messages: Rc::new(RefCell::new(Vec::new())),
             storage: Rc::new(NullStorageBackend),
             nav: Rc::new(NullRouter),
             feedback: Rc::new(NullFeedback),
@@ -362,6 +379,10 @@ impl Runtime {
             layout: LayoutEngine::new(),
             spatial: SpatialIndex::new(),
             image_store: Default::default(),
+            image_resolver: Rc::new(crate::render::image_store::NullImageResolver),
+            image_completions: Rc::new(RefCell::new(Vec::new())),
+            image_requests: BTreeSet::new(),
+            image_document_dir: PathBuf::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
             load_warnings: prepared.warnings,
             variant_table: prepared.variants,
@@ -390,6 +411,8 @@ impl Runtime {
             deferred_bindings: DeferredBindingQueue::new(),
             network: Rc::new(NullNetworkClient),
             ws_sessions: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            ws_receive_active: BTreeSet::new(),
+            ws_messages: Rc::new(RefCell::new(Vec::new())),
             storage: Rc::new(NullStorageBackend),
             nav: Rc::new(NullRouter),
             feedback: Rc::new(NullFeedback),
@@ -403,6 +426,7 @@ impl Runtime {
         };
         runtime.widget_states.set_page_key(active_page_key);
         runtime.state.set_viewport(800.0, 600.0, 1.0);
+        runtime.admit_document_images();
         Ok(runtime)
     }
 
@@ -552,6 +576,11 @@ impl Runtime {
 
     pub fn cancel_all_tasks(&mut self) {
         self.task_queue.cancel_all();
+        self.ws_receive_active.clear();
+        self.ws_messages.borrow_mut().clear();
+        self.image_requests.clear();
+        self.image_completions.borrow_mut().clear();
+        self.state.storage_cache.cancel_hydrations();
         self.document_generation = self.document_generation.wrapping_add(1);
     }
 
@@ -575,7 +604,7 @@ impl Runtime {
             preferred_path,
         );
         schema = prepared.mounted;
-        self.state.set_responsive(schema.is_responsive());
+        let responsive = schema.is_responsive();
         let declared_state = schema.state.clone().unwrap_or_default();
         let staged_defaults: BTreeMap<String, serde_json::Value> = declared_state
             .iter()
@@ -608,17 +637,74 @@ impl Runtime {
             .clone()
             .unwrap_or_else(|| Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY)));
         let storage_allowed = declared.contains(&crate::action::Capability::Storage);
+        let network_allowed = declared.contains(&crate::action::Capability::Network);
         let capabilities = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit.clone())));
 
-        let doc = loader::build_with(schema, &self.state, loader::SeedMode::PreserveExisting)?;
-        let (merged_state, conformance_warnings) =
+        // Loader seeding is fallible and mutating. Build against a detached
+        // graph so failure cannot alter responsive mode or any live scope.
+        let staged_state = Rc::new(StateGraph::new(Rc::new(Scheduler::new())));
+        staged_state.set_responsive(responsive);
+        let doc = loader::build_with(schema, &staged_state, loader::SeedMode::Initial)?;
+        let (merged_state, mut conformance_warnings) =
             crate::state::conformance::merge_scope(&live_state, &staged_defaults, &declared_state);
         if conform_reload {
             self.state.replace_app(&merged_state);
+            self.state.replace_vars(&staged_state.vars_snapshot());
+            let page_key = prepared.selected_page_id.as_deref().unwrap_or("");
+            if let Some(page_schema) = doc
+                .schema
+                .pages
+                .as_ref()
+                .and_then(|pages| pages.first())
+                .and_then(|page| page.state.as_ref())
+            {
+                let staged = staged_state.page_snapshot(page_key);
+                let (merged, warnings) = crate::state::conformance::merge_scope(
+                    &self.state.page_snapshot(page_key),
+                    &staged,
+                    page_schema,
+                );
+                self.state.replace_page(page_key, &merged);
+                conformance_warnings.extend(
+                    warnings
+                        .into_iter()
+                        .map(|warning| format!("$page[{page_key}]: {warning}")),
+                );
+            }
+            for (_, node) in doc.tree.nodes.iter() {
+                let node_id = crate::document::tree::node_schema_id(&node.schema);
+                let Ok(json) = serde_json::to_value(&node.schema) else {
+                    continue;
+                };
+                let Some(raw) = json.get("state") else {
+                    continue;
+                };
+                let Ok(declared) =
+                    serde_json::from_value::<jian_ops_schema::state::StateSchema>(raw.clone())
+                else {
+                    continue;
+                };
+                let staged = staged_state.self_snapshot(page_key, node_id);
+                let (merged, warnings) = crate::state::conformance::merge_scope(
+                    &self.state.self_snapshot(page_key, node_id),
+                    &staged,
+                    &declared,
+                );
+                self.state.replace_self(page_key, node_id, &merged);
+                conformance_warnings.extend(
+                    warnings
+                        .into_iter()
+                        .map(|warning| format!("$self[{page_key}/{node_id}]: {warning}")),
+                );
+            }
             if !storage_allowed {
                 self.state.storage_cache.purge();
             }
+            if !network_allowed {
+                conformance_warnings.extend(self.image_store.revoke_network());
+            }
         }
+        self.state.set_responsive(responsive);
         let action_surface_inputs =
             crate::action_surface::derive_actions(&doc.schema, &crate::action_surface::BUILD_SALT);
         let focus_chain = collect_focus_chain(&doc);
@@ -641,6 +727,7 @@ impl Runtime {
         };
         self.widget_states
             .set_page_key(self.active_page_key.clone());
+        self.image_store.begin_reload_ownership();
         self.document = Some(doc);
         // Preserve widget runtime state for ids that still exist in the
         // swapped-in tree; drop state for nodes that vanished.
@@ -680,6 +767,8 @@ impl Runtime {
         // a doc with a fresh `.op.pack` re-call `preload_initial_layout`
         // explicitly.
         self.layout.drop_preload();
+        self.admit_document_images();
+        self.image_store.finish_reload_ownership();
         Ok(())
     }
 
@@ -794,6 +883,118 @@ impl Runtime {
         // (needs_paint would be true on every frame forever).
         if changed {
             self.mark_dirty();
+        }
+    }
+
+    pub fn set_image_document_dir(&mut self, directory: impl Into<PathBuf>) {
+        self.image_document_dir = directory.into();
+        self.admit_document_images();
+    }
+
+    pub fn admit_document_images(&mut self) {
+        let Some(doc) = self.document.as_ref() else {
+            return;
+        };
+        if !doc.schema.is_responsive() {
+            return;
+        }
+        fn sources(value: &serde_json::Value, output: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, value) in map {
+                        if matches!(key.as_str(), "src" | "url") {
+                            if let Some(source) = value.as_str() {
+                                output.push(source.to_owned());
+                            }
+                        }
+                        sources(value, output);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        sources(value, output);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        if let Ok(json) = serde_json::to_value(&doc.schema) {
+            sources(&json, &mut found);
+        }
+        for source in found {
+            let key = match crate::render::image_store::canonical_url_key(
+                &source,
+                &self.image_document_dir,
+            ) {
+                Ok(key) => key,
+                Err(error) => {
+                    self.load_warnings.push(error);
+                    continue;
+                }
+            };
+            if source.starts_with("data:") {
+                match crate::render::image_store::decode_data_url(&source) {
+                    Ok(bytes) => self.image_store.admit_inline(&key, bytes),
+                    Err(error) => {
+                        self.image_store.admit_resolver(&key, 0);
+                        self.image_store.fail(&key, &error);
+                        self.load_warnings.push(format!("image `{key}`: {error}"));
+                    }
+                }
+            } else if source.starts_with("http://") || source.starts_with("https://") {
+                if self
+                    .capabilities
+                    .check(crate::action::Capability::Network, "image_resolve")
+                {
+                    self.image_store.admit_resolver(&key, 64 * 1024 * 1024);
+                } else {
+                    self.image_store.admit_resolver(&key, 0);
+                    if self.image_store.state(&key)
+                        != Some(crate::render::image_store::ImageState::Registered)
+                    {
+                        self.image_store.fail(&key, "network capability denied");
+                        self.load_warnings
+                            .push(format!("image `{key}`: network capability denied"));
+                    }
+                }
+            } else {
+                let path = Path::new(&key);
+                match crate::render::image_store::read_confined_local(
+                    path,
+                    &self.image_document_dir,
+                ) {
+                    Ok(bytes) => self.image_store.admit_inline(&key, bytes),
+                    Err(error) => {
+                        self.image_store.admit_resolver(&key, 0);
+                        self.image_store.fail(&key, &error);
+                        self.load_warnings.push(format!("image `{key}`: {error}"));
+                    }
+                }
+            }
+        }
+    }
+
+    pub(crate) fn dispatch_image_requests(&mut self) {
+        for key in self.image_store.pending_keys() {
+            if !self.image_requests.insert(key.clone()) {
+                continue;
+            }
+            let resolver = self.image_resolver.clone();
+            let completions = self.image_completions.clone();
+            let request_key = key.clone();
+            self.task_queue.spawn_future(
+                async move {
+                    let result = resolver.resolve(&request_key).await;
+                    completions.borrow_mut().push((request_key, result));
+                    ExecOutcome {
+                        result: Ok(()),
+                        warnings: Vec::new(),
+                    }
+                },
+                self.document_generation,
+                Some(format!("image:{key}")),
+            );
         }
     }
 
@@ -1675,69 +1876,58 @@ impl Runtime {
         if self.input_frozen() {
             return 0;
         }
-        type WsSnapshot = (
-            String,
-            Rc<dyn crate::action::services::WebSocketSession>,
-            Option<serde_json::Value>,
-            u64,
-        );
-        let snapshot: Vec<WsSnapshot> = {
-            self.ws_sessions
-                .borrow()
-                .iter()
-                .map(|(id, h)| {
-                    (
-                        id.clone(),
-                        h.session.clone(),
-                        h.on_message.clone(),
-                        h.generation,
-                    )
-                })
-                .collect()
-        };
+        let snapshot: Vec<_> = self
+            .ws_sessions
+            .borrow()
+            .iter()
+            .map(|(id, handle)| (id.clone(), handle.session.clone(), handle.generation))
+            .collect();
+        for (id, session, generation) in snapshot {
+            if generation != self.document_generation || !self.ws_receive_active.insert(id.clone())
+            {
+                continue;
+            }
+            let messages = self.ws_messages.clone();
+            let receive_id = id.clone();
+            self.task_queue.spawn_future(
+                async move {
+                    let batch = session.receive().await;
+                    messages.borrow_mut().push((receive_id, generation, batch));
+                    ExecOutcome {
+                        result: Ok(()),
+                        warnings: Vec::new(),
+                    }
+                },
+                generation,
+                Some(format!("websocket:receive:{id}")),
+            );
+        }
+        let _ = self.task_queue.poll_all(self.now_ms);
+        let received = std::mem::take(&mut *self.ws_messages.borrow_mut());
         let mut fired = 0usize;
-        for (id, session, on_message, generation) in snapshot {
+        for (id, generation, messages) in received {
+            self.ws_receive_active.remove(&id);
             if generation != self.document_generation {
                 continue;
             }
-            // Re-check the registry before running each session's
-            // handler. A previous handler in this same pump pass may
-            // have called `ws_close` (drops the entry) or
-            // `ws_connect` with the same id (replaces the entry with
-            // a new session). Dispatching against the stale `Rc<...>`
-            // would fire on a connection the author already
-            // declared closed.
-            let still_live = self
+            let handler_json = self
                 .ws_sessions
                 .borrow()
                 .get(&id)
-                .map(|h| Rc::ptr_eq(&h.session, &session))
-                .unwrap_or(false);
-            if !still_live {
-                continue;
-            }
-            use futures::FutureExt;
-            let Some(messages) = session.receive().now_or_never() else {
-                continue;
-            };
-            if messages.is_empty() {
-                continue;
-            }
-            let Some(handler_json) = on_message else {
+                .and_then(|handle| {
+                    (handle.generation == generation).then(|| handle.on_message.clone())
+                })
+                .flatten();
+            let Some(handler_json) = handler_json else {
                 continue;
             };
             for msg in messages {
-                // The handler we're about to run could itself touch
-                // ws_sessions (close + reconnect). Re-verify per
-                // message so a mid-burst close stops further
-                // dispatch on the same loop.
-                let still_live = self
+                if !self
                     .ws_sessions
                     .borrow()
                     .get(&id)
-                    .map(|h| Rc::ptr_eq(&h.session, &session))
-                    .unwrap_or(false);
-                if !still_live {
+                    .is_some_and(|handle| handle.generation == generation)
+                {
                     break;
                 }
                 let ctx = self.make_action_ctx_with_event(serde_json::json!({

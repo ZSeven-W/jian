@@ -44,12 +44,66 @@ impl StateGraph {
             .collect()
     }
 
+    pub fn page_snapshot(&self, page_key: &str) -> BTreeMap<String, Value> {
+        self.page
+            .borrow()
+            .get(page_key)
+            .into_iter()
+            .flat_map(|fields| fields.iter())
+            .map(|(key, signal)| (key.clone(), signal.get().0))
+            .collect()
+    }
+    pub fn self_snapshot(&self, page_key: &str, node_id: &str) -> BTreeMap<String, Value> {
+        self.self_
+            .borrow()
+            .get(&(page_key.to_owned(), node_id.to_owned()))
+            .into_iter()
+            .flat_map(|fields| fields.iter())
+            .map(|(key, signal)| (key.clone(), signal.get().0))
+            .collect()
+    }
+    pub fn vars_snapshot(&self) -> BTreeMap<String, Value> {
+        self.vars
+            .borrow()
+            .iter()
+            .map(|(key, signal)| (key.clone(), signal.get().0))
+            .collect()
+    }
+
     pub fn replace_app(&self, values: &BTreeMap<String, Value>) {
         self.app
             .borrow_mut()
             .retain(|key, _| values.contains_key(key));
         for (key, value) in values {
             self.app_set(key, value.clone());
+        }
+    }
+    pub fn replace_page(&self, page_key: &str, values: &BTreeMap<String, Value>) {
+        if let Some(fields) = self.page.borrow_mut().get_mut(page_key) {
+            fields.retain(|key, _| values.contains_key(key));
+        }
+        for (key, value) in values {
+            self.page_set(page_key, key, value.clone());
+        }
+    }
+    pub fn replace_self(&self, page_key: &str, node_id: &str, values: &BTreeMap<String, Value>) {
+        if let Some(fields) = self
+            .self_
+            .borrow_mut()
+            .get_mut(&(page_key.to_owned(), node_id.to_owned()))
+        {
+            fields.retain(|key, _| values.contains_key(key));
+        }
+        for (key, value) in values {
+            self.self_set(page_key, node_id, key, value.clone());
+        }
+    }
+    pub fn replace_vars(&self, values: &BTreeMap<String, Value>) {
+        self.vars
+            .borrow_mut()
+            .retain(|key, _| values.contains_key(key));
+        for (key, value) in values {
+            self.vars_set(key, value.clone());
         }
     }
 
@@ -122,6 +176,10 @@ impl StateGraph {
             let sig = Signal::new(rv, self.scheduler.clone());
             entry.insert(name.to_owned(), sig);
         }
+    }
+
+    pub fn page_get(&self, page_id: &str, name: &str) -> Option<RuntimeValue> {
+        self.page.borrow().get(page_id)?.get(name).map(Signal::get)
     }
 
     pub fn self_set(&self, page_key: &str, node_id: &str, name: &str, value: Value) {

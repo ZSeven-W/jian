@@ -68,6 +68,38 @@ pub fn build_with(
         tree.insert_subtree(n, None);
     }
 
+    if let Some(page) = schema.pages.as_ref().and_then(|pages| pages.first()) {
+        if let Some(page_state) = &page.state {
+            for (name, entry) in page_state {
+                if seed != SeedMode::PreserveExisting || state.page_get(&page.id, name).is_none() {
+                    state.page_set(&page.id, name, resolve_default(entry));
+                }
+            }
+        }
+    }
+    let page_key = active_page.as_deref().unwrap_or("");
+    for (_, node) in tree.nodes.iter() {
+        let Ok(json) = serde_json::to_value(&node.schema) else {
+            continue;
+        };
+        let Some(raw) = json.get("state") else {
+            continue;
+        };
+        let Ok(node_state) =
+            serde_json::from_value::<jian_ops_schema::state::StateSchema>(raw.clone())
+        else {
+            continue;
+        };
+        let node_id = crate::document::tree::node_schema_id(&node.schema);
+        for (name, entry) in node_state {
+            if seed != SeedMode::PreserveExisting
+                || state.self_get(page_key, node_id, &name).is_none()
+            {
+                state.self_set(page_key, node_id, &name, resolve_default(&entry));
+            }
+        }
+    }
+
     let document = RuntimeDocument {
         schema,
         tree,
