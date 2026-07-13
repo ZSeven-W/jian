@@ -11,7 +11,7 @@ pub fn resolve_sizing(s: Option<&SizingBehavior>) -> Dimension {
     match s {
         Some(SizingBehavior::Number(v)) => length(*v as f32),
         Some(SizingBehavior::Keyword(SizingKeyword::FitContent)) => auto(),
-        Some(SizingBehavior::Keyword(SizingKeyword::FillContainer)) => percent(1.0),
+        Some(SizingBehavior::Keyword(SizingKeyword::FillContainer)) => percent(1.0_f32),
         // Expression-sized nodes get auto; the runtime re-resolves once the
         // expression is evaluated and calls LayoutEngine::mark_dirty.
         Some(SizingBehavior::Expression(_)) => auto(),
@@ -118,8 +118,8 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
             height: resolve_sizing(c.height.as_ref()),
         },
         min_size: Size {
-            width: if fill_w { length(0.0) } else { auto() },
-            height: if fill_h { length(0.0) } else { auto() },
+            width: if fill_w { length(0.0_f32) } else { auto() },
+            height: if fill_h { length(0.0_f32) } else { auto() },
         },
         flex_shrink: if fixed { 0.0 } else { 1.0 },
         padding: resolve_padding(c.padding.as_ref()),
