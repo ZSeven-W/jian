@@ -22,6 +22,7 @@
 //! desktop host crate.
 
 use crate::geometry::{point, rect, Point};
+use crate::render::text::{resolve_text, RichDrawList};
 use crate::render::{
     BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
     PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
@@ -46,18 +47,19 @@ pub fn collect_draws(
     layout: &crate::layout::LayoutEngine,
 ) -> Vec<DrawOp> {
     let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    let mut text_runs = Vec::new();
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        let offset = root_offset_for(doc, layout, root);
         walk(
             doc,
             layout,
             root,
-            offset,
+            (0.0, 0.0),
             None,
             None,
             &mut out,
+            &mut text_runs,
             &mut visited,
         );
     }
@@ -75,22 +77,49 @@ pub fn collect_draws_with_state(
     state: &crate::state::StateGraph,
 ) -> Vec<DrawOp> {
     let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    let mut text_runs = Vec::new();
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        let offset = root_offset_for(doc, layout, root);
         walk(
             doc,
             layout,
             root,
-            offset,
+            (0.0, 0.0),
             Some(state),
             None,
             &mut out,
+            &mut text_runs,
             &mut visited,
         );
     }
     out
+}
+
+/// Collect stable DrawOps plus exact styled-run metadata for hosts with a
+/// paragraph shaper. Existing collectors deliberately discard the sidecar.
+pub fn collect_rich_draws_with_state(
+    doc: &crate::document::RuntimeDocument,
+    layout: &crate::layout::LayoutEngine,
+    state: &crate::state::StateGraph,
+) -> RichDrawList {
+    let mut ops = Vec::with_capacity(doc.tree.nodes.len());
+    let mut text_runs = Vec::new();
+    let mut visited = std::collections::HashSet::with_capacity(doc.tree.nodes.len());
+    for &root in &doc.tree.roots {
+        walk(
+            doc,
+            layout,
+            root,
+            (0.0, 0.0),
+            Some(state),
+            None,
+            &mut ops,
+            &mut text_runs,
+            &mut visited,
+        );
+    }
+    RichDrawList { ops, text_runs }
 }
 
 /// Extra context the walker needs to paint *live* interactive widgets
@@ -114,60 +143,23 @@ pub fn collect_draws_with_widgets(
     ctx: &WidgetRenderCtx,
 ) -> Vec<DrawOp> {
     let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    let mut text_runs = Vec::new();
     let mut visited: std::collections::HashSet<crate::document::NodeKey> =
         std::collections::HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        let offset = root_offset_for(doc, layout, root);
         walk(
             doc,
             layout,
             root,
-            offset,
+            (0.0, 0.0),
             Some(state),
             Some(ctx),
             &mut out,
+            &mut text_runs,
             &mut visited,
         );
     }
     out
-}
-
-/// Authored `(x, y)` on a document ROOT, `(0.0, 0.0)` when unset.
-///
-/// `taffy` computes every document root as an independent tree with no
-/// containing block, so `Position::Absolute` insets driven by
-/// `layout::resolve::node_to_style` (from the same `x`/`y` schema
-/// fields) are honoured for *children* but silently ignored for a
-/// root itself — `LayoutEngine::node_rect` therefore reports every
-/// root at a root-relative `(0, 0)` regardless of its authored
-/// origin. That's intentional: `node_rect` must stay root-relative so
-/// OpenPencil (which applies each root's offset itself) doesn't
-/// double-offset. This walker is the single seam that turns the
-/// authored root origin into an actual draw-position translation,
-/// applied uniformly to the whole subtree below `root`.
-///
-/// KNOWN LIMITATION: only *draws* are translated. The spatial index
-/// and pointer dispatch (`Runtime::rebuild_spatial` /
-/// `dispatch_pointer` / slider scrub) still hit-test root-relative
-/// `node_rect`s by the same contract (external consumers such as
-/// OpenPencil translate root offsets themselves — offset-aware
-/// runtime hit-testing would double-translate for them). A live
-/// multi-root document with non-zero authored root offsets therefore
-/// draws offset but hit-tests unoffset in jian-host-desktop; the fix
-/// belongs at the host pointer-translation seam (tracked follow-up).
-fn root_offset_for(
-    doc: &crate::document::RuntimeDocument,
-    layout: &crate::layout::LayoutEngine,
-    root: crate::document::NodeKey,
-) -> (f32, f32) {
-    if layout.is_origin_normalized(root) {
-        return (0.0, 0.0);
-    }
-    doc.tree
-        .nodes
-        .get(root)
-        .and_then(|node| crate::layout::resolve::explicit_position(&node.schema))
-        .unwrap_or((0.0, 0.0))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -179,6 +171,7 @@ fn walk(
     state: Option<&crate::state::StateGraph>,
     widgets: Option<&WidgetRenderCtx>,
     out: &mut Vec<DrawOp>,
+    text_runs: &mut Vec<(usize, Vec<crate::render::TextSpan>)>,
     visited: &mut std::collections::HashSet<crate::document::NodeKey>,
 ) {
     // Skip already-painted keys so a child cycle (NodeData.children
@@ -190,11 +183,9 @@ fn walk(
     let Some(node) = doc.tree.nodes.get(key) else {
         return;
     };
-    // `node_rect` is root-relative by contract (see `root_offset_for`);
-    // translate by the enclosing root's authored origin here, uniformly
-    // across the whole subtree, so descendants keep their correct
-    // relative position within the root while the root itself lands at
-    // its authored `(x, y)` instead of always at `(0, 0)`.
+    // `node_rect` is already in absolute scene coordinates. `root_offset`
+    // remains an argument for the recursive transform path, but top-level
+    // collectors start it at zero so authored root offsets are not doubled.
     let r = layout.node_rect(key).map(|r| {
         rect(
             r.origin.x + root_offset.0,
@@ -247,7 +238,7 @@ fn walk(
             })
             .is_some();
         if !handled {
-            emit_for_node(r, json, doc.schema.is_responsive(), state, out);
+            emit_for_node(r, json, doc.schema.is_responsive(), state, out, text_runs);
         }
     }
 
@@ -260,6 +251,7 @@ fn walk(
             state,
             widgets,
             out,
+            text_runs,
             visited,
         );
     }
@@ -481,6 +473,7 @@ fn emit_for_node(
     responsive: bool,
     state: Option<&crate::state::StateGraph>,
     out: &mut Vec<DrawOp>,
+    text_runs: &mut Vec<(usize, Vec<crate::render::TextSpan>)>,
 ) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
 
@@ -567,7 +560,8 @@ fn emit_for_node(
     }
 
     // --- Text first: draw_rect isn't the right primitive for text.
-    if let Some(text_op) = try_text(json, r) {
+    if let Some((text_op, spans)) = resolve_text(json, r) {
+        text_runs.push((out.len(), spans));
         out.push(text_op);
         return;
     }
@@ -1626,70 +1620,6 @@ fn corner_radii(json: &Value) -> Option<BorderRadii> {
     None
 }
 
-fn try_text(json: &Value, r: crate::geometry::Rect) -> Option<DrawOp> {
-    // A text node has `"type": "text"` and a `content` field that is
-    // either a string or an array of styled segments (MVP: concatenate
-    // `.text` for styled arrays).
-    if json.get("type").and_then(|t| t.as_str()) != Some("text") {
-        return None;
-    }
-    let content = match json.get("content")? {
-        Value::String(s) => s.clone(),
-        Value::Array(segs) => {
-            let mut buf = String::new();
-            for seg in segs {
-                if let Some(t) = seg
-                    .as_object()
-                    .and_then(|o| o.get("text"))
-                    .and_then(|t| t.as_str())
-                {
-                    buf.push_str(t);
-                }
-            }
-            if buf.is_empty() {
-                return None;
-            }
-            buf
-        }
-        _ => return None,
-    };
-    let font_size = json
-        .get("fontSize")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(16.0) as f32;
-    let font_family = json
-        .get("fontFamily")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
-    let font_weight = json
-        .get("fontWeight")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as u16)
-        .unwrap_or(400);
-    let color = first_solid_color(json.get("fill")).unwrap_or(Color::rgb(0, 0, 0));
-    let align = match json.get("textAlign").and_then(|v| v.as_str()) {
-        Some("center") => TextAlign::Center,
-        Some("right") | Some("end") => TextAlign::End,
-        _ => TextAlign::Start,
-    };
-    let line_height =
-        canonical_line_height_multiplier(json.get("lineHeight").and_then(|v| v.as_f64()))
-            .map(|v| v as f32)
-            .unwrap_or(0.0);
-    Some(DrawOp::Text(TextRun {
-        content,
-        font_family,
-        font_size,
-        font_weight,
-        color,
-        origin: point(r.min_x(), r.min_y()),
-        max_width: r.size.width,
-        align,
-        line_height,
-    }))
-}
-
 // Keep unused imports harmless.
 #[allow(dead_code)]
 fn _unused(_: PathCommand, _: Point) {}
@@ -2037,12 +1967,9 @@ mod tests {
     #[test]
     fn root_authored_offset_translates_its_whole_subtree() {
         // Two document ROOTS (not children of a shared frame) each author
-        // an explicit x/y. taffy has no containing block for a root, so
-        // `Position::Absolute` insets on a root are dropped by
-        // `LayoutEngine::node_rect` (by design — `node_rect` must stay
-        // root-relative for OpenPencil, which applies each root's offset
-        // itself). The scene walker is the one seam that must place each
-        // root's subtree at its authored origin before it's drawn.
+        // an explicit x/y. Taffy has no containing block for a root, so the
+        // layout engine restores that offset in absolute `node_rect` output;
+        // the scene walker must consume it exactly once.
         let rt = doc_with(
             r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
                  "app": { "name":"x", "version":"1", "id":"x" },

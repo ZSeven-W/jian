@@ -86,8 +86,7 @@ impl Runtime {
             Err(error) => {
                 if was_awaiting {
                     self.abandon_variant_swap();
-                    self.load_warnings
-                        .push(format!("parked variant rebuild failed: {error}"));
+                    self.push_layout_error(format!("parked variant rebuild failed: {error}"));
                 }
                 return Err(error);
             }
@@ -159,13 +158,11 @@ impl Runtime {
             layout.compute_responsive(root, viewport)?;
         }
         let mut spatial = SpatialIndex::new();
-        spatial.rebuild(
-            document
-                .tree
-                .nodes
-                .iter()
-                .filter_map(|(key, _)| layout.node_rect(key).map(|rect| NodeBBox { key, rect })),
-        );
+        spatial.rebuild(document.tree.nodes.iter().filter_map(|(key, _)| {
+            layout
+                .node_scene_rect(&document, key)
+                .map(|rect| NodeBBox { key, rect })
+        }));
 
         let mut widget_states = self
             .widget_states
@@ -241,8 +238,7 @@ impl Runtime {
                 parked,
             } if current == request_id => {
                 if let Err(error) = self.commit_parked(*parked) {
-                    self.load_warnings
-                        .push(format!("variant swap commit failed: {error}"));
+                    self.push_layout_error(format!("variant swap commit failed: {error}"));
                     self.swap_state = SwapState::Idle;
                 }
             }

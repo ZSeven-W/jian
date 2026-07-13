@@ -18,10 +18,13 @@ struct LoadingGuard {
     page_id: Option<String>,
     node_id: Option<String>,
     armed: bool,
+    cancel: crate::action::CancellationToken,
+    compensation_id: u64,
 }
 
 impl Drop for LoadingGuard {
     fn drop(&mut self) {
+        self.cancel.unregister_compensation(self.compensation_id);
         if !self.armed || self.path.segments.len() != 1 {
             return;
         }
@@ -70,7 +73,10 @@ impl ActionImpl for Fetch {
     }
 
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Network, "fetch") {
+        if !ctx
+            .capabilities
+            .check(Capability::Network, "fetch", ctx.now_ms())
+        {
             return Err(ActionError::CapabilityDenied {
                 action: "fetch",
                 needed: Capability::Network,
@@ -80,12 +86,21 @@ impl ActionImpl for Fetch {
         if let Some(ref path) = self.loading {
             crate::action::actions::state::write_path(ctx, path, Value::Bool(true))?;
         }
-        let mut loading_guard = self.loading.clone().map(|path| LoadingGuard {
-            state: ctx.state.clone(),
-            path,
-            page_id: ctx.page_id.clone(),
-            node_id: ctx.node_id.clone(),
-            armed: true,
+        let mut loading_guard = self.loading.clone().map(|path| {
+            let compensation_id = ctx.cancel.register_false_write(
+                path.clone(),
+                ctx.page_id.clone(),
+                ctx.node_id.clone(),
+            );
+            LoadingGuard {
+                state: ctx.state.clone(),
+                path,
+                page_id: ctx.page_id.clone(),
+                node_id: ctx.node_id.clone(),
+                armed: true,
+                cancel: ctx.cancel.clone(),
+                compensation_id,
+            }
         });
 
         let locals = ctx.locals_snapshot();
@@ -156,15 +171,12 @@ impl ActionImpl for Fetch {
                 Ok(())
             }
             Err(msg) => {
-                ctx.warn(crate::expression::Diagnostic {
-                    kind: crate::expression::DiagKind::RuntimeWarning,
-                    message: format!("fetch: {}", msg),
-                    span: crate::expression::Span::zero(),
-                });
                 if let Some(ref chain) = self.on_error {
                     chain.run_serial(ctx).await?;
+                    Ok(())
+                } else {
+                    Err(ActionError::Network(msg))
                 }
-                Ok(())
             }
         }
     }
@@ -233,4 +245,78 @@ pub fn make_fetch_body(reg: &ActionRegistry, body: &Value) -> Result<BoxedAction
         on_error,
         timeout_ms,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::action::capability::DummyCapabilityGate;
+    use crate::action::context::tests::make_ctx;
+    use crate::action::services::{HttpRequest, NetworkClient};
+    use crate::action::{default_registry, ExecOutcome};
+    use async_trait::async_trait;
+    use std::rc::Rc;
+
+    struct FailingNetwork;
+
+    #[async_trait(?Send)]
+    impl NetworkClient for FailingNetwork {
+        async fn request(&self, _request: HttpRequest) -> Result<HttpResponse, String> {
+            Err("offline".to_owned())
+        }
+    }
+
+    #[test]
+    fn handlerless_failure_aborts_serial_chain() {
+        futures::executor::block_on(async {
+            let mut ctx = make_ctx();
+            ctx.network = Rc::new(FailingNetwork);
+            ctx.capabilities = Rc::new(DummyCapabilityGate);
+            let list = serde_json::json!([
+                {"fetch": {"url": "'https://example.invalid'"}},
+                {"set": {"$app.continued": "true"}}
+            ]);
+
+            let registry = default_registry();
+            let chain = registry.borrow().parse_list(&list).unwrap();
+            let outcome = ExecOutcome {
+                result: chain.run_serial(&ctx).await,
+                warnings: ctx.take_warnings(),
+            };
+            assert!(matches!(outcome.result, Err(ActionError::Network(_))));
+            assert!(ctx.state.app_get("continued").is_none());
+        });
+    }
+
+    #[test]
+    fn authored_error_handler_recovers_and_chain_continues() {
+        futures::executor::block_on(async {
+            let mut ctx = make_ctx();
+            ctx.network = Rc::new(FailingNetwork);
+            ctx.capabilities = Rc::new(DummyCapabilityGate);
+            let list = serde_json::json!([
+                {"fetch": {
+                    "url": "'https://example.invalid'",
+                    "on_error": [{"set": {"$app.caught": "true"}}]
+                }},
+                {"set": {"$app.continued": "true"}}
+            ]);
+
+            let registry = default_registry();
+            let chain = registry.borrow().parse_list(&list).unwrap();
+            let outcome = ExecOutcome {
+                result: chain.run_serial(&ctx).await,
+                warnings: ctx.take_warnings(),
+            };
+            assert!(outcome.result.is_ok());
+            assert_eq!(
+                ctx.state.app_get("caught").unwrap().0,
+                serde_json::json!(true)
+            );
+            assert_eq!(
+                ctx.state.app_get("continued").unwrap().0,
+                serde_json::json!(true)
+            );
+        });
+    }
 }

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jian responsive M2 gallery</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; font: 13px system-ui; }
+      #jian { width: 100%; height: 100%; display: block; }
+      #controls { position: fixed; right: 12px; top: 12px; z-index: 10; display: grid; gap: 6px; width: 260px; padding: 10px; color: #eee; background: #16181dcc; border-radius: 8px; }
+      #controls button { padding: 6px 8px; }
+      #status { white-space: pre-wrap; max-height: 140px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <canvas id="jian"></canvas>
+    <section id="controls">
+      <strong>M2 acceptance controls</strong>
+      <span>Resize across 480 and 1024px. Click the rendered input and type CJK.</span>
+      <button id="invalid">Invalid setDocument</button>
+      <button id="without-assets">Remount without assetBase</button>
+      <button id="context-loss">Lose and restore WebGL</button>
+      <button id="dispose">Dispose</button>
+      <output id="status">loading…</output>
+    </section>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

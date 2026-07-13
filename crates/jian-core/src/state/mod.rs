@@ -34,6 +34,7 @@ pub struct StateGraph {
     pub(crate) vars: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
     pub(crate) viewport: RefCell<BTreeMap<String, Signal<RuntimeValue>>>,
     image_keys: RefCell<BTreeMap<String, String>>,
+    now_ms: Cell<u64>,
 }
 
 impl StateGraph {
@@ -76,6 +77,27 @@ impl StateGraph {
             .map(|(key, signal)| (key.clone(), signal.get().0))
             .collect()
     }
+    pub fn route_snapshot(&self) -> BTreeMap<String, Value> {
+        self.route
+            .borrow()
+            .iter()
+            .map(|(key, signal)| (key.clone(), signal.get().0))
+            .collect()
+    }
+    pub fn storage_snapshot(&self) -> BTreeMap<String, Value> {
+        self.storage
+            .borrow()
+            .iter()
+            .map(|(key, signal)| (key.clone(), signal.get().0))
+            .collect()
+    }
+    pub fn viewport_snapshot(&self) -> BTreeMap<String, Value> {
+        self.viewport
+            .borrow()
+            .iter()
+            .map(|(key, signal)| (key.clone(), signal.get().0))
+            .collect()
+    }
 
     pub fn replace_app(&self, values: &BTreeMap<String, Value>) {
         self.app
@@ -113,6 +135,36 @@ impl StateGraph {
             self.vars_set(key, value.clone());
         }
     }
+    pub fn replace_route(&self, values: &BTreeMap<String, Value>) {
+        self.route
+            .borrow_mut()
+            .retain(|key, _| values.contains_key(key));
+        for (key, value) in values {
+            self.route_set(key, value.clone());
+        }
+    }
+    pub fn replace_storage(&self, values: &BTreeMap<String, Value>) {
+        self.storage
+            .borrow_mut()
+            .retain(|key, _| values.contains_key(key));
+        for (key, value) in values {
+            self.storage_set(key, value.clone());
+        }
+    }
+    pub fn replace_viewport(&self, values: &BTreeMap<String, Value>) {
+        self.viewport
+            .borrow_mut()
+            .retain(|key, _| values.contains_key(key));
+        for (key, value) in values {
+            let runtime = RuntimeValue(value.clone());
+            let mut viewport = self.viewport.borrow_mut();
+            if let Some(signal) = viewport.get(key) {
+                signal.set(runtime);
+            } else {
+                viewport.insert(key.clone(), Signal::new(runtime, self.scheduler.clone()));
+            }
+        }
+    }
 
     pub fn new(scheduler: Rc<Scheduler>) -> Self {
         Self::new_with_counter(scheduler, Rc::new(Cell::new(0)))
@@ -132,7 +184,16 @@ impl StateGraph {
             vars: RefCell::new(BTreeMap::new()),
             viewport: RefCell::new(BTreeMap::new()),
             image_keys: RefCell::new(BTreeMap::new()),
+            now_ms: Cell::new(0),
         }
+    }
+
+    pub fn set_now_ms(&self, now_ms: u64) {
+        self.now_ms.set(self.now_ms.get().max(now_ms));
+    }
+
+    pub fn now_ms(&self) -> u64 {
+        self.now_ms.get()
     }
 
     pub fn set_image_key(&self, authored: &str, canonical: &str) {

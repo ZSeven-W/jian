@@ -39,9 +39,23 @@ pub enum WidgetState {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WidgetKind {
+    TextInput,
+    TextArea,
+    NumberInput,
+    Switch,
+    Checkbox,
+    Select,
+    RadioGroup,
+    Slider,
+    Tabs,
+}
+
 #[derive(Debug, Clone)]
 pub struct WidgetStateStore {
     map: HashMap<(String, String), WidgetState>,
+    kinds: HashMap<(String, String), WidgetKind>,
     page_key: String,
     mutation_counter: Rc<Cell<u64>>,
 }
@@ -56,6 +70,7 @@ impl WidgetStateStore {
     pub fn with_counter(mutation_counter: Rc<Cell<u64>>) -> Self {
         Self {
             map: HashMap::new(),
+            kinds: HashMap::new(),
             page_key: String::new(),
             mutation_counter,
         }
@@ -64,6 +79,7 @@ impl WidgetStateStore {
     pub fn clone_with_counter(&self, mutation_counter: Rc<Cell<u64>>) -> Self {
         Self {
             map: self.map.clone(),
+            kinds: self.kinds.clone(),
             page_key: self.page_key.clone(),
             mutation_counter,
         }
@@ -99,37 +115,43 @@ impl WidgetStateStore {
     /// never touched here.
     pub fn get_or_init(&mut self, node: &PenNode, state: &StateGraph) -> Option<&mut WidgetState> {
         self.bump_mutation();
-        let (id, mut init) = match node {
+        let (id, kind, mut init) = match node {
             PenNode::TextInput(n) => (
                 &n.base.id,
+                WidgetKind::TextInput,
                 WidgetState::TextInput(TextInputState::with_text(
                     n.value.clone().unwrap_or_default(),
                 )),
             ),
             PenNode::TextArea(n) => (
                 &n.base.id,
+                WidgetKind::TextArea,
                 WidgetState::TextInput(TextInputState::with_text(
                     n.value.clone().unwrap_or_default(),
                 )),
             ),
             PenNode::NumberInput(n) => (
                 &n.base.id,
+                WidgetKind::NumberInput,
                 WidgetState::TextInput(TextInputState::with_text(number_to_text(&n.value))),
             ),
             PenNode::Switch(n) => (
                 &n.base.id,
+                WidgetKind::Switch,
                 WidgetState::Toggle {
                     on: bool_default(&n.checked),
                 },
             ),
             PenNode::Checkbox(n) => (
                 &n.base.id,
+                WidgetKind::Checkbox,
                 WidgetState::Toggle {
                     on: bool_default(&n.checked),
                 },
             ),
             PenNode::Select(n) => (
                 &n.base.id,
+                WidgetKind::Select,
                 WidgetState::Select {
                     open: false,
                     value: n.value.clone(),
@@ -138,6 +160,7 @@ impl WidgetStateStore {
             ),
             PenNode::RadioGroup(n) => (
                 &n.base.id,
+                WidgetKind::RadioGroup,
                 WidgetState::Radio {
                     value: n.value.clone(),
                     hover_index: None,
@@ -145,6 +168,7 @@ impl WidgetStateStore {
             ),
             PenNode::Slider(n) => (
                 &n.base.id,
+                WidgetKind::Slider,
                 WidgetState::Slider {
                     value: number_default(&n.value, n.min.unwrap_or(0.0)),
                     dragging: false,
@@ -152,6 +176,7 @@ impl WidgetStateStore {
             ),
             PenNode::Tabs(n) => (
                 &n.base.id,
+                WidgetKind::Tabs,
                 WidgetState::Tabs {
                     active: n.value.clone(),
                     hover_index: None,
@@ -162,19 +187,12 @@ impl WidgetStateStore {
         if let Some(v) = bound_app_value(node, state) {
             apply_bound(&mut init, &v);
         }
-        use std::collections::hash_map::Entry;
-        match self.map.entry((self.page_key.clone(), id.clone())) {
-            Entry::Occupied(mut o) => {
-                // A document swap can reuse an id for a different node
-                // type; re-seed when the stored variant no longer matches
-                // so we never hand back the wrong-variant state.
-                if std::mem::discriminant(o.get()) != std::mem::discriminant(&init) {
-                    *o.get_mut() = init;
-                }
-                Some(o.into_mut())
-            }
-            Entry::Vacant(v) => Some(v.insert(init)),
+        let key = (self.page_key.clone(), id.clone());
+        if self.kinds.get(&key) != Some(&kind) || !self.map.contains_key(&key) {
+            self.map.insert(key.clone(), init);
+            self.kinds.insert(key.clone(), kind);
         }
+        self.map.get_mut(&key)
     }
 
     pub fn get(&self, id: &str) -> Option<&WidgetState> {
@@ -220,11 +238,14 @@ impl WidgetStateStore {
         let page_key = self.page_key.as_str();
         self.map
             .retain(|(page, id), _| page != page_key || live(id));
+        self.kinds
+            .retain(|(page, id), _| page != page_key || live(id));
     }
 
     pub fn clear(&mut self) {
         self.bump_mutation();
         self.map.clear();
+        self.kinds.clear();
     }
 
     pub fn reset_transients(&mut self) {
@@ -248,24 +269,35 @@ impl WidgetStateStore {
     }
 
     pub fn revalidate(&mut self, document: &crate::document::RuntimeDocument, state: &StateGraph) {
-        let keys: Vec<(String, String)> = self.map.keys().cloned().collect();
+        let keys: Vec<(String, String)> = self
+            .map
+            .keys()
+            .filter(|(page, _)| page == &self.page_key)
+            .cloned()
+            .collect();
         for key in keys {
             let Some(node_key) = document.tree.get(&key.1) else {
                 continue;
             };
             let schema = &document.tree.nodes[node_key].schema;
+            let Some(kind) = widget_kind(schema) else {
+                self.map.remove(&key);
+                self.kinds.remove(&key);
+                continue;
+            };
             let mut fresh_store = WidgetStateStore::default();
             fresh_store.set_page_key(key.0.clone());
             let fresh = fresh_store.get_or_init(schema, state).cloned();
+            if self.kinds.get(&key) != Some(&kind) {
+                if let Some(fresh) = fresh {
+                    self.map.insert(key.clone(), fresh);
+                    self.kinds.insert(key, kind);
+                }
+                continue;
+            }
             let Some(current) = self.map.get_mut(&key) else {
                 continue;
             };
-            if fresh.as_ref().is_some_and(|fresh| {
-                std::mem::discriminant(fresh) != std::mem::discriminant(current)
-            }) {
-                *current = fresh.expect("checked above");
-                continue;
-            }
             let json = serde_json::to_value(schema).unwrap_or_default();
             match current {
                 WidgetState::Select { value, .. } | WidgetState::Radio { value, .. } => {
@@ -313,7 +345,7 @@ impl WidgetStateStore {
                         .get("max")
                         .and_then(|value| value.as_f64())
                         .unwrap_or(100.0);
-                    *value = value.clamp(min, max);
+                    *value = value.min(max).max(min);
                 }
                 WidgetState::TextInput(text) if matches!(schema, PenNode::NumberInput(_)) => {
                     let min = json
@@ -325,7 +357,7 @@ impl WidgetStateStore {
                         .and_then(|value| value.as_f64())
                         .unwrap_or(f64::INFINITY);
                     if let Ok(value) = text.text().parse::<f64>() {
-                        text.set_text(value.clamp(min, max).to_string());
+                        text.set_text(fmt_num(value.min(max).max(min)));
                     } else if let Some(fresh) = fresh.clone() {
                         *current = fresh;
                     }
@@ -333,6 +365,21 @@ impl WidgetStateStore {
                 _ => {}
             }
         }
+    }
+}
+
+fn widget_kind(node: &PenNode) -> Option<WidgetKind> {
+    match node {
+        PenNode::TextInput(_) => Some(WidgetKind::TextInput),
+        PenNode::TextArea(_) => Some(WidgetKind::TextArea),
+        PenNode::NumberInput(_) => Some(WidgetKind::NumberInput),
+        PenNode::Switch(_) => Some(WidgetKind::Switch),
+        PenNode::Checkbox(_) => Some(WidgetKind::Checkbox),
+        PenNode::Select(_) => Some(WidgetKind::Select),
+        PenNode::RadioGroup(_) => Some(WidgetKind::RadioGroup),
+        PenNode::Slider(_) => Some(WidgetKind::Slider),
+        PenNode::Tabs(_) => Some(WidgetKind::Tabs),
+        _ => None,
     }
 }
 

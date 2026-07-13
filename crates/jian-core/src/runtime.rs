@@ -13,7 +13,7 @@
 
 use crate::action::services::{
     AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, NullClipboard, NullFeedback,
-    NullNetworkClient, NullPlatform, NullRouter, NullStorageBackend, PlatformService,
+    NullNetworkClient, NullPlatform, NullRouter, NullStorageBackend, PlatformService, RouteState,
     Router as RouterSvc, StorageBackend,
 };
 use crate::action::{
@@ -33,7 +33,7 @@ use crate::geometry::size;
 use crate::gesture::{
     collect_focus_chain, FocusManager, PointerEvent, PointerRouter, SemanticEvent,
 };
-use crate::layout::LayoutEngine;
+use crate::layout::{LayoutEngine, StagedLayout};
 use crate::signal::scheduler::Scheduler;
 use crate::spatial::{NodeBBox, SpatialIndex};
 use crate::state::StateGraph;
@@ -46,7 +46,18 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-type ImageCompletionQueue = Rc<RefCell<Vec<(String, Result<Vec<u8>, String>)>>>;
+struct ImageRequest {
+    task_id: u64,
+    owner_generation: Rc<Cell<u64>>,
+}
+
+struct ImageCompletion {
+    key: String,
+    owner_generation: Rc<Cell<u64>>,
+    result: Result<Vec<u8>, String>,
+}
+
+type ImageCompletionQueue = Rc<RefCell<Vec<ImageCompletion>>>;
 type WebSocketMessageQueue = Rc<RefCell<Vec<(String, u64, Vec<String>)>>>;
 
 mod ime_handshake;
@@ -167,6 +178,77 @@ fn select_variant_page(
     )
 }
 
+fn copy_layout_scopes(source: &StateGraph, target: &StateGraph, storage_allowed: bool) {
+    target.replace_app(&source.app_snapshot());
+    target.replace_vars(&source.vars_snapshot());
+    target.replace_route(&source.route_snapshot());
+    target.replace_viewport(&source.viewport_snapshot());
+    if storage_allowed {
+        target.replace_storage(&source.storage_snapshot());
+        if let serde_json::Value::Object(values) = source.storage_cache.snapshot() {
+            for (key, value) in values {
+                target.storage_cache.set_local(&key, value);
+            }
+        }
+    }
+    for page_key in source.page_keys() {
+        target.replace_page(&page_key, &source.page_snapshot(&page_key));
+    }
+    for (page_key, node_id) in source.self_keys() {
+        target.replace_self(
+            &page_key,
+            &node_id,
+            &source.self_snapshot(&page_key, &node_id),
+        );
+    }
+}
+
+fn route_values(route: &RouteState) -> BTreeMap<String, serde_json::Value> {
+    BTreeMap::from([
+        ("path".to_owned(), serde_json::json!(route.path)),
+        ("params".to_owned(), serde_json::json!(route.params)),
+        ("query".to_owned(), serde_json::json!(route.query)),
+        ("stack".to_owned(), serde_json::json!(route.stack)),
+    ])
+}
+
+fn normalized_route_values(
+    route: &RouteState,
+    valid_paths: &[String],
+) -> BTreeMap<String, serde_json::Value> {
+    let valid: BTreeSet<&str> = valid_paths.iter().map(String::as_str).collect();
+    let survives = valid.contains(route.path.as_str());
+    let (path, params, query, mut stack) = if survives {
+        (
+            route.path.clone(),
+            route.params.clone(),
+            route.query.clone(),
+            route
+                .stack
+                .iter()
+                .filter(|path| valid.contains(path.as_str()))
+                .cloned()
+                .collect(),
+        )
+    } else {
+        (
+            valid_paths.first().cloned().unwrap_or_else(|| "/".into()),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
+        )
+    };
+    if stack.last() != Some(&path) {
+        stack.push(path.clone());
+    }
+    BTreeMap::from([
+        ("path".to_owned(), serde_json::json!(path)),
+        ("params".to_owned(), serde_json::json!(params)),
+        ("query".to_owned(), serde_json::json!(query)),
+        ("stack".to_owned(), serde_json::json!(stack)),
+    ])
+}
+
 pub struct Runtime {
     pub scheduler: Rc<Scheduler>,
     pub effects: Rc<EffectRegistry>,
@@ -177,10 +259,12 @@ pub struct Runtime {
     pub image_store: crate::render::image_store::ImageStore,
     pub image_resolver: Rc<dyn crate::render::image_store::ImageResolver>,
     image_completions: ImageCompletionQueue,
-    image_requests: BTreeSet<String>,
+    image_requests: BTreeMap<String, ImageRequest>,
+    image_request_sources: BTreeMap<String, String>,
     image_document_dir: PathBuf,
     pub viewport: Viewport,
     load_warnings: Vec<String>,
+    layout_errors: Vec<String>,
     variant_table: jian_ops_schema::screen_projection::ScreenVariantTable,
     active_screen_path: Option<String>,
     active_variant_page_id: Option<String>,
@@ -195,6 +279,8 @@ pub struct Runtime {
     action_surface_generation: u64,
     dirty: bool,
     task_queue: TaskQueue,
+    action_outcomes: Vec<ReportedActionOutcome>,
+    action_reporting_enabled: bool,
     task_clock: Arc<TaskClock>,
     document_generation: u64,
 
@@ -246,6 +332,12 @@ pub struct Runtime {
     fail_next_variant_build: Cell<bool>,
 }
 
+/// A host-reportable authored action outcome with the source that scheduled it.
+pub struct ReportedActionOutcome {
+    pub outcome: ExecOutcome,
+    pub source: Option<String>,
+}
+
 impl Runtime {
     #[allow(clippy::arc_with_non_send_sync)]
     pub fn new() -> Self {
@@ -268,10 +360,12 @@ impl Runtime {
             image_store: Default::default(),
             image_resolver: Rc::new(crate::render::image_store::NullImageResolver),
             image_completions: Rc::new(RefCell::new(Vec::new())),
-            image_requests: BTreeSet::new(),
+            image_requests: BTreeMap::new(),
+            image_request_sources: BTreeMap::new(),
             image_document_dir: PathBuf::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
             load_warnings: Vec::new(),
+            layout_errors: Vec::new(),
             variant_table: Default::default(),
             active_screen_path: None,
             active_variant_page_id: None,
@@ -286,6 +380,8 @@ impl Runtime {
             action_surface_generation: 0,
             dirty: true,
             task_queue: TaskQueue::default(),
+            action_outcomes: Vec::new(),
+            action_reporting_enabled: false,
             task_clock: Arc::new(TaskClock::default()),
             document_generation: 0,
 
@@ -389,10 +485,12 @@ impl Runtime {
             image_store: Default::default(),
             image_resolver: Rc::new(crate::render::image_store::NullImageResolver),
             image_completions: Rc::new(RefCell::new(Vec::new())),
-            image_requests: BTreeSet::new(),
+            image_requests: BTreeMap::new(),
+            image_request_sources: BTreeMap::new(),
             image_document_dir: PathBuf::new(),
             viewport: Viewport::new(size(800.0, 600.0)),
             load_warnings: prepared.warnings,
+            layout_errors: Vec::new(),
             variant_table: prepared.variants,
             active_screen_path,
             active_variant_page_id,
@@ -407,6 +505,8 @@ impl Runtime {
             action_surface_generation: 1,
             dirty: true,
             task_queue: TaskQueue::default(),
+            action_outcomes: Vec::new(),
+            action_reporting_enabled: false,
             task_clock: Arc::new(TaskClock::default()),
             document_generation: 1,
 
@@ -447,6 +547,16 @@ impl Runtime {
         self.replace_document(schema)
     }
 
+    /// Atomically hot-reload a document together with the layout/spatial data
+    /// the host will immediately consume. All fallible parsing, loading,
+    /// measurement, and constraint work completes against detached state
+    /// before the live document, tasks, or image ownership are changed.
+    pub fn load_str_and_relayout(&mut self, src: &str) -> CoreResult<()> {
+        let schema = load_str(src)?.value;
+        let preferred_path = self.active_screen_path.clone();
+        self.replace_document_for_path_mode(schema, preferred_path.as_deref(), None, true, true)
+    }
+
     pub fn configure_variants(
         &mut self,
         path: impl Into<String>,
@@ -481,6 +591,20 @@ impl Runtime {
 
     pub fn active_page_key(&self) -> &str {
         &self.active_page_key
+    }
+
+    /// Current projected screen path, when the document defines screens.
+    pub fn active_screen_path(&self) -> Option<&str> {
+        self.active_screen_path.as_deref()
+    }
+
+    /// Clone the projected route table for a host-owned router.
+    pub fn screen_table(&self) -> Option<crate::screens::ScreenTable> {
+        if let Some(source) = self.variant_source.clone() {
+            crate::screens::ScreenTable::from_projected(source, self.variant_table.clone())
+        } else {
+            crate::screens::ScreenTable::from_document(self.document.as_ref()?.schema.clone())
+        }
     }
 
     /// Changes whenever the mounted document's derived action set changes.
@@ -560,7 +684,7 @@ impl Runtime {
     /// keys get their schema default.
     pub fn replace_document(&mut self, schema: PenDocument) -> CoreResult<()> {
         let preferred_path = self.active_screen_path.clone();
-        self.replace_document_for_path_mode(schema, preferred_path.as_deref(), true)
+        self.replace_document_for_path_mode(schema, preferred_path.as_deref(), None, true, false)
     }
 
     pub fn cancel_all_tasks(&mut self) {
@@ -573,19 +697,75 @@ impl Runtime {
         self.document_generation = self.document_generation.wrapping_add(1);
     }
 
+    fn cancel_non_image_tasks_for_reload(&mut self) {
+        let retained = self.reload_retained_task_ids();
+        self.task_queue.cancel_all_except(&retained);
+        self.ws_receive_active.clear();
+        self.ws_messages.borrow_mut().clear();
+        self.state.storage_cache.cancel_hydrations();
+        self.document_generation = self.document_generation.wrapping_add(1);
+    }
+
+    fn reload_retained_task_ids(&self) -> BTreeSet<u64> {
+        self.image_requests
+            .values()
+            .map(|request| request.task_id)
+            .collect()
+    }
+
+    fn transfer_reload_image_requests(&mut self) {
+        let generation = self.document_generation;
+        for (key, request) in &self.image_requests {
+            if self.image_store.state(key) == Some(crate::render::image_store::ImageState::Pending)
+            {
+                request.owner_generation.set(generation);
+                // A ready resolver may already have left TaskQueue and queued
+                // its completion. The shared owner cell still safely
+                // transfers that completion even when there is no task left
+                // to retag.
+                self.task_queue.retag_task(request.task_id, generation);
+            }
+        }
+        let stale: Vec<String> = self
+            .image_requests
+            .iter()
+            .filter(|(key, _)| {
+                self.image_store.state(key) != Some(crate::render::image_store::ImageState::Pending)
+            })
+            .map(|(key, _)| key.clone())
+            .collect();
+        for key in stale {
+            if let Some(request) = self.image_requests.remove(&key) {
+                self.task_queue.cancel_task(request.task_id);
+            }
+        }
+    }
+
     pub(crate) fn replace_document_for_path(
         &mut self,
         schema: PenDocument,
         preferred_path: Option<&str>,
+        route: &RouteState,
     ) -> CoreResult<()> {
-        self.replace_document_for_path_mode(schema, preferred_path, false)
+        self.replace_document_for_path_mode(schema, preferred_path, Some(route), false, false)
+    }
+
+    pub(crate) fn replace_document_for_path_and_relayout(
+        &mut self,
+        schema: PenDocument,
+        preferred_path: Option<&str>,
+        route: &RouteState,
+    ) -> CoreResult<()> {
+        self.replace_document_for_path_mode(schema, preferred_path, Some(route), false, true)
     }
 
     fn replace_document_for_path_mode(
         &mut self,
         mut schema: PenDocument,
         preferred_path: Option<&str>,
+        candidate_route: Option<&RouteState>,
         conform_reload: bool,
+        install_layout: bool,
     ) -> CoreResult<()> {
         let route_snapshot = conform_reload.then(|| self.nav.current());
         let reload_declaration_schema = schema.clone();
@@ -632,6 +812,9 @@ impl Runtime {
             }
         }
         let mut self_declarations = BTreeMap::new();
+        if let Ok(children) = serde_json::to_value(&declaration_source.children) {
+            collect_self_declarations(&children, "", &mut self_declarations);
+        }
         if let Some(pages) = declaration_source.pages.as_ref() {
             for page in pages {
                 if let Ok(children) = serde_json::to_value(&page.children) {
@@ -641,11 +824,17 @@ impl Runtime {
         }
         schema = prepared.mounted;
         let responsive = schema.is_responsive();
-        let valid_paths: Vec<String> = schema
-            .routes
-            .as_ref()
-            .map(|routes| routes.routes.keys().cloned().collect())
-            .unwrap_or_default();
+        let valid_paths: Vec<String> = schema.routes.as_ref().map_or_else(Vec::new, |routes| {
+            std::iter::once(routes.entry.clone())
+                .chain(
+                    routes
+                        .routes
+                        .keys()
+                        .filter(|path| *path != &routes.entry)
+                        .cloned(),
+                )
+                .collect()
+        });
         let declared_state = schema.state.clone().unwrap_or_default();
         let staged_defaults: BTreeMap<String, serde_json::Value> = declared_state
             .iter()
@@ -677,7 +866,6 @@ impl Runtime {
             .clone()
             .unwrap_or_else(|| Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY)));
         let storage_allowed = declared.contains(&crate::action::Capability::Storage);
-        let network_allowed = declared.contains(&crate::action::Capability::Network);
         let capabilities = Rc::new(DeclaredCapabilityGate::new(declared, Some(audit.clone())));
 
         // Loader seeding is fallible and mutating. Build against a detached
@@ -689,40 +877,30 @@ impl Runtime {
             return Err(CoreError::Layout("injected loader failure".into()));
         }
         let doc = loader::build_with(schema, &staged_state, loader::SeedMode::Initial)?;
+        let staged_vars = staged_state.vars_snapshot();
+        let page_key = if responsive {
+            prepared.selected_page_id.as_deref().unwrap_or_default()
+        } else {
+            ""
+        };
+        // Preview every registered cancellation compensation against a
+        // detached copy. The one fallible geometry build then sees exactly
+        // the state that task cancellation will commit, while failed reloads
+        // leave live futures and their authored loading flags untouched.
+        let cancellation_state = Rc::new(StateGraph::new(Rc::new(Scheduler::new())));
+        cancellation_state.set_responsive(responsive);
+        copy_layout_scopes(&self.state, &cancellation_state, storage_allowed);
         if conform_reload {
-            let closing_sessions: Vec<_> = self
-                .ws_sessions
-                .borrow_mut()
-                .drain()
-                .map(|(_, handle)| handle.session)
-                .collect();
-            self.cancel_all_tasks();
-            for session in closing_sessions {
-                self.task_queue.spawn_future(
-                    async move {
-                        let result = session
-                            .close()
-                            .await
-                            .map_err(crate::action::ActionError::Custom);
-                        ExecOutcome {
-                            result,
-                            warnings: Vec::new(),
-                        }
-                    },
-                    self.document_generation,
-                    Some("websocket:reload-close".into()),
-                );
-            }
+            let retained = self.reload_retained_task_ids();
+            self.task_queue
+                .preview_cancel_compensations_except(&retained, &cancellation_state);
         }
-        // Cancellation compensations (for example `fetch.loading = false`)
-        // run only after detached loading succeeds, but must be captured by
-        // the conformance merge that is about to become the committed state.
-        let live_state = self.state.app_snapshot();
+        let live_state = cancellation_state.app_snapshot();
         let (merged_state, mut conformance_warnings) =
             crate::state::conformance::merge_scope(&live_state, &staged_defaults, &declared_state);
+        let mut page_merges = Vec::new();
+        let mut self_merges = Vec::new();
         if conform_reload {
-            self.state.replace_app(&merged_state);
-            self.state.replace_vars(&staged_state.vars_snapshot());
             // Union of newly declared keys and RETAINED live keys: a page
             // whose `state` declaration disappeared must still be merged —
             // against an empty declaration, which prunes its stale fields.
@@ -747,16 +925,16 @@ impl Runtime {
                     })
                     .collect();
                 let (merged, warnings) = crate::state::conformance::merge_scope(
-                    &self.state.page_snapshot(page_key),
+                    &cancellation_state.page_snapshot(page_key),
                     &staged,
                     page_schema,
                 );
-                self.state.replace_page(page_key, &merged);
                 conformance_warnings.extend(
                     warnings
                         .into_iter()
                         .map(|warning| format!("$page[{page_key}]: {warning}")),
                 );
+                page_merges.push((page_key.clone(), merged));
             }
             let empty_self_schema = jian_ops_schema::state::StateSchema::default();
             let mut self_keys: Vec<(String, String)> = self_declarations.keys().cloned().collect();
@@ -779,24 +957,95 @@ impl Runtime {
                     })
                     .collect();
                 let (merged, warnings) = crate::state::conformance::merge_scope(
-                    &self.state.self_snapshot(page_key, node_id),
+                    &cancellation_state.self_snapshot(page_key, node_id),
                     &staged,
                     declared,
                 );
-                self.state.replace_self(page_key, node_id, &merged);
                 conformance_warnings.extend(
                     warnings
                         .into_iter()
                         .map(|warning| format!("$self[{page_key}/{node_id}]: {warning}")),
                 );
-            }
-            if !storage_allowed {
-                self.state.storage_cache.purge();
-            }
-            if !network_allowed {
-                conformance_warnings.extend(self.image_store.revoke_network());
+                self_merges.push((page_key.clone(), node_id.clone(), merged));
             }
         }
+
+        let committed_route = candidate_route.map_or_else(
+            || {
+                route_snapshot.as_ref().map_or_else(
+                    || self.state.route_snapshot(),
+                    |route| normalized_route_values(route, &valid_paths),
+                )
+            },
+            route_values,
+        );
+        if conform_reload {
+            copy_layout_scopes(&cancellation_state, &staged_state, storage_allowed);
+            staged_state.replace_app(&merged_state);
+            staged_state.replace_vars(&staged_vars);
+            for (page_key, values) in &page_merges {
+                staged_state.replace_page(page_key, values);
+            }
+            for (page_key, node_id, values) in &self_merges {
+                staged_state.replace_self(page_key, node_id, values);
+            }
+            staged_state.replace_route(&committed_route);
+        } else {
+            copy_layout_scopes(&self.state, &staged_state, storage_allowed);
+            staged_state.replace_route(&committed_route);
+        }
+        let staged_geometry = if install_layout {
+            Some(self.stage_document_geometry(
+                &doc,
+                &staged_state,
+                page_key,
+                (self.viewport.size.width, self.viewport.size.height),
+            )?)
+        } else {
+            None
+        };
+
+        if conform_reload {
+            let closing_sessions: Vec<_> = self
+                .ws_sessions
+                .borrow_mut()
+                .drain()
+                .map(|(_, handle)| handle.session)
+                .collect();
+            self.cancel_non_image_tasks_for_reload();
+            for session in closing_sessions {
+                self.task_queue.spawn_future(
+                    async move {
+                        let result = session
+                            .close()
+                            .await
+                            .map_err(crate::action::ActionError::Custom);
+                        ExecOutcome {
+                            result,
+                            warnings: Vec::new(),
+                        }
+                    },
+                    self.document_generation,
+                    Some("websocket:reload-close".into()),
+                );
+            }
+        }
+
+        if conform_reload {
+            self.state.replace_app(&merged_state);
+            self.state.replace_vars(&staged_vars);
+            for (page_key, values) in &page_merges {
+                self.state.replace_page(page_key, values);
+            }
+            for (page_key, node_id, values) in &self_merges {
+                self.state.replace_self(page_key, node_id, values);
+            }
+            if !storage_allowed {
+                self.state.replace_storage(&BTreeMap::new());
+                self.state.storage_cache.purge();
+            }
+        }
+        self.state.replace_route(&committed_route);
         self.state.set_responsive(responsive);
         let action_surface_inputs =
             crate::action_surface::derive_actions(&doc.schema, &crate::action_surface::BUILD_SALT);
@@ -825,6 +1074,17 @@ impl Runtime {
             .set_page_key(self.active_page_key.clone());
         self.image_store.begin_reload_ownership();
         self.document = Some(doc);
+        if let Some((layout, spatial, layout_warnings)) = staged_geometry {
+            self.layout.install(layout);
+            self.spatial = spatial;
+            for warning in layout_warnings {
+                if !self.load_warnings.contains(&warning) {
+                    self.load_warnings.push(warning);
+                }
+            }
+            self.layout_mutation_seen = self.mutation_counter.get();
+            self.mark_dirty();
+        }
         // Preserve widget runtime state for ids that still exist in the
         // swapped-in tree; drop state for nodes that vanished.
         if let Some(doc) = self.document.as_ref() {
@@ -866,7 +1126,74 @@ impl Runtime {
         self.state.clear_image_keys();
         self.admit_document_images();
         self.image_store.finish_reload_ownership();
+        if conform_reload {
+            self.transfer_reload_image_requests();
+        }
+        self.image_request_sources
+            .retain(|key, _| self.image_store.state(key).is_some());
         Ok(())
+    }
+
+    fn stage_document_geometry(
+        &self,
+        live_doc: &RuntimeDocument,
+        state: &StateGraph,
+        page_key: &str,
+        available: (f32, f32),
+    ) -> CoreResult<(StagedLayout, SpatialIndex, Vec<String>)> {
+        let responsive = live_doc.schema.is_responsive();
+        let mut materialized;
+        let doc = if responsive {
+            materialized = live_doc.clone();
+            for (_, node) in materialized.tree.nodes.iter_mut() {
+                crate::binding::materialize_layout_bindings(
+                    &mut node.schema,
+                    state,
+                    Some(page_key),
+                );
+            }
+            &materialized
+        } else {
+            live_doc
+        };
+        let mut staged = self.layout.build_staged(doc)?;
+        let mut warnings = Vec::new();
+        if responsive {
+            warnings.extend(staged.engine.constraint_lints().iter().cloned());
+            if let Some(root) = select_viewport_root(&doc.tree, &mut warnings) {
+                if root_has_limits(&doc.tree.nodes[root].schema) {
+                    warnings.push("responsive viewport root min/max bounds are ignored".to_owned());
+                }
+                staged.engine.override_root_for_viewport(root, available)?;
+            }
+            for root in staged.roots.iter().copied() {
+                staged.engine.compute_responsive(root, available)?;
+            }
+        } else {
+            for root in staged.roots.iter().copied() {
+                staged.engine.compute(root, available)?;
+            }
+        }
+        let items: Vec<NodeBBox> = doc
+            .tree
+            .nodes
+            .iter()
+            .filter(|(_, node)| {
+                serde_json::to_value(&node.schema)
+                    .ok()
+                    .and_then(|json| json.get("visible").and_then(serde_json::Value::as_bool))
+                    .unwrap_or(true)
+            })
+            .filter_map(|(key, _)| {
+                staged
+                    .engine
+                    .node_scene_rect(doc, key)
+                    .map(|rect| NodeBBox { key, rect })
+            })
+            .collect();
+        let mut spatial = SpatialIndex::new();
+        spatial.rebuild(items);
+        Ok((staged, spatial, warnings))
     }
 
     pub fn build_layout(&mut self, available: (f32, f32)) -> CoreResult<()> {
@@ -936,7 +1263,7 @@ impl Runtime {
             .filter_map(|(key, _)| {
                 staged
                     .engine
-                    .node_rect(key)
+                    .node_scene_rect(doc, key)
                     .map(|rect| NodeBBox { key, rect })
             })
             .collect();
@@ -993,9 +1320,6 @@ impl Runtime {
         let Some(doc) = self.document.as_ref() else {
             return;
         };
-        if !doc.schema.is_responsive() {
-            return;
-        }
         let mut found = Vec::new();
         for (_, node) in doc.tree.nodes.iter() {
             if let jian_ops_schema::node::PenNode::Image(image) = &node.schema {
@@ -1014,6 +1338,44 @@ impl Runtime {
             }
         }
         for source in found {
+            if !source.starts_with("data:") {
+                match self.image_resolver.admission(&source) {
+                    Ok(Some(admission)) => {
+                        self.state.set_image_key(&source, &admission.key);
+                        self.image_request_sources
+                            .insert(admission.key.clone(), admission.request_source);
+                        if !admission.requires_network
+                            || self.capabilities.check(
+                                crate::action::Capability::Network,
+                                "image_resolve",
+                                self.now_ms,
+                            )
+                        {
+                            self.image_store
+                                .admit_resolver(&admission.key, 64 * 1024 * 1024);
+                        } else {
+                            self.image_store.admit_resolver(&admission.key, 0);
+                            if self.image_store.state(&admission.key)
+                                != Some(crate::render::image_store::ImageState::Registered)
+                            {
+                                self.image_store
+                                    .fail(&admission.key, "network capability denied");
+                                self.load_warnings.push(format!(
+                                    "image `{}`: network capability denied",
+                                    admission.key
+                                ));
+                            }
+                        }
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.load_warnings
+                            .push(format!("image `{source}`: {error}"));
+                        continue;
+                    }
+                }
+            }
             let key = match crate::render::image_store::canonical_url_key(
                 &source,
                 &self.image_document_dir,
@@ -1035,10 +1397,11 @@ impl Runtime {
                     }
                 }
             } else if source.starts_with("http://") || source.starts_with("https://") {
-                if self
-                    .capabilities
-                    .check(crate::action::Capability::Network, "image_resolve")
-                {
+                if self.capabilities.check(
+                    crate::action::Capability::Network,
+                    "image_resolve",
+                    self.now_ms,
+                ) {
                     self.image_store.admit_resolver(&key, 64 * 1024 * 1024);
                 } else {
                     self.image_store.admit_resolver(&key, 0);
@@ -1069,16 +1432,27 @@ impl Runtime {
 
     pub(crate) fn dispatch_image_requests(&mut self) {
         for key in self.image_store.pending_keys() {
-            if !self.image_requests.insert(key.clone()) {
+            if self.image_requests.contains_key(&key) {
                 continue;
             }
             let resolver = self.image_resolver.clone();
             let completions = self.image_completions.clone();
             let request_key = key.clone();
-            self.task_queue.spawn_future(
+            let owner_generation = Rc::new(Cell::new(self.document_generation));
+            let completion_owner = owner_generation.clone();
+            let request_source = self
+                .image_request_sources
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| key.clone());
+            let task_id = self.task_queue.spawn_future(
                 async move {
-                    let result = resolver.resolve(&request_key).await;
-                    completions.borrow_mut().push((request_key, result));
+                    let result = resolver.resolve(&request_source).await;
+                    completions.borrow_mut().push(ImageCompletion {
+                        key: request_key,
+                        owner_generation: completion_owner,
+                        result,
+                    });
                     ExecOutcome {
                         result: Ok(()),
                         warnings: Vec::new(),
@@ -1087,11 +1461,65 @@ impl Runtime {
                 self.document_generation,
                 Some(format!("image:{key}")),
             );
+            self.image_requests.insert(
+                key,
+                ImageRequest {
+                    task_id,
+                    owner_generation,
+                },
+            );
         }
     }
 
     pub fn load_warnings(&self) -> &[String] {
         &self.load_warnings
+    }
+
+    /// Drain authored action results completed since the previous call.
+    ///
+    /// Hosts use this to report every action diagnostic and failure without
+    /// coupling JS/native callbacks to runtime dispatch borrows.
+    pub fn take_action_outcomes(&mut self) -> Vec<ReportedActionOutcome> {
+        std::mem::take(&mut self.action_outcomes)
+    }
+
+    /// Drain layout failures caught by asynchronous/host-driven runtime paths.
+    /// The live layout remains installed because every layout build is staged.
+    pub fn take_layout_errors(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.layout_errors)
+    }
+
+    /// Enable retention of action warnings and failures for a reporting host.
+    /// Disabled by default so native hosts that do not install callbacks keep
+    /// the historical discard behavior and cannot accumulate diagnostics.
+    pub fn enable_action_reporting(&mut self) {
+        self.action_reporting_enabled = true;
+    }
+
+    /// Record a host-visible runtime warning for the normal warning stream.
+    pub fn push_load_warning(&mut self, warning: impl Into<String>) {
+        self.load_warnings.push(warning.into());
+    }
+
+    /// Queue a host-visible layout error without degrading it to a warning.
+    pub fn push_layout_error(&mut self, error: impl Into<String>) {
+        self.layout_errors.push(error.into());
+    }
+
+    fn collect_task_outcomes(&mut self) -> bool {
+        let outcomes = self.task_queue.poll_all(self.now_ms);
+        let completed = !outcomes.is_empty();
+        if self.action_reporting_enabled {
+            self.action_outcomes
+                .extend(outcomes.into_iter().filter_map(|completed| {
+                    (completed.outcome.result.is_err() || !completed.outcome.warnings.is_empty())
+                        .then_some(ReportedActionOutcome {
+                            outcome: completed.outcome,
+                            source: completed.source,
+                        })
+                }));
+        }
+        completed
     }
 
     /// Canonical live logical viewport used by responsive selection/reload.
@@ -1109,8 +1537,7 @@ impl Runtime {
                 .is_some_and(|document| document.schema.is_responsive())
             {
                 if let Err(error) = self.relayout() {
-                    self.load_warnings
-                        .push(format!("viewport relayout failed: {error}"));
+                    self.push_layout_error(format!("viewport relayout failed: {error}"));
                 }
             }
         }
@@ -1168,11 +1595,24 @@ impl Runtime {
             .iter()
             .filter_map(|(key, _)| {
                 self.layout
-                    .node_rect(key)
+                    .node_scene_rect(doc, key)
                     .map(|rect| NodeBBox { key, rect })
             })
             .collect();
         self.spatial.rebuild(items);
+    }
+
+    /// Runtime/host geometry in the same absolute scene coordinate space as
+    /// draw ops and pointer events.
+    pub fn node_scene_rect(&self, key: crate::document::NodeKey) -> Option<crate::geometry::Rect> {
+        let doc = self.document.as_ref()?;
+        self.layout.node_scene_rect(doc, key)
+    }
+
+    pub fn focused_node_rect(&self) -> Option<crate::geometry::Rect> {
+        self.focus
+            .current()
+            .and_then(|key| self.node_scene_rect(key))
     }
 
     /// Cold-start variant (Plan 19 Task 5): bulk-load only nodes
@@ -1192,7 +1632,7 @@ impl Runtime {
         let mut visible: Vec<NodeBBox> = Vec::new();
         let mut hidden: Vec<NodeBBox> = Vec::new();
         for (key, _) in doc.tree.nodes.iter() {
-            let Some(rect) = self.layout.node_rect(key) else {
+            let Some(rect) = self.layout.node_scene_rect(doc, key) else {
                 continue;
             };
             let bbox = NodeBBox { key, rect };
@@ -1402,7 +1842,7 @@ impl Runtime {
             s.max.unwrap_or(100.0),
             s.step.unwrap_or(1.0),
         );
-        let Some(r) = self.layout.node_rect(node) else {
+        let Some(r) = self.node_scene_rect(node) else {
             return false;
         };
         let (min_x, width) = (r.min_x(), r.size.width);
@@ -1719,6 +2159,8 @@ impl Runtime {
 
     pub fn note_time(&mut self, now_ms: u64) {
         self.now_ms = self.now_ms.max(now_ms);
+        self.task_clock.advance_to(self.now_ms);
+        self.state.set_now_ms(self.now_ms);
     }
 
     pub fn last_now_ms(&self) -> u64 {
@@ -1994,7 +2436,7 @@ impl Runtime {
                 Some(format!("websocket:receive:{id}")),
             );
         }
-        let _ = self.task_queue.poll_all(self.now_ms);
+        self.collect_task_outcomes();
         let received = std::mem::take(&mut *self.ws_messages.borrow_mut());
         let mut fired = 0usize;
         for (id, generation, messages) in received {
@@ -2026,20 +2468,25 @@ impl Runtime {
                     "id": id,
                     "data": msg,
                 }));
-                if self
-                    .task_queue
-                    .spawn(
-                        &self.actions,
-                        &handler_json,
-                        ctx,
-                        self.document_generation,
-                        Some(format!("websocket:{id}")),
-                    )
-                    .is_err()
-                {
+                if let Err(error) = self.task_queue.spawn(
+                    &self.actions,
+                    &handler_json,
+                    ctx,
+                    self.document_generation,
+                    Some(format!("websocket:{id}")),
+                ) {
+                    if self.action_reporting_enabled {
+                        self.action_outcomes.push(ReportedActionOutcome {
+                            outcome: ExecOutcome {
+                                result: Err(error),
+                                warnings: Vec::new(),
+                            },
+                            source: Some(format!("websocket:{id}")),
+                        });
+                    }
                     continue;
                 }
-                let _ = self.task_queue.poll_all(self.now_ms);
+                self.collect_task_outcomes();
                 self.scheduler.flush();
                 fired += 1;
             }
@@ -2068,7 +2515,7 @@ impl Runtime {
         emitted
     }
 
-    fn dispatch_semantic(&mut self, event: &SemanticEvent) -> ExecOutcome {
+    fn dispatch_semantic(&mut self, event: &SemanticEvent) {
         let (source_node_id, list) = {
             let doc = self.document.as_ref().expect("no document loaded");
             let source = doc
@@ -2086,7 +2533,7 @@ impl Runtime {
             None => self.make_action_ctx(),
         };
         ctx.node_id = source_node_id;
-        let outcome = if let Some(list) = list {
+        if let Some(list) = list {
             match self.task_queue.spawn(
                 &self.actions,
                 &list,
@@ -2094,30 +2541,25 @@ impl Runtime {
                 self.document_generation,
                 Some(event.handler_key().to_owned()),
             ) {
-                Ok(_) => self
-                    .task_queue
-                    .poll_all(self.now_ms)
-                    .pop()
-                    .unwrap_or(ExecOutcome {
-                        result: Ok(()),
-                        warnings: Vec::new(),
-                    }),
-                Err(error) => ExecOutcome {
-                    result: Err(error),
-                    warnings: Vec::new(),
-                },
+                Ok(_) => {
+                    self.collect_task_outcomes();
+                }
+                Err(error) if self.action_reporting_enabled => {
+                    self.action_outcomes.push(ReportedActionOutcome {
+                        outcome: ExecOutcome {
+                            result: Err(error),
+                            warnings: Vec::new(),
+                        },
+                        source: Some(event.handler_key().to_owned()),
+                    });
+                }
+                Err(_) => {}
             }
-        } else {
-            ExecOutcome {
-                result: Ok(()),
-                warnings: Vec::new(),
-            }
-        };
+        }
         // Actions mutate state via Signals whose effects are scheduled;
         // flush synchronously so bindings / scene observers see the new
         // values before the host's next frame.
         self.scheduler.flush();
-        outcome
     }
 
     /// Drain the deferred-binding queue into registered, reactive
@@ -2371,6 +2813,126 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pump_retains_every_completed_action_outcome() {
+        let mut runtime = Runtime::new();
+        runtime.enable_action_reporting();
+        for message in ["first", "second"] {
+            runtime.task_queue.spawn_future(
+                std::future::ready(ExecOutcome {
+                    result: Err(crate::action::ActionError::Custom(message.to_owned())),
+                    warnings: vec![crate::expression::Diagnostic {
+                        kind: crate::expression::DiagKind::RuntimeWarning,
+                        message: format!("warning-{message}"),
+                        span: crate::expression::Span::zero(),
+                    }],
+                }),
+                runtime.document_generation,
+                Some(message.to_owned()),
+            );
+        }
+
+        runtime.pump(0);
+        let outcomes = runtime.take_action_outcomes();
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].outcome.warnings[0].message, "warning-first");
+        assert_eq!(outcomes[1].outcome.warnings[0].message, "warning-second");
+        assert_eq!(outcomes[0].source.as_deref(), Some("first"));
+        assert_eq!(outcomes[1].source.as_deref(), Some("second"));
+        assert!(matches!(
+            outcomes[0].outcome.result,
+            Err(crate::action::ActionError::Custom(ref message)) if message == "first"
+        ));
+        assert!(runtime.take_action_outcomes().is_empty(), "drain is exact");
+    }
+
+    #[test]
+    fn synchronous_dispatch_parse_error_is_queued_for_host_reporting() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","children":[
+              {"type":"rectangle","id":"button","width":40,"height":40,
+               "events":{"onTap":[{"not_registered":null}]}}
+            ]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(schema).unwrap();
+        runtime.enable_action_reporting();
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        runtime.rebuild_spatial();
+        for phase in [
+            crate::gesture::PointerPhase::Down,
+            crate::gesture::PointerPhase::Up,
+        ] {
+            runtime.dispatch_pointer(PointerEvent::simple(
+                0,
+                phase,
+                crate::geometry::point(10.0, 10.0),
+            ));
+        }
+
+        let outcomes = runtime.take_action_outcomes();
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(
+            outcomes[0].outcome.result,
+            Err(crate::action::ActionError::UnknownAction(ref action))
+                if action == "not_registered"
+        ));
+        assert_eq!(outcomes[0].source.as_deref(), Some("onTap"));
+    }
+
+    #[test]
+    fn top_level_authored_offsets_drive_hit_testing_and_focused_rect() {
+        let schema: PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","state":{"count":{"type":"int","default":0}},"children":[
+              {"type":"rectangle","id":"button","x":80,"y":40,"width":80,"height":80,
+               "events":{"onTap":[{"set":{"$app.count":"$app.count + 1"}}]}},
+              {"type":"text_input","id":"field","x":20,"y":130,"width":100,"height":30,"value":""}
+            ]}"#,
+        )
+        .unwrap();
+        let mut runtime = Runtime::new_from_document(schema).unwrap();
+        runtime.build_layout((400.0, 200.0)).unwrap();
+        runtime.rebuild_spatial();
+
+        let button = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("button")
+            .unwrap();
+        assert_eq!(
+            runtime.layout.node_rect(button),
+            Some(crate::geometry::rect(80.0, 40.0, 80.0, 80.0)),
+            "the production layout must retain authored geometry for a document root"
+        );
+
+        for phase in [
+            crate::gesture::PointerPhase::Down,
+            crate::gesture::PointerPhase::Up,
+        ] {
+            runtime.dispatch_pointer(PointerEvent::simple(
+                1,
+                phase,
+                crate::geometry::point(100.0, 60.0),
+            ));
+        }
+        assert_eq!(runtime.state.app_get("count").unwrap().as_i64(), Some(1));
+
+        let field = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("field")
+            .unwrap();
+        runtime.focus_request(field).unwrap();
+        assert_eq!(
+            runtime.focused_node_rect(),
+            Some(crate::geometry::rect(20.0, 130.0, 100.0, 30.0))
+        );
+    }
+
+    #[test]
     fn failed_relayout_keeps_live_layout_spatial_and_dispatch_consistent() {
         let schema: PenDocument = serde_json::from_str(
             r#"{"version":"1.2","responsive":true,
@@ -2407,6 +2969,265 @@ mod tests {
             crate::geometry::point(5.0, 5.0),
         ));
         assert_eq!(runtime.state.app_get("hit").unwrap().as_i64(), Some(1));
+    }
+
+    #[test]
+    fn failed_atomic_reload_keeps_previous_document_state_layout_and_tasks() {
+        let mut runtime = Runtime::new();
+        runtime
+            .load_str(
+                r#"{"version":"1.2","state":{"kept":{"type":"int","default":7}},"children":[{"type":"rectangle","id":"old","x":12,"y":8,"width":30,"height":20}]}"#,
+            )
+            .unwrap();
+        runtime.build_layout((100.0, 80.0)).unwrap();
+        let old_key = runtime.document.as_ref().unwrap().tree.get("old").unwrap();
+        let old_rect = runtime.node_scene_rect(old_key).unwrap();
+        runtime.task_queue.spawn_future(
+            std::future::pending::<ExecOutcome>(),
+            runtime.document_generation,
+            Some("kept-task".to_owned()),
+        );
+
+        runtime.layout.inject_staged_build_failure();
+        let error = runtime
+            .load_str_and_relayout(
+                r#"{"version":"1.2","state":{"replacement":{"type":"int","default":1}},"children":[{"type":"rectangle","id":"new","width":50,"height":50}]}"#,
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, CoreError::Layout(_)));
+        assert!(runtime.document.as_ref().unwrap().tree.get("new").is_none());
+        assert_eq!(runtime.state.app_get("kept").unwrap().as_i64(), Some(7));
+        assert!(runtime.state.app_get("replacement").is_none());
+        assert_eq!(runtime.node_scene_rect(old_key), Some(old_rect));
+        assert!(!runtime.task_queue.is_empty());
+    }
+
+    #[test]
+    fn atomic_reload_geometry_uses_exact_retained_layout_scopes() {
+        let before = r#"{
+          "version":"1.2","responsive":true,
+          "app":{"name":"t","version":"1","id":"t","capabilities":["storage"]},
+          "routes":{"entry":"/detail","routes":{"/detail":{"pageId":"main"}}},
+          "state":{"offset":{"type":"int","default":1}},
+          "pages":[{"id":"main","name":"Main","state":{"w":{"type":"int","default":10}},
+            "children":[{"type":"rectangle","id":"box","width":1,"height":10,
+              "state":{"extra":{"type":"int","default":2}}}]}],"children":[]}"#;
+        let mut runtime = Runtime::new();
+        runtime.load_str(before).unwrap();
+        runtime.build_layout((200.0, 100.0)).unwrap();
+        runtime.state.app_set("offset", serde_json::json!(5));
+        runtime.state.page_set("main", "w", serde_json::json!(40));
+        runtime
+            .state
+            .self_set("main", "box", "extra", serde_json::json!(3));
+        runtime.state.storage_set("bump", serde_json::json!(7));
+        runtime.nav = Rc::new(crate::screens::ScreenRouter::new(
+            "/detail",
+            ["/detail".to_owned()],
+        ));
+
+        runtime
+            .load_str_and_relayout(
+                r#"{
+                  "version":"1.2","responsive":true,
+                  "app":{"name":"t","version":"1","id":"t","capabilities":["storage"]},
+                  "routes":{"entry":"/detail","routes":{"/detail":{"pageId":"main"}}},
+                  "state":{"offset":{"type":"int","default":2}},
+                  "pages":[{"id":"main","name":"Main","state":{"w":{"type":"int","default":12}},
+                    "children":[{"type":"rectangle","id":"box","width":1,"height":10,
+                      "state":{"extra":{"type":"int","default":4}},
+                      "bindings":{"width":"$page.w + $self.extra + $viewport.width / 10 + ($route.path == '/detail' ? 20 : 0) + $storage.bump + $app.offset"}}]}],
+                  "children":[]}"#,
+            )
+            .unwrap();
+
+        let box_key = runtime.document.as_ref().unwrap().tree.get("box").unwrap();
+        assert_eq!(runtime.layout.node_rect(box_key).unwrap().size.width, 95.0);
+        assert_eq!(
+            runtime.state.page_get("main", "w").unwrap().as_i64(),
+            Some(40)
+        );
+        assert_eq!(
+            runtime
+                .state
+                .self_get("main", "box", "extra")
+                .unwrap()
+                .as_i64(),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn atomic_reload_revokes_storage_before_staging_geometry() {
+        let mut runtime = Runtime::new();
+        runtime
+            .load_str(
+                r#"{"version":"1.2","responsive":true,
+                "app":{"name":"t","version":"1","id":"t","capabilities":["storage"]},
+                "children":[{"type":"rectangle","id":"old","width":10,"height":10}]}"#,
+            )
+            .unwrap();
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        runtime.state.storage_set("bump", serde_json::json!(70));
+
+        runtime
+            .load_str_and_relayout(
+                r#"{"version":"1.2","responsive":true,
+                "app":{"name":"t","version":"1","id":"t"},
+                "children":[{"type":"rectangle","id":"box","width":1,"height":10,
+                "bindings":{"width":"$storage.bump == null ? 11 : $storage.bump"}}]}"#,
+            )
+            .unwrap();
+
+        let box_key = runtime.document.as_ref().unwrap().tree.get("box").unwrap();
+        assert_eq!(runtime.layout.node_rect(box_key).unwrap().size.width, 11.0);
+        assert!(runtime.state.storage_snapshot().is_empty());
+        assert_eq!(
+            runtime.state.storage_cache.snapshot(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn atomic_nonresponsive_reload_conforms_top_level_self_state() {
+        let mut runtime = Runtime::new();
+        runtime
+            .load_str(
+                r#"{"version":"1.2","children":[{"type":"rectangle","id":"card",
+                "width":10,"height":10,"state":{"kept":{"type":"int","default":7}}}]}"#,
+            )
+            .unwrap();
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        runtime
+            .state
+            .self_set("", "card", "kept", serde_json::json!(9));
+
+        runtime
+            .load_str_and_relayout(
+                r#"{"version":"1.2","children":[{"type":"rectangle","id":"card",
+                "width":20,"height":10,"state":{"kept":{"type":"int","default":8},
+                "added":{"type":"int","default":4}}}]}"#,
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.state.self_get("", "card", "kept").unwrap().as_i64(),
+            Some(9)
+        );
+        assert_eq!(
+            runtime
+                .state
+                .self_get("", "card", "added")
+                .unwrap()
+                .as_i64(),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn atomic_reload_reseeds_same_discriminant_widget_kind_changes() {
+        let mut runtime = Runtime::new();
+        runtime
+            .load_str(
+                r#"{"version":"1.2","children":[
+                {"type":"text_input","id":"text","value":"old","width":80,"height":20},
+                {"type":"switch","id":"toggle","checked":false,"width":40,"height":20}]}"#,
+            )
+            .unwrap();
+        runtime.build_layout((200.0, 100.0)).unwrap();
+        for id in ["text", "toggle"] {
+            let key = runtime.document.as_ref().unwrap().tree.get(id).unwrap();
+            let schema = runtime.document.as_ref().unwrap().tree.nodes[key]
+                .schema
+                .clone();
+            runtime.widget_states.get_or_init(&schema, &runtime.state);
+        }
+        if let Some(crate::widget_state::WidgetState::TextInput(text)) =
+            runtime.widget_states.get_mut("text")
+        {
+            text.set_text("durable");
+        }
+        if let Some(crate::widget_state::WidgetState::Toggle { on }) =
+            runtime.widget_states.get_mut("toggle")
+        {
+            *on = true;
+        }
+
+        runtime
+            .load_str_and_relayout(
+                r#"{"version":"1.2","children":[
+                {"type":"text_area","id":"text","value":"fresh-area","width":80,"height":20},
+                {"type":"checkbox","id":"toggle","checked":false,"width":40,"height":20}]}"#,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            runtime.widget_states.get("text"),
+            Some(crate::widget_state::WidgetState::TextInput(text)) if text.text() == "fresh-area"
+        ));
+        assert!(matches!(
+            runtime.widget_states.get("toggle"),
+            Some(crate::widget_state::WidgetState::Toggle { on: false })
+        ));
+    }
+
+    #[test]
+    fn atomic_reload_uses_ordered_numeric_clamp_for_reversed_ranges() {
+        let mut runtime = Runtime::new();
+        runtime
+            .load_str(
+                r#"{"version":"1.2","children":[
+                {"type":"slider","id":"slider","value":5,"min":0,"max":10,"width":80,"height":20},
+                {"type":"number_input","id":"number","value":5,"min":0,"max":10,"width":80,"height":20}]}"#,
+            )
+            .unwrap();
+        runtime.build_layout((200.0, 100.0)).unwrap();
+        for id in ["slider", "number"] {
+            let key = runtime.document.as_ref().unwrap().tree.get(id).unwrap();
+            let schema = runtime.document.as_ref().unwrap().tree.nodes[key]
+                .schema
+                .clone();
+            runtime.widget_states.get_or_init(&schema, &runtime.state);
+        }
+
+        runtime
+            .load_str_and_relayout(
+                r#"{"version":"1.2","children":[
+                {"type":"slider","id":"slider","min":100,"max":10,"width":80,"height":20},
+                {"type":"number_input","id":"number","value":100,"min":100,"max":10,"width":80,"height":20}]}"#,
+            )
+            .unwrap();
+
+        assert!(matches!(
+            runtime.widget_states.get("slider"),
+            Some(crate::widget_state::WidgetState::Slider { value, .. }) if (*value - 100.0).abs() < f64::EPSILON
+        ));
+        assert!(matches!(
+            runtime.widget_states.get("number"),
+            Some(crate::widget_state::WidgetState::TextInput(text)) if text.text() == "100"
+        ));
+    }
+
+    #[test]
+    fn host_driven_relayout_failure_is_queued_as_layout_error_not_warning() {
+        let mut runtime = Runtime::new();
+        runtime
+            .load_str(
+                r#"{"version":"1.2","responsive":true,"children":[{"type":"frame","id":"root","width":"fill_container","height":"fill_container"}]}"#,
+            )
+            .unwrap();
+        runtime.build_layout((100.0, 80.0)).unwrap();
+        let warning_count = runtime.load_warnings().len();
+
+        runtime.layout.inject_staged_build_failure();
+        runtime.set_viewport_size((120.0, 80.0));
+
+        assert_eq!(runtime.load_warnings().len(), warning_count);
+        let errors = runtime.take_layout_errors();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("viewport relayout failed"));
+        assert!(runtime.take_layout_errors().is_empty());
     }
 
     #[test]
@@ -2458,9 +3279,10 @@ mod tests {
             }
         }
         let schema: PenDocument = serde_json::from_str(
-            r#"{"version":"1.2","app":{"name":"t","version":"1","id":"t","capabilities":["network"]},
+            r#"{"version":"1.2","responsive":true,"app":{"name":"t","version":"1","id":"t","capabilities":["network"]},
             "state":{"loading":{"type":"bool","default":false},"failed":{"type":"bool","default":false}},
             "children":[{"type":"rectangle","id":"button","width":30,"height":30,
+             "bindings":{"width":"$app.loading ? 90 : 30"},
              "events":{"onTap":[{"fetch":{"url":"'https://example.invalid'","loading":"$app.loading","on_error":[{"set":{"$app.failed":"true"}}]}}]}}]}"#,
         )
         .unwrap();
@@ -2481,7 +3303,9 @@ mod tests {
             runtime.state.app_get("loading").unwrap().as_bool(),
             Some(true)
         );
-        runtime.replace_document(schema).unwrap();
+        runtime
+            .load_str_and_relayout(&serde_json::to_string(&schema).unwrap())
+            .unwrap();
         assert_eq!(
             runtime.state.app_get("loading").unwrap().as_bool(),
             Some(false)
@@ -2490,6 +3314,159 @@ mod tests {
             runtime.state.app_get("failed").unwrap().as_bool(),
             Some(false)
         );
+        let button = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("button")
+            .unwrap();
+        assert_eq!(runtime.layout.node_rect(button).unwrap().size.width, 30.0);
+    }
+
+    #[test]
+    fn failed_exact_reload_stage_keeps_pending_fetch_and_loading_state() {
+        struct PendingNetwork;
+        #[async_trait::async_trait(?Send)]
+        impl crate::action::services::NetworkClient for PendingNetwork {
+            async fn request(
+                &self,
+                _request: crate::action::services::HttpRequest,
+            ) -> Result<crate::action::services::HttpResponse, String> {
+                std::future::pending().await
+            }
+        }
+        let source = r#"{"version":"1.2","responsive":true,
+          "app":{"name":"t","version":"1","id":"t","capabilities":["network"]},
+          "state":{"loading":{"type":"bool","default":false}},
+          "children":[{"type":"rectangle","id":"button","width":30,"height":30,
+          "events":{"onTap":[{"fetch":{"url":"'https://example.invalid'","loading":"$app.loading"}}]}}]}"#;
+        let mut runtime = Runtime::new();
+        runtime.load_str(source).unwrap();
+        runtime.network = Rc::new(PendingNetwork);
+        runtime.build_layout((100.0, 100.0)).unwrap();
+        for phase in [
+            crate::gesture::PointerPhase::Down,
+            crate::gesture::PointerPhase::Up,
+        ] {
+            runtime.dispatch_pointer(PointerEvent::simple(
+                1,
+                phase,
+                crate::geometry::point(5.0, 5.0),
+            ));
+        }
+        assert_eq!(
+            runtime.state.app_get("loading").unwrap().as_bool(),
+            Some(true)
+        );
+        assert!(!runtime.task_queue.is_empty());
+
+        runtime.layout.inject_staged_build_failure();
+        assert!(runtime.load_str_and_relayout(source).is_err());
+
+        assert_eq!(
+            runtime.state.app_get("loading").unwrap().as_bool(),
+            Some(true)
+        );
+        assert!(!runtime.task_queue.is_empty());
+        assert!(runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("button")
+            .is_some());
+    }
+
+    #[test]
+    fn reload_transfers_surviving_image_owner_before_canceling_stale_request() {
+        struct CancellationObserver {
+            owner: Rc<RefCell<Option<Rc<Cell<u64>>>>>,
+            seen_generation: Rc<Cell<Option<u64>>>,
+        }
+
+        impl Drop for CancellationObserver {
+            fn drop(&mut self) {
+                if let Some(owner) = self.owner.borrow().as_ref() {
+                    self.seen_generation.set(Some(owner.get()));
+                }
+            }
+        }
+
+        struct PendingImages {
+            owner: Rc<RefCell<Option<Rc<Cell<u64>>>>>,
+            seen_generation: Rc<Cell<Option<u64>>>,
+        }
+
+        #[async_trait::async_trait(?Send)]
+        impl crate::render::image_store::ImageResolver for PendingImages {
+            async fn resolve(&self, url: &str) -> Result<Vec<u8>, String> {
+                let observer = url.ends_with("stale.png").then(|| CancellationObserver {
+                    owner: self.owner.clone(),
+                    seen_generation: self.seen_generation.clone(),
+                });
+                std::future::pending::<()>().await;
+                drop(observer);
+                Ok(Vec::new())
+            }
+        }
+
+        fn images(sources: &[&str]) -> PenDocument {
+            serde_json::from_value(serde_json::json!({
+                "version": "1.2",
+                "app": {
+                    "name": "images",
+                    "version": "1",
+                    "id": "images",
+                    "capabilities": ["network"]
+                },
+                "children": sources
+                    .iter()
+                    .enumerate()
+                    .map(|(index, source)| serde_json::json!({
+                        "type": "image",
+                        "id": format!("image-{index}"),
+                        "src": source,
+                        "width": 10,
+                        "height": 10
+                    }))
+                    .collect::<Vec<_>>()
+            }))
+            .unwrap()
+        }
+
+        let keep = "https://example.invalid/keep.png";
+        let stale = "https://example.invalid/stale.png";
+        let owner = Rc::new(RefCell::new(None));
+        let seen_generation = Rc::new(Cell::new(None));
+        let mut runtime = Runtime::new_from_document(images(&[keep, stale])).unwrap();
+        runtime.image_resolver = Rc::new(PendingImages {
+            owner: owner.clone(),
+            seen_generation: seen_generation.clone(),
+        });
+        runtime.pump(0);
+        *owner.borrow_mut() = Some(
+            runtime
+                .image_requests
+                .get(keep)
+                .unwrap()
+                .owner_generation
+                .clone(),
+        );
+
+        runtime.replace_document(images(&[keep])).unwrap();
+
+        assert_eq!(seen_generation.get(), Some(runtime.document_generation));
+        assert_eq!(
+            runtime
+                .image_requests
+                .get(keep)
+                .unwrap()
+                .owner_generation
+                .get(),
+            runtime.document_generation
+        );
+        assert!(!runtime.image_requests.contains_key(stale));
     }
 
     #[test]
@@ -3119,7 +4096,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert!(!rt.capabilities.check(Capability::Network, "fetch"));
+        assert!(!rt.capabilities.check(Capability::Network, "fetch", 0));
 
         let with_net: PenDocument = serde_json::from_str(
             r#"{
@@ -3134,7 +4111,7 @@ mod tests {
         )
         .unwrap();
         rt.replace_document(with_net).unwrap();
-        assert!(rt.capabilities.check(Capability::Network, "fetch"));
+        assert!(rt.capabilities.check(Capability::Network, "fetch", 0));
     }
 
     #[test]
@@ -3204,6 +4181,51 @@ mod tests {
         );
         // Inbox now empty — second pump fires nothing.
         assert_eq!(rt.pump_websockets(), 0);
+    }
+
+    #[test]
+    fn pump_websockets_reports_synchronous_handler_parse_errors() {
+        use crate::action::context::WsHandle;
+        use crate::action::services::WebSocketSession;
+        use async_trait::async_trait;
+
+        struct OneMessage;
+        #[async_trait(?Send)]
+        impl WebSocketSession for OneMessage {
+            async fn send(&self, _: String) -> Result<(), String> {
+                Ok(())
+            }
+            async fn close(&self) -> Result<(), String> {
+                Ok(())
+            }
+            async fn receive(&self) -> Vec<String> {
+                vec!["hello".to_owned()]
+            }
+        }
+
+        let mut runtime = Runtime::new();
+        runtime
+            .load_str(r#"{"version":"1.2","children":[]}"#)
+            .unwrap();
+        runtime.enable_action_reporting();
+        runtime.ws_sessions.borrow_mut().insert(
+            "chat".to_owned(),
+            WsHandle {
+                session: Rc::new(OneMessage),
+                on_message: Some(serde_json::json!([{"not_registered": null}])),
+                generation: runtime.document_generation,
+            },
+        );
+
+        assert_eq!(runtime.pump_websockets(), 0);
+        let outcomes = runtime.take_action_outcomes();
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(
+            outcomes[0].outcome.result,
+            Err(crate::action::ActionError::UnknownAction(ref name))
+                if name == "not_registered"
+        ));
+        assert_eq!(outcomes[0].source.as_deref(), Some("websocket:chat"));
     }
 
     #[test]
@@ -3996,9 +5018,9 @@ mod tests {
         assert!(!runtime.input_frozen());
         assert_eq!(runtime.selected_variant(), Some("desktop"));
         assert!(runtime
-            .load_warnings()
+            .take_layout_errors()
             .iter()
-            .any(|warning| warning.contains("parked variant rebuild failed")));
+            .any(|error| error.contains("parked variant rebuild failed")));
         assert_eq!(
             runtime.confirm_ime_cancel(request),
             ImeConfirmOutcome::Applied

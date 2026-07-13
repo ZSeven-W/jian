@@ -17,7 +17,6 @@ use super::audit::{AuditEntry, AuditLog, Verdict};
 use jian_ops_schema::app::Capability as SchemaCapability;
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::time::Instant;
 
 /// Map a schema-declared capability to the runtime `Capability` enum.
 /// The schema's enum has no `Automation` variant (Tier-3 capability
@@ -86,7 +85,7 @@ pub trait CapabilityGate {
     ///
     /// `action` is the registered action name ("fetch" / "storage_set" /
     /// …) so audit entries record which action tripped the gate.
-    fn check(&self, needed: Capability, action: &'static str) -> bool;
+    fn check(&self, needed: Capability, action: &'static str, now_ms: u64) -> bool;
 }
 
 /// Permissive gate — every check returns true. Used in `Runtime::new()`
@@ -94,7 +93,7 @@ pub trait CapabilityGate {
 pub struct DummyCapabilityGate;
 
 impl CapabilityGate for DummyCapabilityGate {
-    fn check(&self, _: Capability, _: &'static str) -> bool {
+    fn check(&self, _: Capability, _: &'static str, _: u64) -> bool {
         true
     }
 }
@@ -137,7 +136,7 @@ impl DeclaredCapabilityGate {
 }
 
 impl CapabilityGate for DeclaredCapabilityGate {
-    fn check(&self, needed: Capability, action: &'static str) -> bool {
+    fn check(&self, needed: Capability, action: &'static str, now_ms: u64) -> bool {
         let verdict = if self.satisfies(needed) {
             Verdict::Allowed
         } else {
@@ -145,7 +144,7 @@ impl CapabilityGate for DeclaredCapabilityGate {
         };
         if let Some(ref log) = self.audit {
             log.record(AuditEntry {
-                at: Instant::now(),
+                at_ms: now_ms,
                 action,
                 needed,
                 verdict,
@@ -162,32 +161,32 @@ mod tests {
 
     #[test]
     fn dummy_allows_all() {
-        assert!(DummyCapabilityGate.check(Capability::Network, "fetch"));
+        assert!(DummyCapabilityGate.check(Capability::Network, "fetch", 1));
     }
 
     #[test]
     fn declared_filters_simple() {
         let g = DeclaredCapabilityGate::from_iter([Capability::Network]);
-        assert!(g.check(Capability::Network, "fetch"));
-        assert!(!g.check(Capability::Storage, "storage_set"));
+        assert!(g.check(Capability::Network, "fetch", 1));
+        assert!(!g.check(Capability::Storage, "storage_set", 2));
     }
 
     #[cfg(feature = "dev-asp")]
     #[test]
     fn automation_full_satisfies_lower() {
         let g = DeclaredCapabilityGate::from_iter([Capability::Automation(AutomationLevel::Full)]);
-        assert!(g.check(Capability::Automation(AutomationLevel::Observe), "call"));
-        assert!(g.check(Capability::Automation(AutomationLevel::Act), "call"));
-        assert!(g.check(Capability::Automation(AutomationLevel::Full), "call"));
+        assert!(g.check(Capability::Automation(AutomationLevel::Observe), "call", 1));
+        assert!(g.check(Capability::Automation(AutomationLevel::Act), "call", 2));
+        assert!(g.check(Capability::Automation(AutomationLevel::Full), "call", 3));
     }
 
     #[cfg(feature = "dev-asp")]
     #[test]
     fn automation_act_satisfies_observe_not_full() {
         let g = DeclaredCapabilityGate::from_iter([Capability::Automation(AutomationLevel::Act)]);
-        assert!(g.check(Capability::Automation(AutomationLevel::Observe), "call"));
-        assert!(g.check(Capability::Automation(AutomationLevel::Act), "call"));
-        assert!(!g.check(Capability::Automation(AutomationLevel::Full), "call"));
+        assert!(g.check(Capability::Automation(AutomationLevel::Observe), "call", 1));
+        assert!(g.check(Capability::Automation(AutomationLevel::Act), "call", 2));
+        assert!(!g.check(Capability::Automation(AutomationLevel::Full), "call", 3));
     }
 
     #[cfg(feature = "dev-asp")]
@@ -195,33 +194,34 @@ mod tests {
     fn automation_observe_does_not_satisfy_act() {
         let g =
             DeclaredCapabilityGate::from_iter([Capability::Automation(AutomationLevel::Observe)]);
-        assert!(!g.check(Capability::Automation(AutomationLevel::Act), "call"));
+        assert!(!g.check(Capability::Automation(AutomationLevel::Act), "call", 1));
     }
 
     #[cfg(feature = "dev-asp")]
     #[test]
     fn empty_denies_automation() {
         let g = DeclaredCapabilityGate::from_iter([]);
-        assert!(!g.check(Capability::Automation(AutomationLevel::Observe), "call"));
+        assert!(!g.check(Capability::Automation(AutomationLevel::Observe), "call", 1));
     }
 
     #[test]
     fn declared_records_audit_when_provided() {
         let log = Rc::new(AuditLog::new(10));
         let g = DeclaredCapabilityGate::new([Capability::Network], Some(log.clone()));
-        assert!(g.check(Capability::Network, "fetch"));
-        assert!(!g.check(Capability::Storage, "storage_set"));
+        assert!(g.check(Capability::Network, "fetch", 10));
+        assert!(!g.check(Capability::Storage, "storage_set", 11));
         let snap = log.snapshot();
         assert_eq!(snap.len(), 2);
         assert_eq!(snap[0].action, "fetch");
         assert_eq!(snap[0].verdict, Verdict::Allowed);
         assert_eq!(snap[1].action, "storage_set");
         assert_eq!(snap[1].verdict, Verdict::Denied);
+        assert_eq!((snap[0].at_ms, snap[1].at_ms), (10, 11));
     }
 
     #[test]
     fn declared_without_audit_is_silent() {
         let g = DeclaredCapabilityGate::new([Capability::Network], None);
-        assert!(g.check(Capability::Network, "fetch"));
+        assert!(g.check(Capability::Network, "fetch", 1));
     }
 }

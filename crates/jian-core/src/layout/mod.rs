@@ -114,6 +114,10 @@ pub struct LayoutEngine {
     pub(crate) compute_count: usize,
     pub(crate) bound_hit: bool,
     pub(crate) root_owner: SecondaryMap<NodeKey, NodeKey>,
+    /// Authored document-root origins. Taffy has no containing block for a
+    /// root, so it drops root `x`/`y`; `node_rect` restores that offset after
+    /// accumulating the computed parent chain.
+    root_origins: SecondaryMap<NodeKey, (f32, f32)>,
     pub(crate) base_styles: SecondaryMap<NodeKey, Style>,
     origin_normalized: HashSet<NodeKey>,
     #[cfg(test)]
@@ -148,6 +152,7 @@ impl LayoutEngine {
             compute_count: 0,
             bound_hit: false,
             root_owner: SecondaryMap::new(),
+            root_origins: SecondaryMap::new(),
             base_styles: SecondaryMap::new(),
             origin_normalized: HashSet::new(),
             #[cfg(test)]
@@ -214,10 +219,18 @@ impl LayoutEngine {
         self.compute_count = 0;
         self.bound_hit = false;
         self.root_owner = SecondaryMap::new();
+        self.root_origins = SecondaryMap::new();
         self.base_styles = SecondaryMap::new();
         self.origin_normalized.clear();
         self.node_order = doc_tree.keys_top_down();
         for &root in &doc_tree.roots {
+            if let Some(origin) = doc_tree
+                .nodes
+                .get(root)
+                .and_then(|node| resolve::explicit_position(&node.schema))
+            {
+                self.root_origins.insert(root, origin);
+            }
             let mut stack = vec![root];
             while let Some(key) = stack.pop() {
                 // First owner wins; a duplicate cross-root child or cycle
@@ -440,7 +453,26 @@ impl LayoutEngine {
             cur = p;
             steps += 1;
         }
+        if !self.is_origin_normalized(cur) {
+            if let Some((x, y)) = self.root_origins.get(cur) {
+                ax += x;
+                ay += y;
+            }
+        }
         Some(rect(ax, ay, w, h))
+    }
+
+    /// Absolute scene-coordinate rect used by runtime hit-testing and host
+    /// overlays. `node_rect` already restores a non-responsive document
+    /// root's authored origin; responsive viewport roots are normalized to
+    /// `(0, 0)` by `override_root_for_viewport`.
+    pub(crate) fn node_scene_rect(
+        &self,
+        doc: &crate::document::RuntimeDocument,
+        key: NodeKey,
+    ) -> Option<Rect> {
+        doc.tree.nodes.get(key)?;
+        self.node_rect(key)
     }
 }
 

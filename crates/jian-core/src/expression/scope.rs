@@ -51,6 +51,10 @@ impl<'a> StateGraphContext<'a> {
 }
 
 impl<'a> EvalContext for StateGraphContext<'a> {
+    fn now_ms(&self) -> u64 {
+        self.state.now_ms()
+    }
+
     fn lookup_scope(&self, path: &str) -> Option<RuntimeValue> {
         // Dotted path: fine-grained per-Signal subscription.
         if let Some(dot) = path.find('.') {

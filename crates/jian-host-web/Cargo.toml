@@ -1,0 +1,78 @@
+[package]
+name = "jian-host-web"
+version = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+license = { workspace = true }
+repository = { workspace = true }
+description = "CanvasKit web host for Jian"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jian-core = { path = "../jian-core", default-features = false }
+async-trait = "0.1"
+base64 = "0.22"
+js-sys = "0.3"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+url = "2.5"
+wasm-bindgen = "=0.2.117"
+wasm-bindgen-futures = "0.4"
+ttf-parser = "0.25"
+
+[dependencies.web-sys]
+version = "0.3"
+features = [
+  "AbortController",
+  "AbortSignal",
+  "AddEventListenerOptions",
+  "Clipboard",
+  "CompositionEvent",
+  "CompositionEventInit",
+  "CssStyleDeclaration",
+  "Document",
+  "DomRect",
+  "Element",
+  "Event",
+  "EventTarget",
+  "FocusEvent",
+  "FocusOptions",
+  "Headers",
+  "HtmlCanvasElement",
+  "HtmlElement",
+  "HtmlInputElement",
+  "InputEvent",
+  "InputEventInit",
+  "KeyboardEvent",
+  "KeyboardEventInit",
+  "Location",
+  "MediaQueryList",
+  "MediaQueryListEvent",
+  "Navigator",
+  "Node",
+  "Performance",
+  "PointerEvent",
+  "PointerEventInit",
+  "Request",
+  "RequestCredentials",
+  "RequestInit",
+  "RequestMode",
+  "RequestRedirect",
+  "ResizeObserver",
+  "ResizeObserverEntry",
+  "Response",
+  "ReadableStream",
+  "ReadableStreamDefaultReader",
+  "ReadableStreamReadResult",
+  "Storage",
+  "WheelEvent",
+  "WheelEventInit",
+  "Window",
+]
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+serde_json = { workspace = true }
+wasm-bindgen-test = "0.3"

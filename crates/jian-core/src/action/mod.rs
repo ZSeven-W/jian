@@ -22,7 +22,7 @@ pub use capability::{Capability, CapabilityGate, DeclaredCapabilityGate, DummyCa
 pub use context::ActionContext;
 pub use executor::{execute_list_async, ExecOutcome};
 pub use registry::ActionRegistry;
-pub use task_queue::{TaskClock, TaskQueue};
+pub use task_queue::{CompletedTask, TaskClock, TaskQueue};
 
 use std::cell::RefCell;
 use std::rc::Rc;

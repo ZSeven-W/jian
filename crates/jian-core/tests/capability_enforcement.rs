@@ -183,7 +183,7 @@ fn audit_ring_buffer_drops_oldest_after_capacity() {
     let log = AuditLog::new(4);
     for a in ["a", "b", "c", "d", "e", "f"] {
         log.record(jian_core::capability::AuditEntry {
-            at: std::time::Instant::now(),
+            at_ms: 0,
             action: match a {
                 "a" => "a",
                 "b" => "b",
@@ -209,16 +209,16 @@ fn audit_ring_buffer_drops_oldest_after_capacity() {
 fn runtime_default_uses_dummy_gate_no_audit() {
     let rt = Runtime::new();
     assert!(rt.audit.is_none());
-    assert!(rt.capabilities.check(Capability::Network, "fetch"));
-    assert!(rt.capabilities.check(Capability::Storage, "storage_set"));
+    assert!(rt.capabilities.check(Capability::Network, "fetch", 0));
+    assert!(rt.capabilities.check(Capability::Storage, "storage_set", 0));
 }
 
 #[test]
 fn automation_not_present_in_schema_capabilities() {
     // Declaring only `network` must not accidentally allow automation.
     let rt = load(OP_WITH_NETWORK);
-    assert!(rt.capabilities.check(Capability::Network, "fetch"));
-    assert!(!rt.capabilities.check(Capability::Storage, "storage_set"));
+    assert!(rt.capabilities.check(Capability::Network, "fetch", 0));
+    assert!(!rt.capabilities.check(Capability::Storage, "storage_set", 0));
 }
 
 #[test]

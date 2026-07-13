@@ -1,5 +1,6 @@
 use super::{Runtime, SwapState};
 use crate::widget_state::WidgetState;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameDirective {
@@ -21,9 +22,20 @@ impl Runtime {
         self.task_clock.advance_to(self.now_ms);
         self.dispatch_image_requests();
         let completions = std::mem::take(&mut *self.image_completions.borrow_mut());
-        for (key, result) in completions {
+        for completion in completions {
+            let current = self
+                .image_requests
+                .get(&completion.key)
+                .is_some_and(|request| {
+                    completion.owner_generation.get() == self.document_generation
+                        && Rc::ptr_eq(&request.owner_generation, &completion.owner_generation)
+                });
+            if !current {
+                continue;
+            }
+            let key = completion.key;
             self.image_requests.remove(&key);
-            match result {
+            match completion.result {
                 Ok(bytes) => {
                     if let Err(error) = self.image_store.resolve(&key, bytes) {
                         self.load_warnings.push(format!("image `{key}`: {error}"));
@@ -37,10 +49,11 @@ impl Runtime {
             self.mark_dirty();
         }
         for (key, generation) in self.state.storage_cache.take_requests() {
-            if !self
-                .capabilities
-                .check(crate::action::Capability::Storage, "storage_hydrate")
-            {
+            if !self.capabilities.check(
+                crate::action::Capability::Storage,
+                "storage_hydrate",
+                self.now_ms,
+            ) {
                 self.state.storage_cache.complete(
                     &key,
                     generation,
@@ -81,15 +94,14 @@ impl Runtime {
         if !self.tick(self.now_ms).is_empty() {
             self.mark_dirty();
         }
-        if !self.task_queue.poll_all(self.now_ms).is_empty() {
+        if self.collect_task_outcomes() {
             self.scheduler.flush();
             self.mark_dirty();
         }
         let mutation = self.mutation_counter.get();
         if mutation != self.layout_mutation_seen && self.has_responsive_layout_bindings() {
             if let Err(error) = self.relayout() {
-                self.load_warnings
-                    .push(format!("binding-driven relayout failed: {error}"));
+                self.push_layout_error(format!("binding-driven relayout failed: {error}"));
                 self.layout_mutation_seen = mutation;
             }
         }

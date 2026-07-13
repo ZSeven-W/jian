@@ -5,14 +5,19 @@ use jian_core::action::services::{
 use jian_core::expression::Expression;
 use jian_core::geometry::{Affine2, Rect, Size};
 use jian_core::gesture::{PointerEvent, PointerPhase};
-use jian_core::render::image_store::ImageResolver;
+use jian_core::render::image_store::{ImageAdmission, ImageResolver, ImageState};
 use jian_core::render::{
     collect_draws_with_state, DecodeError, DrawOp, ImageSource, RenderBackend, ShadowSpec,
 };
 use jian_core::Runtime;
 use jian_ops_schema::document::PenDocument;
 use serde_json::json;
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
 
 struct Storage;
 #[async_trait(?Send)]
@@ -51,6 +56,116 @@ struct Images;
 impl ImageResolver for Images {
     async fn resolve(&self, url: &str) -> Result<Vec<u8>, String> {
         assert_eq!(url, "https://example.invalid/hero.png");
+        Ok(vec![1, 2, 3])
+    }
+}
+
+struct TrustedRelativeImages {
+    requests: Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+#[derive(Default)]
+struct ControlledImageState {
+    calls: Cell<usize>,
+    aborted: Cell<usize>,
+    ready: RefCell<BTreeMap<usize, Result<Vec<u8>, String>>>,
+    wakers: RefCell<BTreeMap<usize, Waker>>,
+}
+
+#[derive(Clone, Default)]
+struct ControlledImages(Rc<ControlledImageState>);
+
+struct ControlledImageFuture {
+    id: usize,
+    state: Rc<ControlledImageState>,
+    completed: bool,
+}
+
+impl Future for ControlledImageFuture {
+    type Output = Result<Vec<u8>, String>;
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = self.state.ready.borrow_mut().remove(&self.id);
+        if let Some(result) = result {
+            self.completed = true;
+            Poll::Ready(result)
+        } else {
+            self.state
+                .wakers
+                .borrow_mut()
+                .insert(self.id, context.waker().clone());
+            Poll::Pending
+        }
+    }
+}
+
+impl Drop for ControlledImageFuture {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.state.aborted.set(self.state.aborted.get() + 1);
+        }
+    }
+}
+
+impl ControlledImages {
+    fn complete(&self, id: usize, bytes: Vec<u8>) {
+        self.0.ready.borrow_mut().insert(id, Ok(bytes));
+        if let Some(waker) = self.0.wakers.borrow_mut().remove(&id) {
+            waker.wake();
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl ImageResolver for ControlledImages {
+    fn admission(&self, source: &str) -> Result<Option<ImageAdmission>, String> {
+        Ok(Some(ImageAdmission {
+            key: format!("asset:{source}"),
+            request_source: source.to_owned(),
+            requires_network: false,
+        }))
+    }
+
+    async fn resolve(&self, _source: &str) -> Result<Vec<u8>, String> {
+        let id = self.0.calls.get();
+        self.0.calls.set(id + 1);
+        ControlledImageFuture {
+            id,
+            state: self.0.clone(),
+            completed: false,
+        }
+        .await
+    }
+}
+
+fn image_document(source: &str) -> PenDocument {
+    serde_json::from_value(json!({
+        "version":"1.2", "responsive":true,
+        "children":[{"type":"image","id":"hero","src":source,"width":20,"height":20}]
+    }))
+    .unwrap()
+}
+
+fn empty_document() -> PenDocument {
+    serde_json::from_value(json!({
+        "version":"1.2", "responsive":true,
+        "children":[{"type":"rectangle","id":"empty","width":20,"height":20}]
+    }))
+    .unwrap()
+}
+
+#[async_trait(?Send)]
+impl ImageResolver for TrustedRelativeImages {
+    fn admission(&self, source: &str) -> Result<Option<ImageAdmission>, String> {
+        Ok((source == "hero.png").then(|| ImageAdmission {
+            key: "asset:trusted:hero".into(),
+            request_source: source.into(),
+            requires_network: false,
+        }))
+    }
+
+    async fn resolve(&self, source: &str) -> Result<Vec<u8>, String> {
+        self.requests.borrow_mut().push(source.to_owned());
         Ok(vec![1, 2, 3])
     }
 }
@@ -180,6 +295,148 @@ fn responsive_runtime_substrate_runs_through_real_pump_dispatch_and_prepare() {
     .unwrap();
     runtime.replace_document(replacement).unwrap();
     assert_eq!(runtime.state.app_get("result").unwrap().as_i64(), Some(7));
+}
+
+#[test]
+fn host_admitted_relative_image_uses_resolver_store_prepare_and_keyed_draw() {
+    let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut runtime = Runtime::new();
+    runtime.image_resolver = Rc::new(TrustedRelativeImages {
+        requests: requests.clone(),
+    });
+    runtime
+        .load_str(
+            r#"{"version":"1.2","responsive":true,"children":[{"type":"image","id":"hero","src":"hero.png","width":20,"height":20}]}"#,
+        )
+        .unwrap();
+    runtime.build_layout((100.0, 100.0)).unwrap();
+
+    assert_eq!(
+        runtime.state.image_key("hero.png").as_deref(),
+        Some("asset:trusted:hero")
+    );
+    assert_eq!(
+        runtime.image_store.state("asset:trusted:hero"),
+        Some(ImageState::Pending)
+    );
+
+    runtime.pump(1);
+    runtime.pump(2);
+    assert_eq!(requests.borrow().as_slice(), ["hero.png"]);
+
+    let mut backend = RegisteredCapture::default();
+    runtime.prepare_frame(&mut backend, 0);
+    assert_eq!(
+        runtime.image_store.state("asset:trusted:hero"),
+        Some(ImageState::Registered)
+    );
+    let draws = collect_draws_with_state(
+        runtime.document.as_ref().unwrap(),
+        &runtime.layout,
+        &runtime.state,
+    );
+    assert!(draws.iter().any(|draw| matches!(draw, DrawOp::Image {
+        source: ImageSource::Url(key), ..
+    } if key == "asset:trusted:hero")));
+}
+
+#[test]
+fn pending_same_key_reload_transfers_the_original_resolver_task() {
+    let resolver = ControlledImages::default();
+    let mut runtime = Runtime::new();
+    runtime.image_resolver = Rc::new(resolver.clone());
+    runtime
+        .replace_document(image_document("hero.png"))
+        .unwrap();
+    runtime.pump(1);
+    assert_eq!(resolver.0.calls.get(), 1);
+
+    runtime
+        .replace_document(image_document("hero.png"))
+        .unwrap();
+    assert_eq!(resolver.0.calls.get(), 1);
+    assert_eq!(resolver.0.aborted.get(), 0);
+
+    resolver.complete(0, vec![1, 2, 3]);
+    runtime.pump(2);
+    runtime.pump(3);
+    assert_eq!(
+        runtime.image_store.state("asset:hero.png"),
+        Some(ImageState::Bytes)
+    );
+    assert_eq!(resolver.0.calls.get(), 1);
+    assert_eq!(resolver.0.aborted.get(), 0);
+}
+
+#[test]
+fn reload_removing_image_cancels_original_resolver_task() {
+    let resolver = ControlledImages::default();
+    let mut runtime = Runtime::new();
+    runtime.image_resolver = Rc::new(resolver.clone());
+    runtime
+        .replace_document(image_document("hero.png"))
+        .unwrap();
+    runtime.pump(1);
+    runtime.replace_document(empty_document()).unwrap();
+
+    assert_eq!(resolver.0.calls.get(), 1);
+    assert_eq!(resolver.0.aborted.get(), 1);
+    assert_eq!(runtime.image_store.state("asset:hero.png"), None);
+}
+
+#[test]
+fn stale_queued_completion_cannot_satisfy_a_new_same_key_request() {
+    let resolver = ControlledImages::default();
+    let mut runtime = Runtime::new();
+    runtime.image_resolver = Rc::new(resolver.clone());
+    runtime
+        .replace_document(image_document("hero.png"))
+        .unwrap();
+    runtime.pump(1);
+    resolver.complete(0, vec![1, 2, 3]);
+    // Polls the resolver and queues its completion after the completion-drain
+    // phase, deliberately leaving it queued for the reload sequence.
+    runtime.pump(2);
+
+    runtime.replace_document(empty_document()).unwrap();
+    runtime
+        .replace_document(image_document("hero.png"))
+        .unwrap();
+    runtime.pump(3);
+    assert_eq!(resolver.0.calls.get(), 2);
+    assert_eq!(
+        runtime.image_store.state("asset:hero.png"),
+        Some(ImageState::Pending)
+    );
+
+    resolver.complete(1, vec![4, 5, 6]);
+    runtime.pump(4);
+    runtime.pump(5);
+    assert_eq!(
+        runtime.image_store.state("asset:hero.png"),
+        Some(ImageState::Bytes)
+    );
+}
+
+#[test]
+fn host_admitted_image_is_pending_for_non_responsive_document() {
+    let requests = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut runtime = Runtime::new();
+    runtime.image_resolver = Rc::new(TrustedRelativeImages { requests });
+    runtime
+        .load_str(
+            r#"{"version":"1.2","children":[{"type":"image","id":"hero","src":"hero.png","width":20,"height":20}]}"#,
+        )
+        .unwrap();
+
+    assert_eq!(
+        runtime.state.image_key("hero.png").as_deref(),
+        Some("asset:trusted:hero")
+    );
+    assert_eq!(
+        runtime.image_store.state("asset:trusted:hero"),
+        Some(ImageState::Pending)
+    );
 }
 
 #[test]

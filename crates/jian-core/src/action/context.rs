@@ -71,6 +71,10 @@ pub struct ActionContext {
 }
 
 impl ActionContext {
+    pub fn now_ms(&self) -> u64 {
+        self.clock.as_ref().map_or(0, |clock| clock.now_ms())
+    }
+
     /// Push a local override (e.g. `$item`) for the duration of a scope.
     /// Returns the previous value if one existed.
     pub fn push_local(&self, name: impl Into<String>, value: RuntimeValue) -> Option<RuntimeValue> {
@@ -107,7 +111,7 @@ impl ActionContext {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::action::capability::DummyCapabilityGate;
     use crate::action::services::{

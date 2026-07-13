@@ -77,7 +77,10 @@ impl ActionImpl for WsConnect {
         "ws_connect"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Network, "ws_connect") {
+        if !ctx
+            .capabilities
+            .check(Capability::Network, "ws_connect", ctx.now_ms())
+        {
             return Err(ActionError::CapabilityDenied {
                 action: "ws_connect",
                 needed: Capability::Network,
@@ -160,7 +163,10 @@ impl ActionImpl for WsSend {
         "ws_send"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Network, "ws_send") {
+        if !ctx
+            .capabilities
+            .check(Capability::Network, "ws_send", ctx.now_ms())
+        {
             return Err(ActionError::CapabilityDenied {
                 action: "ws_send",
                 needed: Capability::Network,
@@ -227,7 +233,10 @@ impl ActionImpl for WsClose {
         "ws_close"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Network, "ws_close") {
+        if !ctx
+            .capabilities
+            .check(Capability::Network, "ws_close", ctx.now_ms())
+        {
             return Err(ActionError::CapabilityDenied {
                 action: "ws_close",
                 needed: Capability::Network,

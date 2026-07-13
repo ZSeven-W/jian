@@ -8,7 +8,6 @@
 use super::gate::Capability;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
@@ -18,7 +17,10 @@ pub enum Verdict {
 
 #[derive(Debug, Clone)]
 pub struct AuditEntry {
-    pub at: Instant,
+    /// Host-provided monotonic timestamp. Keeping this as data rather than an
+    /// `Instant` is required on wasm32, where `std::time::Instant::now()`
+    /// panics.
+    pub at_ms: u64,
     pub action: &'static str,
     pub needed: Capability,
     pub verdict: Verdict,
@@ -81,7 +83,7 @@ mod tests {
 
     fn entry(action: &'static str, verdict: Verdict) -> AuditEntry {
         AuditEntry {
-            at: Instant::now(),
+            at_ms: 7,
             action,
             needed: Capability::Network,
             verdict,

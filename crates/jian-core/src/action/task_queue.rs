@@ -4,6 +4,7 @@ use super::{
 use futures::task::{waker_ref, ArcWake};
 use serde_json::Value;
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +18,10 @@ pub struct TaskClock {
 }
 
 impl TaskClock {
+    pub fn now_ms(&self) -> u64 {
+        self.now_ms.get()
+    }
+
     pub fn advance_to(&self, now_ms: u64) {
         self.now_ms.set(self.now_ms.get().max(now_ms));
         let now = self.now_ms.get();
@@ -89,6 +94,14 @@ pub struct ActionTask {
     cancel: CancellationToken,
 }
 
+/// A completed cooperative action together with the authored/runtime source
+/// that scheduled it. Keeping the source alongside the future is not enough:
+/// hosts need it after completion to produce actionable diagnostics.
+pub struct CompletedTask {
+    pub outcome: ExecOutcome,
+    pub source: Option<String>,
+}
+
 #[derive(Default)]
 pub struct TaskQueue {
     next_id: u64,
@@ -145,7 +158,7 @@ impl TaskQueue {
         Ok(id)
     }
 
-    pub fn poll_all(&mut self, _now_ms: u64) -> Vec<ExecOutcome> {
+    pub fn poll_all(&mut self, _now_ms: u64) -> Vec<CompletedTask> {
         let mut completed = Vec::new();
         let mut index = 0;
         while index < self.tasks.len() {
@@ -158,8 +171,11 @@ impl TaskQueue {
             let mut context = Context::from_waker(&waker);
             match self.tasks[index].future.as_mut().poll(&mut context) {
                 Poll::Ready(outcome) => {
-                    completed.push(outcome);
-                    self.tasks.remove(index);
+                    let task = self.tasks.remove(index);
+                    completed.push(CompletedTask {
+                        outcome,
+                        source: task.source,
+                    });
                 }
                 Poll::Pending => index += 1,
             }
@@ -189,6 +205,58 @@ impl TaskQueue {
         });
     }
 
+    pub fn cancel_all_except(&mut self, retained: &BTreeSet<u64>) {
+        self.tasks.retain(|task| {
+            if retained.contains(&task.id) {
+                true
+            } else {
+                task.cancel.cancel();
+                false
+            }
+        });
+    }
+
+    pub(crate) fn preview_cancel_compensations_except(
+        &self,
+        retained: &BTreeSet<u64>,
+        state: &crate::state::StateGraph,
+    ) {
+        for task in &self.tasks {
+            if !retained.contains(&task.id) {
+                task.cancel.preview_compensations(state);
+            }
+        }
+    }
+
+    pub fn cancel_task(&mut self, id: u64) -> bool {
+        let Some(index) = self.tasks.iter().position(|task| task.id == id) else {
+            return false;
+        };
+        self.tasks[index].cancel.cancel();
+        self.tasks.remove(index);
+        true
+    }
+
+    pub fn retag_task(&mut self, id: u64, generation: u64) -> bool {
+        let Some(task) = self.tasks.iter_mut().find(|task| task.id == id) else {
+            return false;
+        };
+        task.generation = generation;
+        true
+    }
+
+    pub fn contains_task(&self, id: u64) -> bool {
+        self.tasks.iter().any(|task| task.id == id)
+    }
+
+    #[cfg(test)]
+    fn task_generation(&self, id: u64) -> Option<u64> {
+        self.tasks
+            .iter()
+            .find(|task| task.id == id)
+            .map(|task| task.generation)
+    }
+
     pub fn cancel_all(&mut self) {
         for task in &self.tasks {
             task.cancel.cancel();
@@ -199,3 +267,59 @@ impl TaskQueue {
 
 #[allow(dead_code)]
 fn _result(_: ActionResult) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+    use std::rc::Rc;
+
+    struct DropProbe(Rc<Cell<u32>>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.set(self.0.get() + 1);
+        }
+    }
+
+    async fn pending_future(probe: Rc<Cell<u32>>) -> ExecOutcome {
+        let _probe = DropProbe(probe);
+        std::future::pending().await
+    }
+
+    #[test]
+    fn selective_cancellation_and_retag_preserve_only_requested_tasks() {
+        let mut queue = TaskQueue::default();
+        let drops = Rc::new(Cell::new(0));
+        let keep = queue.spawn_future(pending_future(drops.clone()), 1, None);
+        let cancel = queue.spawn_future(pending_future(drops.clone()), 1, None);
+        queue.poll_all(0);
+        let keep_token = queue
+            .tasks
+            .iter()
+            .find(|task| task.id == keep)
+            .unwrap()
+            .cancel
+            .clone();
+        let cancel_token = queue
+            .tasks
+            .iter()
+            .find(|task| task.id == cancel)
+            .unwrap()
+            .cancel
+            .clone();
+
+        queue.retag_task(keep, 2);
+        queue.cancel_task(cancel);
+        assert!(cancel_token.is_cancelled());
+        assert!(!keep_token.is_cancelled());
+        assert_eq!(drops.get(), 1);
+        assert!(queue.contains_task(keep));
+        assert_eq!(queue.task_generation(keep), Some(2));
+
+        queue.cancel_all_except(&BTreeSet::from([keep]));
+        assert_eq!(drops.get(), 1);
+        queue.cancel_all_except(&BTreeSet::new());
+        assert_eq!(drops.get(), 2);
+        assert!(queue.is_empty());
+    }
+}

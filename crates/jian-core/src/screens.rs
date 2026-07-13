@@ -20,7 +20,7 @@ pub struct RejectedNav {
 /// Route-table-validating router: mutates only toward known screen
 /// paths, so the mounted-screen reconcile never has to roll back.
 pub struct ScreenRouter {
-    known: BTreeSet<String>,
+    known: RefCell<BTreeSet<String>>,
     stack: RefCell<Vec<String>>,
     params: RefCell<BTreeMap<String, String>>,
     query: RefCell<BTreeMap<String, String>>,
@@ -34,7 +34,7 @@ pub struct ScreenRouter {
 impl ScreenRouter {
     pub fn new(entry: &str, known: impl IntoIterator<Item = String>) -> Self {
         Self {
-            known: known.into_iter().collect(),
+            known: RefCell::new(known.into_iter().collect()),
             stack: RefCell::new(vec![entry.to_owned()]),
             params: RefCell::new(BTreeMap::new()),
             query: RefCell::new(BTreeMap::new()),
@@ -47,7 +47,7 @@ impl ScreenRouter {
     }
 
     fn check(&self, verb: &'static str, path: &str) -> bool {
-        if self.known.contains(path) {
+        if self.known.borrow().contains(path) {
             true
         } else {
             self.rejections.borrow_mut().push(RejectedNav {
@@ -104,34 +104,25 @@ impl Router for ScreenRouter {
 
     fn restore(&self, state: RouteState, valid_paths: &[String]) {
         let valid: BTreeSet<&str> = valid_paths.iter().map(String::as_str).collect();
-        let mut stack: Vec<String> = state
-            .stack
-            .into_iter()
-            .filter(|path| valid.contains(path.as_str()))
-            .collect();
+        *self.known.borrow_mut() = valid_paths.iter().cloned().collect();
         let path_survives = valid.contains(state.path.as_str());
-        let path = if path_survives {
-            state.path
+        let (stack, params, query) = if path_survives {
+            let mut stack: Vec<String> = state
+                .stack
+                .into_iter()
+                .filter(|path| valid.contains(path.as_str()))
+                .collect();
+            if stack.last() != Some(&state.path) {
+                stack.push(state.path);
+            }
+            (stack, state.params, state.query)
         } else {
-            valid_paths.first().cloned().unwrap_or_else(|| "/".into())
+            let entry = valid_paths.first().cloned().unwrap_or_else(|| "/".into());
+            (vec![entry], BTreeMap::new(), BTreeMap::new())
         };
-        if stack.last() != Some(&path) {
-            stack.push(path);
-        }
-        if stack.is_empty() {
-            stack.push("/".into());
-        }
         *self.stack.borrow_mut() = stack;
-        *self.params.borrow_mut() = if path_survives {
-            state.params
-        } else {
-            BTreeMap::new()
-        };
-        *self.query.borrow_mut() = if path_survives {
-            state.query
-        } else {
-            BTreeMap::new()
-        };
+        *self.params.borrow_mut() = params;
+        *self.query.borrow_mut() = query;
     }
 }
 
@@ -178,7 +169,14 @@ impl ScreenTable {
     }
 
     pub fn paths(&self) -> Vec<String> {
-        self.routes.keys().cloned().collect()
+        std::iter::once(self.entry.clone())
+            .chain(
+                self.routes
+                    .keys()
+                    .filter(|path| *path != &self.entry)
+                    .cloned(),
+            )
+            .collect()
     }
 
     pub fn page_for(&self, path: &str, viewport_width: f32) -> Option<&str> {
@@ -250,9 +248,31 @@ pub fn reconcile_screens(
     table: &ScreenTable,
     current_path: &mut String,
 ) -> crate::CoreResult<ReconcileOutcome> {
+    reconcile_screens_mode(runtime, router, table, current_path, false)
+}
+
+/// Web-host route reconciliation with the target document, layout, and
+/// spatial index staged and committed as one transaction.
+pub fn reconcile_screens_with_layout(
+    runtime: &mut crate::Runtime,
+    router: &std::rc::Rc<ScreenRouter>,
+    table: &ScreenTable,
+    current_path: &mut String,
+) -> crate::CoreResult<ReconcileOutcome> {
+    reconcile_screens_mode(runtime, router, table, current_path, true)
+}
+
+fn reconcile_screens_mode(
+    runtime: &mut crate::Runtime,
+    router: &std::rc::Rc<ScreenRouter>,
+    table: &ScreenTable,
+    current_path: &mut String,
+    install_layout: bool,
+) -> crate::CoreResult<ReconcileOutcome> {
     let rejections = router.take_rejections();
     let state = router.current();
     if state.path == *current_path {
+        sync_route_state(runtime, &state);
         return Ok(ReconcileOutcome {
             switched: None,
             rejections,
@@ -266,23 +286,36 @@ pub fn reconcile_screens(
             rejections,
         });
     };
-    runtime.replace_document_for_path(doc, Some(&state.path))?;
+    if install_layout {
+        runtime.replace_document_for_path_and_relayout(doc, Some(&state.path), &state)?;
+    } else {
+        runtime.replace_document_for_path(doc, Some(&state.path), &state)?;
+    }
     runtime.configure_variant_source(
         table.doc.clone(),
         state.path.clone(),
         table.variants.clone(),
     );
-    runtime
-        .state
-        .route_set("path", serde_json::json!(state.path));
-    runtime
-        .state
-        .route_set("stack", serde_json::json!(state.stack));
     *current_path = state.path.clone();
     Ok(ReconcileOutcome {
         switched: Some(state.path),
         rejections,
     })
+}
+
+fn sync_route_state(runtime: &crate::Runtime, state: &RouteState) {
+    runtime
+        .state
+        .route_set("path", serde_json::json!(state.path));
+    runtime
+        .state
+        .route_set("params", serde_json::json!(state.params));
+    runtime
+        .state
+        .route_set("query", serde_json::json!(state.query));
+    runtime
+        .state
+        .route_set("stack", serde_json::json!(state.stack));
 }
 
 #[cfg(test)]
@@ -394,6 +427,69 @@ mod tests {
         assert_eq!(r.current().path, "/");
     }
 
+    #[test]
+    fn restore_refreshes_known_paths_and_preserves_full_surviving_route() {
+        let r = ScreenRouter::new(
+            "/old",
+            [
+                "/old".to_owned(),
+                "/shared".to_owned(),
+                "/removed".to_owned(),
+            ],
+        );
+        r.restore(
+            RouteState {
+                path: "/shared".to_owned(),
+                params: BTreeMap::from([("id".to_owned(), "42".to_owned())]),
+                query: BTreeMap::from([("tab".to_owned(), "info".to_owned())]),
+                stack: vec![
+                    "/old".to_owned(),
+                    "/removed".to_owned(),
+                    "/shared".to_owned(),
+                ],
+            },
+            &["/new-entry".to_owned(), "/shared".to_owned()],
+        );
+
+        assert_eq!(
+            r.current(),
+            RouteState {
+                path: "/shared".to_owned(),
+                params: BTreeMap::from([("id".to_owned(), "42".to_owned())]),
+                query: BTreeMap::from([("tab".to_owned(), "info".to_owned())]),
+                stack: vec!["/shared".to_owned()],
+            }
+        );
+        r.push("/new-entry");
+        assert_eq!(r.current().path, "/new-entry");
+        r.push("/old");
+        assert_eq!(r.current().path, "/new-entry", "removed paths stay invalid");
+    }
+
+    #[test]
+    fn restore_missing_current_resets_to_entry_without_stale_route_data() {
+        let r = ScreenRouter::new("/old", ["/old".to_owned(), "/gone".to_owned()]);
+        r.restore(
+            RouteState {
+                path: "/gone".to_owned(),
+                params: BTreeMap::from([("id".to_owned(), "stale".to_owned())]),
+                query: BTreeMap::from([("q".to_owned(), "stale".to_owned())]),
+                stack: vec!["/old".to_owned(), "/gone".to_owned()],
+            },
+            &["/entry".to_owned(), "/other".to_owned()],
+        );
+
+        assert_eq!(
+            r.current(),
+            RouteState {
+                path: "/entry".to_owned(),
+                params: BTreeMap::new(),
+                query: BTreeMap::new(),
+                stack: vec!["/entry".to_owned()],
+            }
+        );
+    }
+
     fn two_screen_doc() -> jian_ops_schema::PenDocument {
         // Normalized shape (as project_screens emits): entry page first,
         // routes derived, screens at origin. Home has a nav button
@@ -474,6 +570,154 @@ mod tests {
         // Mounted tree is now the detail screen.
         let roots = &rt.document.as_ref().unwrap().tree.roots;
         assert_eq!(roots.len(), 1);
+    }
+
+    #[test]
+    fn layout_reconcile_commits_screen_geometry_atomically() {
+        use std::rc::Rc;
+
+        let doc = two_screen_doc();
+        let table = ScreenTable::from_document(doc.clone()).unwrap();
+        let router = Rc::new(ScreenRouter::new(table.entry_path(), table.paths()));
+        let mut runtime = crate::Runtime::new_from_document(doc).unwrap();
+        runtime.nav = router.clone();
+        runtime.build_layout((400.0, 300.0)).unwrap();
+        let mut current = "/".to_owned();
+
+        reconcile_screens_with_layout(&mut runtime, &router, &table, &mut current).unwrap();
+
+        router.push("/detail");
+        reconcile_screens_with_layout(&mut runtime, &router, &table, &mut current).unwrap();
+        let detail = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("detail-root")
+            .unwrap();
+        assert!(runtime.node_scene_rect(detail).is_some());
+        let old_route = runtime.state.route_snapshot();
+
+        router.pop();
+        runtime.layout.inject_staged_build_failure();
+        assert!(
+            reconcile_screens_with_layout(&mut runtime, &router, &table, &mut current).is_err()
+        );
+        assert_eq!(current, "/detail");
+        assert!(runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("detail-root")
+            .is_some());
+        assert!(runtime.node_scene_rect(detail).is_some());
+        assert_eq!(runtime.state.route_snapshot(), old_route);
+    }
+
+    #[test]
+    fn route_swap_does_not_revalidate_inactive_same_id_widget_state() {
+        use crate::widget_state::WidgetState;
+        use std::rc::Rc;
+
+        let source: jian_ops_schema::PenDocument = serde_json::from_str(
+            r#"{"version":"1.2","responsive":true,"children":[
+              {"type":"frame","id":"a","screen":"/a","width":200,"height":100,
+               "children":[{"type":"text_input","id":"shared","value":"fresh-a","width":100,"height":20}]},
+              {"type":"frame","id":"b","screen":"/b","width":200,"height":100,
+               "children":[{"type":"slider","id":"shared","value":5,"min":0,"max":10,"width":100,"height":20}]}]}"#,
+        )
+        .unwrap();
+        let (projected, _) = jian_ops_schema::screen_projection::project_screens(&source);
+        let (document, variants) = projected.unwrap();
+        let table = ScreenTable::from_projected(document, variants).unwrap();
+        let router = Rc::new(ScreenRouter::new(table.entry_path(), table.paths()));
+        let mut runtime = crate::Runtime::new_from_document(source).unwrap();
+        runtime.nav = router.clone();
+        runtime.build_layout((200.0, 100.0)).unwrap();
+        let mut current = "/a".to_owned();
+        let shared = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("shared")
+            .unwrap();
+        let schema = runtime.document.as_ref().unwrap().tree.nodes[shared]
+            .schema
+            .clone();
+        runtime.widget_states.get_or_init(&schema, &runtime.state);
+        if let Some(WidgetState::TextInput(text)) = runtime.widget_states.get_mut("shared") {
+            text.set_text("durable-a");
+        }
+
+        router.push("/b");
+        reconcile_screens_with_layout(&mut runtime, &router, &table, &mut current).unwrap();
+        let shared = runtime
+            .document
+            .as_ref()
+            .unwrap()
+            .tree
+            .get("shared")
+            .unwrap();
+        let schema = runtime.document.as_ref().unwrap().tree.nodes[shared]
+            .schema
+            .clone();
+        runtime.widget_states.get_or_init(&schema, &runtime.state);
+        assert!(matches!(
+            runtime.widget_states.get("shared"),
+            Some(WidgetState::Slider { .. })
+        ));
+
+        router.pop();
+        reconcile_screens_with_layout(&mut runtime, &router, &table, &mut current).unwrap();
+        assert!(matches!(
+            runtime.widget_states.get("shared"),
+            Some(WidgetState::TextInput(text)) if text.text() == "durable-a"
+        ));
+    }
+
+    #[test]
+    fn runtime_exposes_normalized_route_table_for_host_router_installation() {
+        let runtime = crate::Runtime::new_from_document(two_screen_doc()).unwrap();
+        let table = runtime
+            .screen_table()
+            .expect("normalized routes are routable");
+        assert_eq!(table.entry_path(), "/");
+        assert_eq!(table.paths(), vec!["/", "/detail"]);
+    }
+
+    #[test]
+    fn reconcile_syncs_full_route_state_even_without_a_screen_switch() {
+        use std::rc::Rc;
+
+        let doc = two_screen_doc();
+        let table = ScreenTable::from_document(doc.clone()).unwrap();
+        let router = Rc::new(ScreenRouter::new(table.entry_path(), table.paths()));
+        router.restore(
+            RouteState {
+                path: "/".to_owned(),
+                params: BTreeMap::from([("id".to_owned(), "42".to_owned())]),
+                query: BTreeMap::from([("tab".to_owned(), "details".to_owned())]),
+                stack: vec!["/".to_owned()],
+            },
+            &table.paths(),
+        );
+        let mut runtime = crate::Runtime::new_from_document(doc).unwrap();
+        runtime.nav = router.clone();
+        let mut current = "/".to_owned();
+
+        let outcome = reconcile_screens(&mut runtime, &router, &table, &mut current).unwrap();
+
+        assert!(outcome.switched.is_none());
+        let route = runtime.state.dump_default_state().route;
+        assert_eq!(route.get("path"), Some(&serde_json::json!("/")));
+        assert_eq!(route.get("params"), Some(&serde_json::json!({"id": "42"})));
+        assert_eq!(
+            route.get("query"),
+            Some(&serde_json::json!({"tab": "details"}))
+        );
+        assert_eq!(route.get("stack"), Some(&serde_json::json!(["/"])));
     }
 
     #[test]

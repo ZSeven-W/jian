@@ -3,7 +3,7 @@
 //! Two-layer model (C14):
 //!
 //! 1. **CapabilityGate** — Runtime-level: every IO action consults
-//!    `ctx.capabilities.check(needed, action_name)` before executing its
+//!    `ctx.capabilities.check(needed, action_name, now_ms)` before executing its
 //!    side effect. Undeclared capabilities are denied and the check is
 //!    written to the `AuditLog`.
 //! 2. **PermissionBroker** — OS-level UX for permissions like camera /

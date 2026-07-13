@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub mod clipboard;
 pub mod control;
 pub mod feedback;
 pub mod logic;
@@ -48,6 +49,10 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     r.register("replace", Box::new(navigation::factory_replace));
     r.register("pop", Box::new(navigation::factory_pop));
     r.register("open_url", Box::new(navigation::factory_open_url));
+
+    // Clipboard
+    r.register("copy", Box::new(clipboard::factory_copy));
+    r.register("paste", Box::new(clipboard::factory_paste));
 
     // Storage
     r.register("storage_set", Box::new(storage_ops::factory_storage_set));

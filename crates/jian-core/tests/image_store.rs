@@ -2,6 +2,8 @@ use jian_core::render::image_store::{
     canonical_url_key, data_url_key, decode_data_url, read_confined_local,
 };
 use jian_core::render::image_store::{ImageState, ImageStore};
+use jian_core::render::{DecodeError, DrawOp, RenderBackend};
+use jian_core::{geometry::Affine2, geometry::Rect, geometry::Size};
 
 #[test]
 fn reservation_budget_defers_fifo_and_release_promotes_oldest() {
@@ -80,13 +82,35 @@ fn reload_ownership_retags_survivors_and_releases_stale_entries() {
 
 #[test]
 fn backend_generation_bump_readmits_registered_images() {
-    let mut store = ImageStore::with_budgets(64, 128);
+    let mut store = ImageStore::with_budgets(64 * 1024 * 1024, 128);
     store.admit_resolver("a", 3);
     store.resolve("a", vec![1, 2, 3]).unwrap();
     store.mark_registered("a", 0).unwrap();
     assert_eq!(store.state("a"), Some(ImageState::Registered));
     store.backend_generation_changed(1);
     assert_eq!(store.state("a"), Some(ImageState::Pending));
+}
+
+#[test]
+fn backend_generation_bump_budgets_remote_refetches_and_defers_fifo() {
+    const MAX_TRANSFER: usize = 64 * 1024 * 1024;
+    let mut store = ImageStore::with_budgets(MAX_TRANSFER, 128);
+    for key in ["first", "second"] {
+        store.admit_resolver(key, MAX_TRANSFER);
+        assert_eq!(store.state(key), Some(ImageState::Pending));
+        store.resolve(key, vec![1, 2, 3]).unwrap();
+        store.mark_registered(key, 0).unwrap();
+    }
+
+    store.backend_generation_changed(1);
+
+    assert_eq!(store.state("first"), Some(ImageState::Pending));
+    assert_eq!(store.state("second"), Some(ImageState::Deferred));
+    assert_eq!(store.pending_keys(), ["first"]);
+
+    store.fail("first", "release transfer reservation");
+    assert_eq!(store.state("second"), Some(ImageState::Pending));
+    assert_eq!(store.pending_keys(), ["second"]);
 }
 
 #[test]
@@ -121,4 +145,53 @@ fn oversized_resolver_response_transitions_to_failed() {
         .unwrap_err();
     assert!(error.contains("64 MiB"));
     assert_eq!(store.state("large"), Some(ImageState::Failed));
+}
+
+struct RejectPinnedBackend {
+    registered: Vec<String>,
+    released: Vec<String>,
+}
+
+impl RenderBackend for RejectPinnedBackend {
+    type Surface = ();
+    fn new_surface(&mut self, _size: Size) {}
+    fn begin_frame(&mut self, _surface: &mut (), _clear: u32) {}
+    fn end_frame(&mut self, _surface: &mut ()) {}
+    fn push_clip(&mut self, _rect: Rect) {}
+    fn push_transform(&mut self, _m: &Affine2) {}
+    fn pop(&mut self) {}
+    fn push_layer(&mut self, _bounds: Rect) {}
+    fn pop_layer(&mut self) {}
+    fn apply_blur(&mut self, _sigma: f32) {}
+    fn apply_shadow(&mut self, _shadow: &jian_core::render::ShadowSpec) {}
+    fn draw(&mut self, _op: &DrawOp) {}
+    fn register_image(&mut self, key: &str, _bytes: &[u8]) -> Result<(), DecodeError> {
+        self.registered.push(key.to_owned());
+        Ok(())
+    }
+    fn release_image(&mut self, key: &str) {
+        self.released.push(key.to_owned());
+        self.registered.retain(|candidate| candidate != key);
+    }
+}
+
+#[test]
+fn pinned_budget_rejection_releases_registered_backend_image_and_clears_bytes() {
+    let mut store = ImageStore::with_budgets(64, 2);
+    store.admit_resolver("image", 3);
+    store.resolve("image", vec![1, 2, 3]).unwrap();
+    let mut backend = RejectPinnedBackend {
+        registered: Vec::new(),
+        released: Vec::new(),
+    };
+    let warnings = store.prepare_frame(&mut backend, 0);
+    assert_eq!(warnings.len(), 1);
+    assert!(backend.registered.is_empty());
+    assert_eq!(backend.released, ["image"]);
+    assert_eq!(store.state("image"), Some(ImageState::Failed));
+
+    // Re-admission must schedule a new resolve instead of promoting stale bytes.
+    store.admit_resolver("image", 3);
+    assert_eq!(store.state("image"), Some(ImageState::Pending));
+    assert_eq!(store.pending_keys(), ["image"]);
 }

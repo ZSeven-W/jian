@@ -221,13 +221,10 @@ pub(crate) fn node_to_style_responsive(
 /// present, `None` if neither.
 ///
 /// `pub(crate)` (not just a `node_to_style` implementation detail):
-/// the scene walker (`render::scene`) also reads this to translate a
-/// document ROOT's whole subtree by its authored origin. Taffy has no
-/// containing block for a root node, so the `Position::Absolute` inset
-/// this function drives is honoured for children but silently dropped
-/// for roots — `node_rect` intentionally stays root-relative (a
-/// contract OpenPencil depends on), so the root offset is applied at
-/// the scene/draw layer instead. See `render::scene::root_offset_for`.
+/// `LayoutEngine` records a document root's authored origin while building.
+/// Taffy has no containing block for a root node, so the `Position::Absolute`
+/// inset this function drives is honoured for children but silently dropped
+/// for roots; `node_rect` restores the recorded offset after compute.
 pub(crate) fn explicit_position(n: &jian_ops_schema::node::PenNode) -> Option<(f32, f32)> {
     let base = node_base(n)?;
     match (base.x, base.y) {

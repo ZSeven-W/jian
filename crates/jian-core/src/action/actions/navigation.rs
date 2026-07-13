@@ -101,7 +101,10 @@ impl ActionImpl for OpenUrl {
         "open_url"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        if !ctx.capabilities.check(Capability::Network, "open_url") {
+        if !ctx
+            .capabilities
+            .check(Capability::Network, "open_url", ctx.now_ms())
+        {
             return Err(ActionError::CapabilityDenied {
                 action: "open_url",
                 needed: Capability::Network,

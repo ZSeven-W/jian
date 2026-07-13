@@ -6,6 +6,12 @@ use crate::value::RuntimeValue;
 use serde_json::{json, Value};
 
 pub trait EvalContext {
+    /// Host-provided monotonic clock. Expression builtins must never consult
+    /// `std::time` because that panics in wasm32-unknown-unknown.
+    fn now_ms(&self) -> u64 {
+        0
+    }
+
     /// Resolve `$scope.a.b.c` where `path` is the literal source string.
     fn lookup_scope(&self, path: &str) -> Option<RuntimeValue>;
 

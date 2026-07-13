@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use base64::Engine as _;
 use sha2::{Digest, Sha256};
 
+const RESOLVER_TRANSFER_RESERVATION: usize = 64 * 1024 * 1024;
+
 pub fn data_url_key(source: &str) -> String {
     format!("data:sha256:{:x}", Sha256::digest(source.as_bytes()))
 }
@@ -110,7 +112,24 @@ pub fn read_confined_local(path: &Path, asset_root: &Path) -> Result<Vec<u8>, St
 
 #[async_trait::async_trait(?Send)]
 pub trait ImageResolver {
+    /// Give a host first refusal over non-inline image sources.
+    ///
+    /// The returned key is the opaque identity used by [`ImageStore`] and
+    /// draw ops. `request_source` is passed back to [`Self::resolve`], so a
+    /// host can preserve authored provenance while still choosing a stable
+    /// backend key. Returning `None` keeps the default URL/local-file path.
+    fn admission(&self, _source: &str) -> Result<Option<ImageAdmission>, String> {
+        Ok(None)
+    }
+
     async fn resolve(&self, url: &str) -> Result<Vec<u8>, String>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageAdmission {
+    pub key: String,
+    pub request_source: String,
+    pub requires_network: bool,
 }
 
 pub struct NullImageResolver;
@@ -355,8 +374,11 @@ impl ImageStore {
             if matches!(entry.state, ImageState::Pending | ImageState::Bytes) {
                 self.reserved = self.reserved.saturating_sub(entry.reservation);
             }
+            entry.bytes = None;
+            entry.reservation = 0;
             entry.state = ImageState::Failed;
         }
+        self.deferred.retain(|candidate| candidate != key);
         self.promote();
     }
 
@@ -390,6 +412,8 @@ impl ImageStore {
             if entry.state == ImageState::Bytes {
                 self.reserved = self.reserved.saturating_sub(entry.reservation);
             }
+            entry.bytes = None;
+            entry.reservation = 0;
             entry.state = ImageState::Failed;
             return Err(DecodeError("pinned image budget exceeded".into()));
         }
@@ -425,11 +449,16 @@ impl ImageStore {
                         ImageState::Deferred
                     }
                 } else {
-                    ImageState::Pending
+                    entry.bytes = None;
+                    entry.reservation = RESOLVER_TRANSFER_RESERVATION;
+                    if self.reserved.saturating_add(entry.reservation) <= self.reservation_budget {
+                        self.reserved += entry.reservation;
+                        ImageState::Pending
+                    } else {
+                        self.deferred.push_back(key.clone());
+                        ImageState::Deferred
+                    }
                 };
-                if !entry.inline {
-                    self.reserved = self.reserved.saturating_add(entry.reservation);
-                }
             }
         }
     }
@@ -485,12 +514,15 @@ impl ImageStore {
             .collect();
         let mut warnings = Vec::new();
         for (key, bytes) in pending {
-            match backend
-                .register_image(&key, &bytes)
-                .and_then(|_| self.mark_registered(&key, generation))
-            {
+            let result = backend.register_image(&key, &bytes);
+            let registered = result.is_ok();
+            let result = result.and_then(|_| self.mark_registered(&key, generation));
+            match result {
                 Ok(()) => {}
                 Err(error) => {
+                    if registered {
+                        backend.release_image(&key);
+                    }
                     self.fail(&key, &error.to_string());
                     warnings.push(format!("image `{key}`: {error}"));
                 }
