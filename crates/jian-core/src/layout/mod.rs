@@ -468,7 +468,10 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
         }
     };
 
-    let line_height = t.line_height.map(|v| v as f32).unwrap_or(0.0);
+    let line_height = t
+        .layout_line_height_multiplier()
+        .map(|v| v as f32)
+        .unwrap_or(0.0);
     let growth = match t.text_growth {
         Some(jian_ops_schema::node::TextGrowth::FixedWidth) => TextGrowth::FixedWidth,
         Some(jian_ops_schema::node::TextGrowth::FixedWidthHeight) => TextGrowth::FixedWidthHeight,
@@ -648,6 +651,28 @@ mod preload_tests {
             },
             rects,
         }
+    }
+
+    #[test]
+    fn explicit_height_multiline_text_measure_rejects_pixel_like_line_height() {
+        let text: PenNode = serde_json::from_value(json!({
+            "type":"text",
+            "id":"label",
+            "width":180,
+            "height":52,
+            "textGrowth":"fixed-width-height",
+            "content":"First line\nSecond line",
+            "fontSize":14,
+            "lineHeight":17
+        }))
+        .unwrap();
+
+        let measure = text_measure_for(&text).expect("text measure");
+        assert_eq!(
+            measure.line_height, 0.0,
+            "explicit box height must not make pixel-like lineHeight a multiplier"
+        );
+        assert_eq!(measure.runs[0].text, "First line\nSecond line");
     }
 
     #[test]

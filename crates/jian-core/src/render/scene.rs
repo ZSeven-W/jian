@@ -28,6 +28,7 @@ use crate::render::{
     TextRun,
 };
 use crate::scene::Color;
+use jian_ops_schema::node::text::canonical_line_height_multiplier;
 use jian_ops_schema::node::PenNode;
 use serde_json::Value;
 
@@ -1640,11 +1641,10 @@ fn try_text(json: &Value, r: crate::geometry::Rect) -> Option<DrawOp> {
         Some("right") | Some("end") => TextAlign::End,
         _ => TextAlign::Start,
     };
-    let line_height = json
-        .get("lineHeight")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as f32)
-        .unwrap_or(0.0);
+    let line_height =
+        canonical_line_height_multiplier(json.get("lineHeight").and_then(|v| v.as_f64()))
+            .map(|v| v as f32)
+            .unwrap_or(0.0);
     Some(DrawOp::Text(TextRun {
         content,
         font_family,
@@ -1755,6 +1755,44 @@ mod tests {
             }
             other => panic!("expected Text, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn direct_scene_rejects_pixel_like_line_height_for_explicit_text_box() {
+        // The scene walker reads a JSON projection rather than TextNode
+        // directly. Keep this path on the same canonical multiplier semantics
+        // as layout and the OpenPencil paint adapter.
+        let rt = doc_with(
+            r##"{ "formatVersion":"1.0", "version":"1.0.0", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"text", "id":"bad", "width":180, "height":52,
+                     "textGrowth":"fixed-width-height",
+                     "content":"First line\nSecond line", "fontSize":14,
+                     "lineHeight":17 },
+                   { "type":"text", "id":"valid", "width":180, "height":52,
+                     "content":"Valid multiplier", "fontSize":14,
+                     "lineHeight":1.5 }
+                 ]}"##,
+        );
+        let ops = collect_draws(rt.document.as_ref().unwrap(), &rt.layout);
+        let text_runs: Vec<&TextRun> = ops
+            .iter()
+            .filter_map(|op| match op {
+                DrawOp::Text(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(text_runs.len(), 2);
+        assert_eq!(
+            text_runs[0].line_height, 0.0,
+            "pixel-like lineHeight must use the renderer default"
+        );
+        assert_eq!(
+            text_runs[1].line_height, 1.5,
+            "valid unitless multiplier should remain authored"
+        );
     }
 
     #[test]

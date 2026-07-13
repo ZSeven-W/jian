@@ -114,3 +114,41 @@ pub struct TextNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::navigation::NavigationRoute>,
 }
+
+impl TextNode {
+    /// Return the canonical unitless `lineHeight` multiplier used by both
+    /// measurement and paint.
+    ///
+    /// Compatibility callers sometimes supply an absolute pixel line height
+    /// (for example `fontSize:13, lineHeight:17`). Its meaning does not change
+    /// when a text box has an explicit height: treating it as a multiplier
+    /// still paints lines hundreds of pixels apart. Invalid or pixel-like
+    /// values therefore fall back to the shared renderer default everywhere.
+    pub fn layout_line_height_multiplier(&self) -> Option<f64> {
+        canonical_line_height_multiplier(self.line_height)
+    }
+}
+
+/// Validate an authored unitless line-height multiplier without consulting
+/// box geometry. `None` tells all consumers to use the shared default.
+pub fn canonical_line_height_multiplier(line_height: Option<f64>) -> Option<f64> {
+    line_height.filter(|value| value.is_finite() && *value > 0.0 && *value <= 4.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::canonical_line_height_multiplier;
+
+    #[test]
+    fn canonical_line_height_accepts_only_finite_unitless_multipliers() {
+        assert_eq!(canonical_line_height_multiplier(None), None);
+        assert_eq!(canonical_line_height_multiplier(Some(1.5)), Some(1.5));
+        assert_eq!(canonical_line_height_multiplier(Some(4.0)), Some(4.0));
+        assert_eq!(canonical_line_height_multiplier(Some(0.0)), None);
+        assert_eq!(canonical_line_height_multiplier(Some(-1.0)), None);
+        assert_eq!(canonical_line_height_multiplier(Some(4.01)), None);
+        assert_eq!(canonical_line_height_multiplier(Some(17.0)), None);
+        assert_eq!(canonical_line_height_multiplier(Some(f64::NAN)), None);
+        assert_eq!(canonical_line_height_multiplier(Some(f64::INFINITY)), None);
+    }
+}
