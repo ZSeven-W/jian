@@ -35,6 +35,27 @@ impl LayoutScene {
         None
     }
 
+    /// Root-to-deepest structural path for the same topmost hit returned by
+    /// [`Self::node_at_doc_point`]. The last id is always the selectable hit;
+    /// preceding ids are its scene ancestors in document order.
+    ///
+    /// Locked ancestors stay in the path when one of their descendants is
+    /// hittable, while a locked node's own body is never the terminal hit.
+    /// Hidden subtrees are omitted entirely. Rotation and flips are resolved
+    /// at every ancestor exactly as in the single-id hit-test.
+    pub fn node_path_at_doc_point(&self, point: Point2D, zoom: f32) -> Option<Vec<String>> {
+        let zoom = zoom.max(0.0001);
+        let page = self.active_page()?;
+        let mut path = Vec::new();
+        for child in &page.children {
+            if hit_test_path_walk(child, point, zoom, &mut path) {
+                return Some(path.into_iter().map(str::to_owned).collect());
+            }
+            debug_assert!(path.is_empty());
+        }
+        None
+    }
+
     /// Top-level node ids on the active page whose aggregate bounds
     /// intersect `rect` (doc space). Backs the marquee rect-select.
     /// Descends only into top-level children — same as the click
@@ -77,6 +98,53 @@ fn hit_test_walk(node: &SceneNode, point: Point2D, zoom: f32) -> Option<String> 
         return None;
     }
     let bounds = node.aggregate_bounds();
+    let local = point_in_node_space(node, point, bounds);
+    for child in &node.children {
+        if let Some(hit) = hit_test_walk(child, local, zoom) {
+            return Some(hit);
+        }
+    }
+    // Locked nodes can't be selected via canvas hit, but their
+    // children still can — this check runs AFTER the child walk so
+    // descendants of a locked Frame remain hittable; only the
+    // Frame's own body opts out.
+    if node.locked {
+        return None;
+    }
+    if point_in_node(node, local, bounds, zoom) {
+        return Some(node.id.clone());
+    }
+    None
+}
+
+/// Path-preserving counterpart of [`hit_test_walk`]. `path` borrows ids while
+/// probing so misses do not clone strings; the public API allocates only the
+/// ancestors of the final hit.
+fn hit_test_path_walk<'a>(
+    node: &'a SceneNode,
+    point: Point2D,
+    zoom: f32,
+    path: &mut Vec<&'a str>,
+) -> bool {
+    if node.hidden {
+        return false;
+    }
+    let bounds = node.aggregate_bounds();
+    let local = point_in_node_space(node, point, bounds);
+    path.push(node.id.as_str());
+    for child in &node.children {
+        if hit_test_path_walk(child, local, zoom, path) {
+            return true;
+        }
+    }
+    if !node.locked && point_in_node(node, local, bounds, zoom) {
+        return true;
+    }
+    path.pop();
+    false
+}
+
+fn point_in_node_space(node: &SceneNode, point: Point2D, bounds: Rect) -> Point2D {
     let local = if node.rotation.abs() > f32::EPSILON {
         if let Some(pivot) = rotation_pivot(node, bounds) {
             let dx = point.x - pivot.x;
@@ -93,7 +161,7 @@ fn hit_test_walk(node: &SceneNode, point: Point2D, zoom: f32) -> Option<String> 
     } else {
         point
     };
-    let local = if node.flip_x || node.flip_y {
+    if node.flip_x || node.flip_y {
         if let Some(pivot) = rotation_pivot(node, bounds) {
             Point2D::new(
                 if node.flip_x {
@@ -112,23 +180,7 @@ fn hit_test_walk(node: &SceneNode, point: Point2D, zoom: f32) -> Option<String> 
         }
     } else {
         local
-    };
-    for child in &node.children {
-        if let Some(hit) = hit_test_walk(child, local, zoom) {
-            return Some(hit);
-        }
     }
-    // Locked nodes can't be selected via canvas hit, but their
-    // children still can — this check runs AFTER the child walk so
-    // descendants of a locked Frame remain hittable; only the
-    // Frame's own body opts out.
-    if node.locked {
-        return None;
-    }
-    if point_in_node(node, local, bounds, zoom) {
-        return Some(node.id.clone());
-    }
-    None
 }
 
 /// Rotation pivot for hit-test. Most kinds rotate around the
@@ -317,6 +369,10 @@ mod tests {
         }
     }
 
+    fn path(ids: &[&str]) -> Option<Vec<String>> {
+        Some(ids.iter().map(|id| (*id).to_owned()).collect())
+    }
+
     #[test]
     fn node_at_doc_point_treats_first_child_as_frontmost() {
         let scene = one_page(vec![
@@ -341,6 +397,153 @@ mod tests {
         assert!(scene
             .node_at_doc_point(Point2D::new(200.0, 200.0), 1.0)
             .is_none());
+    }
+
+    #[test]
+    fn node_path_returns_frontmost_root_to_deepest_hit() {
+        let mut front = leaf(
+            "front-root",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        front.children = vec![leaf(
+            "front-leaf",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 10.0, 30.0, 30.0),
+        )];
+        let mut back = leaf(
+            "back-root",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        back.children = vec![leaf(
+            "back-leaf",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 10.0, 30.0, 30.0),
+        )];
+        let scene = one_page(vec![front, back]);
+        let point = Point2D::new(20.0, 20.0);
+
+        let hit_path = scene.node_path_at_doc_point(point, 1.0);
+        assert_eq!(hit_path, path(&["front-root", "front-leaf"]));
+        assert_eq!(
+            hit_path.as_ref().and_then(|ids| ids.last()).cloned(),
+            scene.node_at_doc_point(point, 1.0),
+            "the terminal path id must preserve the existing hit-test result"
+        );
+        assert_eq!(
+            scene.node_path_at_doc_point(Point2D::new(200.0, 200.0), 1.0),
+            None
+        );
+    }
+
+    #[test]
+    fn node_path_skips_hidden_front_subtree() {
+        let mut hidden = leaf(
+            "hidden-root",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        hidden.hidden = true;
+        hidden.children = vec![leaf(
+            "hidden-leaf",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 10.0, 30.0, 30.0),
+        )];
+        let mut visible = leaf(
+            "visible-root",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        visible.children = vec![leaf(
+            "visible-leaf",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 10.0, 30.0, 30.0),
+        )];
+        let scene = one_page(vec![hidden, visible]);
+
+        assert_eq!(
+            scene.node_path_at_doc_point(Point2D::new(20.0, 20.0), 1.0),
+            path(&["visible-root", "visible-leaf"])
+        );
+    }
+
+    #[test]
+    fn node_path_tracks_ancestor_rotation_and_flip() {
+        let mut rotated = leaf(
+            "rotated-root",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        rotated.rotation = std::f32::consts::FRAC_PI_2;
+        rotated.children = vec![leaf(
+            "rotated-leaf",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 40.0, 20.0, 20.0),
+        )];
+        let rotated_scene = one_page(vec![rotated]);
+        assert_eq!(
+            rotated_scene.node_path_at_doc_point(Point2D::new(50.0, 20.0), 1.0),
+            path(&["rotated-root", "rotated-leaf"])
+        );
+
+        let mut flipped = leaf(
+            "flipped-root",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        flipped.flip_x = true;
+        flipped.children = vec![leaf(
+            "flipped-leaf",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 10.0, 20.0, 20.0),
+        )];
+        let flipped_scene = one_page(vec![flipped]);
+        assert_eq!(
+            flipped_scene.node_path_at_doc_point(Point2D::new(80.0, 20.0), 1.0),
+            path(&["flipped-root", "flipped-leaf"])
+        );
+    }
+
+    #[test]
+    fn node_path_keeps_locked_ancestors_but_not_locked_terminal_nodes() {
+        let child = leaf("child", NodeKind::Rect, Rect::xywh(10.0, 10.0, 20.0, 20.0));
+        let mut locked_root = leaf(
+            "locked-root",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        locked_root.locked = true;
+        locked_root.children = vec![child];
+        let scene = one_page(vec![locked_root]);
+        assert_eq!(
+            scene.node_path_at_doc_point(Point2D::new(20.0, 20.0), 1.0),
+            path(&["locked-root", "child"])
+        );
+        assert_eq!(
+            scene.node_path_at_doc_point(Point2D::new(80.0, 80.0), 1.0),
+            None,
+            "a locked ancestor's bare body must not become the path endpoint"
+        );
+
+        let mut locked_front = leaf(
+            "locked-front",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 10.0, 20.0, 20.0),
+        );
+        locked_front.locked = true;
+        let back = leaf(
+            "unlocked-back",
+            NodeKind::Rect,
+            Rect::xywh(10.0, 10.0, 20.0, 20.0),
+        );
+        let mut root = leaf("root", NodeKind::Frame, Rect::xywh(0.0, 0.0, 100.0, 100.0));
+        root.children = vec![locked_front, back];
+        let scene = one_page(vec![root]);
+        assert_eq!(
+            scene.node_path_at_doc_point(Point2D::new(20.0, 20.0), 1.0),
+            path(&["root", "unlocked-back"])
+        );
     }
 
     #[test]
