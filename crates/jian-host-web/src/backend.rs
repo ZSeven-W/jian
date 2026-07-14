@@ -1,11 +1,13 @@
 //! Jian `RenderBackend` implemented by a per-mount CanvasKit bridge.
 
 use crate::canvaskit::{self, CkImage, CkRuntime, CkSurface};
+use crate::viewport::resize_backing_store_preserving_css_box;
 use crate::{CkMeasure, FontRegistry};
 use jian_core::geometry::{Affine2, Rect, Size};
 use jian_core::render::{
     probe_image_bounds, BorderRadii, DecodeError, DrawOp, GradientStop, ImageSource, Paint,
-    PathCommand, RenderBackend, ShadowSpec, StrokeOp, TextAlign, TextRun, TextSpan,
+    PathCommand, RenderBackend, RichTextGrowth, RichTextPlan, ShadowSpec, StrokeOp, TextAlign,
+    TextRun, TextSpan,
 };
 use jian_core::scene::Color;
 use js_sys::Array;
@@ -25,7 +27,7 @@ enum Command {
     Layer(Rect, Option<Filter>),
     PopLayer,
     Draw(DrawOp),
-    RichText(TextRun, Vec<TextSpan>),
+    RichText(TextRun, Vec<TextSpan>, Rect, RichTextGrowth),
 }
 
 pub struct CanvasKitSurface {
@@ -66,6 +68,15 @@ pub struct CanvasKitBackend {
     clear: u32,
     images: HashMap<String, CkImage>,
     dpr: f32,
+    preserve_drawing_buffer: bool,
+    #[cfg(all(test, target_arch = "wasm32"))]
+    frame_trace: Vec<&'static str>,
+    #[cfg(all(test, target_arch = "wasm32"))]
+    last_frame_trace: Vec<&'static str>,
+    #[cfg(all(test, target_arch = "wasm32"))]
+    frame_layer_trace: Vec<String>,
+    #[cfg(all(test, target_arch = "wasm32"))]
+    last_frame_layer_trace: Vec<String>,
 }
 
 impl CanvasKitBackend {
@@ -99,7 +110,41 @@ impl CanvasKitBackend {
             clear: 0,
             images: HashMap::new(),
             dpr: 1.0,
+            preserve_drawing_buffer: false,
+            #[cfg(all(test, target_arch = "wasm32"))]
+            frame_trace: Vec::new(),
+            #[cfg(all(test, target_arch = "wasm32"))]
+            last_frame_trace: Vec::new(),
+            #[cfg(all(test, target_arch = "wasm32"))]
+            frame_layer_trace: Vec::new(),
+            #[cfg(all(test, target_arch = "wasm32"))]
+            last_frame_layer_trace: Vec::new(),
         })
+    }
+
+    fn trace(&mut self, entry: &'static str) {
+        #[cfg(all(test, target_arch = "wasm32"))]
+        self.frame_trace.push(entry);
+        #[cfg(not(all(test, target_arch = "wasm32")))]
+        let _ = entry;
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn last_frame_trace(&self) -> String {
+        self.last_frame_trace.join(" -> ")
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn last_frame_layer_trace(&self) -> String {
+        self.last_frame_layer_trace.join(" -> ")
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    fn trace_layer(&mut self, boundary: &str, kind: &str, bounds: Rect) {
+        self.frame_layer_trace.push(format!(
+            "{boundary}.{kind}=[{:.1},{:.1},{:.1},{:.1}]",
+            bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height
+        ));
     }
 
     pub fn has_image(&self, key: &str) -> bool {
@@ -125,8 +170,41 @@ impl CanvasKitBackend {
         CkMeasure::new(canvaskit::clone_runtime(&self.runtime))
     }
 
+    pub(crate) fn draw_text_plan(&mut self, run: &TextRun, plan: &RichTextPlan) {
+        self.trace("backend.draw_text_plan");
+        self.commands.push(Command::RichText(
+            run.clone(),
+            plan.spans.clone(),
+            plan.bounds,
+            plan.growth,
+        ));
+    }
+
     pub(crate) fn set_dpr(&mut self, dpr: f32) {
         self.dpr = dpr.max(1.0);
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn preserve_drawing_buffer_for_test(&mut self) {
+        // The production canvas is presented on rAF and never needs CPU
+        // readback. Browser pixel tests do read it after presentation, when a
+        // default WebGL framebuffer may otherwise have been discarded.
+        self.preserve_drawing_buffer = true;
+    }
+
+    pub(crate) fn try_new_surface(&mut self, size: Size) -> Result<CanvasKitSurface, JsValue> {
+        let width = size.width.max(1.0).round() as u32;
+        let height = size.height.max(1.0).round() as u32;
+        resize_backing_store_preserving_css_box(&self.canvas, width, height)?;
+        let inner =
+            self.runtime
+                .make_surface(&self.canvas, width, height, self.preserve_drawing_buffer)?;
+        Ok(CanvasKitSurface { inner })
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn fail_next_surface_for_test(&self) {
+        self.runtime.fail_next_surface_for_test();
     }
 
     fn image_for(&mut self, source: &ImageSource) -> Option<CkImage> {
@@ -148,6 +226,18 @@ impl CanvasKitBackend {
     }
 
     fn replay(&mut self, surface: &CkSurface, command: Command) {
+        self.trace(match &command {
+            Command::Clip(_) => "surface.push_clip",
+            Command::Transform(_) => "surface.push_transform",
+            Command::Pop => "surface.pop",
+            Command::Layer(_, Some(Filter::Blur(_))) => "surface.push_blur_layer",
+            Command::Layer(_, Some(Filter::Shadow(_))) => "surface.push_shadow_layer",
+            Command::Layer(_, None) => "surface.push_layer",
+            Command::PopLayer => "surface.pop_layer",
+            Command::Draw(DrawOp::ShadowedRect { .. }) => "surface.draw_shadowed_rect",
+            Command::Draw(_) => "surface.draw",
+            Command::RichText(_, _, _, _) => "surface.draw_rich_text",
+        });
         match command {
             Command::Clip(rect) => surface.push_clip(
                 rect.origin.x,
@@ -163,11 +253,15 @@ impl CanvasKitBackend {
                     Some(Filter::Blur(sigma)) => (1, vec![sigma]),
                     Some(Filter::Shadow(shadow)) => (2, shadow_values(&shadow)),
                 };
+                #[cfg(all(test, target_arch = "wasm32"))]
+                self.trace_layer("surface", layer_kind(kind), bounds);
                 surface.push_layer(&rect_values(bounds), kind, &values);
             }
             Command::PopLayer => surface.pop(),
             Command::Draw(op) => self.replay_draw(surface, op),
-            Command::RichText(run, spans) => draw_text_runs(surface, &run, &spans),
+            Command::RichText(run, spans, bounds, growth) => {
+                draw_text_runs(surface, &run, &spans, bounds, growth);
+            }
         }
     }
 
@@ -343,60 +437,94 @@ impl RenderBackend for CanvasKitBackend {
     type Surface = CanvasKitSurface;
 
     fn new_surface(&mut self, size: Size) -> Self::Surface {
-        let width = size.width.max(1.0).round() as u32;
-        let height = size.height.max(1.0).round() as u32;
-        self.canvas.set_width(width);
-        self.canvas.set_height(height);
-        let inner = self
-            .runtime
-            .make_surface(&self.canvas, width, height)
-            .expect("CanvasKit failed to create a canvas surface");
-        CanvasKitSurface { inner }
+        self.try_new_surface(size).unwrap_or_else(|error| {
+            panic!("CanvasKit failed to create a canvas surface: {error:?}")
+        })
     }
 
     fn begin_frame(&mut self, _surface: &mut Self::Surface, clear: u32) {
+        #[cfg(all(test, target_arch = "wasm32"))]
+        self.frame_trace.clear();
+        #[cfg(all(test, target_arch = "wasm32"))]
+        self.frame_layer_trace.clear();
+        self.trace("backend.begin_frame");
         self.commands.clear();
         self.pending_filter = None;
         self.clear = clear;
     }
 
     fn end_frame(&mut self, surface: &mut Self::Surface) {
+        self.trace("surface.begin_frame");
         surface.inner.begin_frame(self.clear, self.dpr);
         for command in std::mem::take(&mut self.commands) {
             self.replay(&surface.inner, command);
         }
         surface.inner.end_frame();
+        self.trace("surface.end_frame");
+        #[cfg(all(test, target_arch = "wasm32"))]
+        {
+            self.last_frame_trace = std::mem::take(&mut self.frame_trace);
+            self.last_frame_layer_trace = std::mem::take(&mut self.frame_layer_trace);
+        }
     }
 
     fn push_clip(&mut self, rect: Rect) {
+        self.trace("backend.push_clip");
         self.commands.push(Command::Clip(rect));
     }
     fn push_transform(&mut self, m: &Affine2) {
+        self.trace("backend.push_transform");
         self.commands.push(Command::Transform(*m));
     }
     fn pop(&mut self) {
+        self.trace("backend.pop");
         self.commands.push(Command::Pop);
     }
     fn push_layer(&mut self, bounds: Rect) {
+        self.trace("backend.push_layer");
+        #[cfg(all(test, target_arch = "wasm32"))]
+        self.trace_layer(
+            "backend",
+            match self.pending_filter.as_ref() {
+                Some(Filter::Blur(_)) => "blur",
+                Some(Filter::Shadow(_)) => "shadow",
+                None => "plain",
+            },
+            bounds,
+        );
         self.commands
             .push(Command::Layer(bounds, self.pending_filter.take()));
     }
     fn pop_layer(&mut self) {
+        self.trace("backend.pop_layer");
         self.commands.push(Command::PopLayer);
     }
     fn apply_blur(&mut self, sigma: f32) {
+        self.trace("backend.apply_blur");
         self.pending_filter = Some(Filter::Blur(sigma));
     }
     fn apply_shadow(&mut self, shadow: &ShadowSpec) {
+        self.trace("backend.apply_shadow");
         self.pending_filter = Some(Filter::Shadow(shadow.clone()));
     }
     fn draw(&mut self, op: &DrawOp) {
+        self.trace("backend.draw");
         self.commands.push(Command::Draw(op.clone()));
     }
 
     fn draw_text_runs(&mut self, run: &TextRun, spans: &[TextSpan]) {
-        self.commands
-            .push(Command::RichText(run.clone(), spans.to_vec()));
+        self.trace("backend.draw_text_runs");
+        let growth = if run.max_width > 0.0 {
+            RichTextGrowth::FixedWidth
+        } else {
+            RichTextGrowth::Auto
+        };
+        self.commands.push(Command::RichText(
+            run.clone(),
+            spans.to_vec(),
+            Rect::new(run.origin, Size::new(run.max_width.max(0.0), 0.0)),
+            growth,
+        ));
     }
 
     fn register_image(&mut self, key: &str, bytes: &[u8]) -> Result<(), DecodeError> {
@@ -418,7 +546,22 @@ impl RenderBackend for CanvasKitBackend {
     }
 }
 
-fn draw_text_runs(surface: &CkSurface, run: &TextRun, spans: &[TextSpan]) {
+#[cfg(all(test, target_arch = "wasm32"))]
+fn layer_kind(kind: u8) -> &'static str {
+    match kind {
+        1 => "blur",
+        2 => "shadow",
+        _ => "plain",
+    }
+}
+
+fn draw_text_runs(
+    surface: &CkSurface,
+    run: &TextRun,
+    spans: &[TextSpan],
+    bounds: Rect,
+    growth: RichTextGrowth,
+) {
     let texts = Array::new();
     let families = Array::new();
     let mut sizes = Vec::with_capacity(spans.len());
@@ -448,7 +591,12 @@ fn draw_text_runs(surface: &CkSurface, run: &TextRun, spans: &[TextSpan]) {
         &italics,
         &spacing,
         &colors,
-        &[run.origin.x, run.origin.y, run.max_width, 0.0],
+        &rect_values(bounds),
+        match growth {
+            RichTextGrowth::Legacy | RichTextGrowth::FixedWidth => 1,
+            RichTextGrowth::Auto => 0,
+            RichTextGrowth::FixedWidthHeight => 2,
+        },
         align,
         run.line_height,
     );

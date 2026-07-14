@@ -55,10 +55,11 @@ impl Drop for Listener {
 }
 
 /// Owns every listener installed for one mount. Dropping it detaches all DOM
-/// callbacks and restores the canvas's prior touch-action value.
+/// callbacks and restores the canvas's prior touch-action and tabindex.
 pub(crate) struct EventBridge {
     canvas: HtmlCanvasElement,
     previous_touch_action: String,
+    previous_tab_index: Option<String>,
     listeners: Vec<Listener>,
 }
 
@@ -68,16 +69,24 @@ impl EventBridge {
         canvas: HtmlCanvasElement,
         runtime: RuntimeHandle,
     ) -> Result<Self, JsValue> {
-        Self::attach_with_clock(canvas, runtime, HostClock::new()?, Rc::new(|| {}))
+        Self::attach_with_clock_and_keyboard_target(
+            canvas,
+            runtime,
+            HostClock::new()?,
+            Rc::new(|| {}),
+            None,
+        )
     }
 
-    pub(crate) fn attach_with_clock(
+    pub(crate) fn attach_with_clock_and_keyboard_target(
         canvas: HtmlCanvasElement,
         runtime: RuntimeHandle,
         clock: HostClock,
         wake: Rc<dyn Fn()>,
+        owned_keyboard_target: Option<EventTarget>,
     ) -> Result<Self, JsValue> {
         let previous_touch_action = canvas.style().get_property_value("touch-action")?;
+        let previous_tab_index = canvas.get_attribute("tabindex");
         canvas.style().set_property("touch-action", "none")?;
         canvas.set_tab_index(0);
         let canvas_target: EventTarget = canvas.clone().into();
@@ -149,45 +158,49 @@ impl EventBridge {
             )?);
         }
 
-        let window_target: EventTarget = web_sys::window()
-            .ok_or_else(|| JsValue::from_str("window unavailable"))?
-            .into();
-        for (kind, pressed) in [("keydown", true), ("keyup", false)] {
-            let runtime = runtime.clone();
-            let clock = clock.clone();
-            let wake = wake.clone();
-            listeners.push(Listener::attach(
-                window_target.clone(),
-                kind,
-                None,
-                move |event| {
-                    let Ok(event) = event.dyn_into::<web_sys::KeyboardEvent>() else {
-                        return;
-                    };
-                    if event.is_composing() {
+        let mut keyboard_targets: Vec<EventTarget> = vec![canvas.clone().into()];
+        if let Some(target) = owned_keyboard_target {
+            keyboard_targets.push(target);
+        }
+        for target in keyboard_targets {
+            for (kind, pressed) in [("keydown", true), ("keyup", false)] {
+                let runtime = runtime.clone();
+                let clock = clock.clone();
+                let wake = wake.clone();
+                listeners.push(Listener::attach(
+                    target.clone(),
+                    kind,
+                    None,
+                    move |event| {
+                        let Ok(event) = event.dyn_into::<web_sys::KeyboardEvent>() else {
+                            return;
+                        };
+                        if event.is_composing() {
+                            wake();
+                            return;
+                        }
+                        let now = clock.now_ms();
+                        if pressed
+                            && runtime
+                                .dispatch_keyboard(
+                                    keyboard::key(&event),
+                                    keyboard::modifiers(&event),
+                                    now,
+                                )
+                                .unwrap_or(true)
+                        {
+                            event.prevent_default();
+                        }
                         wake();
-                        return;
-                    }
-                    let now = clock.now_ms();
-                    if pressed
-                        && runtime
-                            .dispatch_keyboard(
-                                keyboard::key(&event),
-                                keyboard::modifiers(&event),
-                                now,
-                            )
-                            .unwrap_or(true)
-                    {
-                        event.prevent_default();
-                    }
-                    wake();
-                },
-            )?);
+                    },
+                )?);
+            }
         }
 
         Ok(Self {
             canvas,
             previous_touch_action,
+            previous_tab_index,
             listeners,
         })
     }
@@ -203,6 +216,11 @@ impl Drop for EventBridge {
                 .canvas
                 .style()
                 .set_property("touch-action", &self.previous_touch_action);
+        }
+        if let Some(previous) = &self.previous_tab_index {
+            let _ = self.canvas.set_attribute("tabindex", previous);
+        } else {
+            let _ = self.canvas.remove_attribute("tabindex");
         }
     }
 }

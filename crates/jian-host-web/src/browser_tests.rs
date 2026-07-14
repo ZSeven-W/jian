@@ -411,8 +411,7 @@ async fn pump_handles_breakpoints_zero_size_timers_and_context_restore() {
         .unwrap());
     let key_init = web_sys::KeyboardEventInit::new();
     key_init.set_key("Enter");
-    web_sys::window()
-        .unwrap()
+    canvas
         .dispatch_event(
             &web_sys::KeyboardEvent::new_with_keyboard_event_init_dict("keydown", &key_init)
                 .unwrap(),

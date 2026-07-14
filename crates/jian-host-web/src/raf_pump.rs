@@ -1,13 +1,18 @@
 //! Pump-driven rAF/timeout scheduler with paint-idle semantics.
+mod surface_lifecycle;
+
+use self::surface_lifecycle::{apply_metrics, context_lost, context_restored, recreate_surface};
 use crate::backend::{CanvasKitBackend, CanvasKitSurface};
 use crate::clock::HostClock;
 use crate::ime_input::ImeInput;
 use crate::mount::Callbacks;
 use crate::runtime_slot::RuntimeSlot;
-use crate::viewport::{ViewportBridge, ViewportMetrics};
+use crate::viewport::ViewportBridge;
 use jian_core::action::services::{NullRouter, RouteState, Router};
-use jian_core::geometry::size;
-use jian_core::render::{collect_rich_draws_with_state, RenderBackend};
+use jian_core::render::{
+    collect_rich_draws_with_state, collect_scene_paint_commands_with_state, DrawOp, RenderBackend,
+    RichDrawList, ScenePaintCommand,
+};
 use jian_core::screens::{reconcile_screens_with_layout, ScreenRouter, ScreenTable};
 use js_sys::Function;
 use std::cell::RefCell;
@@ -20,6 +25,13 @@ struct NavigationState {
     router: Rc<ScreenRouter>,
     table: ScreenTable,
     current_path: String,
+}
+
+enum FramePaintCommands {
+    /// The pre-responsive production path. Keeping this replay separate is
+    /// required by the §1.1 no-output-change contract for legacy documents.
+    Legacy(RichDrawList),
+    Responsive(Vec<ScenePaintCommand>),
 }
 struct State {
     window: Window,
@@ -167,6 +179,70 @@ impl RafPump {
     pub(crate) fn backend_has_image(&self, key: &str) -> bool {
         let host = self.state.borrow();
         host.backend.as_ref().is_some_and(|b| b.has_image(key))
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn last_frame_trace(&self) -> String {
+        self.state.borrow().backend.as_ref().map_or_else(
+            || "backend unavailable".to_owned(),
+            CanvasKitBackend::last_frame_trace,
+        )
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn last_frame_layer_trace(&self) -> String {
+        self.state.borrow().backend.as_ref().map_or_else(
+            || "backend unavailable".to_owned(),
+            CanvasKitBackend::last_frame_layer_trace,
+        )
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn read_logical_pixel(&self, x: f32, y: f32) -> Option<[u8; 4]> {
+        let host = self.state.borrow();
+        let surface = host.surface.as_ref()?;
+        Some(surface.read_pixel(
+            (x * host.dpr).round().max(0.0) as u32,
+            (y * host.dpr).round().max(0.0) as u32,
+        ))
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn logical_region_has_ink(&self, x: f32, y: f32, width: f32, height: f32) -> bool {
+        let host = self.state.borrow();
+        host.surface.as_ref().is_some_and(|surface| {
+            surface.region_has_ink(
+                (x * host.dpr).round().max(0.0) as u32,
+                (y * host.dpr).round().max(0.0) as u32,
+                (width * host.dpr).round().max(0.0) as u32,
+                (height * host.dpr).round().max(0.0) as u32,
+            )
+        })
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn fail_next_surface_for_test(&self) {
+        if let Some(backend) = self.state.borrow().backend.as_ref() {
+            backend.fail_next_surface_for_test();
+        }
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn needs_paint_for_test(&self) -> bool {
+        let (runtime, now) = {
+            let host = self.state.borrow();
+            (host.runtime.clone(), host.now_ms())
+        };
+        let mut live = runtime.take();
+        let needs_paint = live.pump(now).needs_paint;
+        runtime.put(live);
+        needs_paint
+    }
+
+    #[cfg(all(test, target_arch = "wasm32"))]
+    pub(crate) fn has_pending_frame_for_test(&self) -> bool {
+        let host = self.state.borrow();
+        host.raf_id.is_some() || host.raf_pending_epoch.is_some()
     }
 
     pub(crate) fn dispose(&mut self) {
@@ -526,10 +602,22 @@ fn report_runtime(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
 }
 
 fn render_if_possible(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
-    let draws = {
+    let commands = {
         let runtime = runtime.borrow();
         runtime.document.as_ref().map(|document| {
-            collect_rich_draws_with_state(document, &runtime.layout, &runtime.state)
+            if document.schema.is_responsive() {
+                FramePaintCommands::Responsive(collect_scene_paint_commands_with_state(
+                    document,
+                    &runtime.layout,
+                    &runtime.state,
+                ))
+            } else {
+                FramePaintCommands::Legacy(collect_rich_draws_with_state(
+                    document,
+                    &runtime.layout,
+                    &runtime.state,
+                ))
+            }
         })
     };
     let Some((mut backend, mut surface, generation, physical, dpr)) = ({
@@ -553,19 +641,45 @@ fn render_if_possible(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
     live.prepare_frame(&mut backend, generation);
     runtime.put(live);
     backend.begin_frame(&mut surface, 0xffffffff);
-    if let Some(draws) = draws {
-        let mut rich = draws.text_runs.iter().peekable();
-        for (index, op) in draws.ops.iter().enumerate() {
-            if rich.peek().is_some_and(|(op_index, _)| *op_index == index) {
-                let (_, spans) = rich.next().expect("peeked rich text");
-                let jian_core::render::DrawOp::Text(run) = op else {
-                    debug_assert!(false, "rich text metadata indexed a non-text op");
-                    backend.draw(op);
-                    continue;
-                };
-                backend.draw_text_runs(run, spans);
-            } else {
-                backend.draw(op);
+    if let Some(commands) = commands {
+        match commands {
+            FramePaintCommands::Legacy(draws) => {
+                let mut text_runs = draws.text_runs.into_iter().peekable();
+                for (index, op) in draws.ops.into_iter().enumerate() {
+                    if text_runs
+                        .peek()
+                        .is_some_and(|(op_index, _)| *op_index == index)
+                    {
+                        let (_, spans) = text_runs.next().expect("peeked rich text run");
+                        if let DrawOp::Text(run) = op {
+                            backend.draw_text_runs(&run, &spans);
+                        } else {
+                            debug_assert!(false, "rich text metadata indexed a non-text op");
+                            backend.draw(&op);
+                        }
+                    } else {
+                        backend.draw(&op);
+                    }
+                }
+            }
+            FramePaintCommands::Responsive(commands) => {
+                for command in commands {
+                    match command {
+                        ScenePaintCommand::PushClip(rect) => backend.push_clip(rect),
+                        ScenePaintCommand::PushTransform(transform) => {
+                            backend.push_transform(&transform);
+                        }
+                        ScenePaintCommand::Pop => backend.pop(),
+                        ScenePaintCommand::ApplyBlur(sigma) => backend.apply_blur(sigma),
+                        ScenePaintCommand::ApplyShadow(shadow) => backend.apply_shadow(&shadow),
+                        ScenePaintCommand::PushLayer(bounds) => backend.push_layer(bounds),
+                        ScenePaintCommand::PopLayer => backend.pop_layer(),
+                        ScenePaintCommand::Draw(op) => backend.draw(&op),
+                        ScenePaintCommand::RichText { run, plan } => {
+                            backend.draw_text_plan(&run, &plan);
+                        }
+                    }
+                }
             }
         }
     }
@@ -604,7 +718,7 @@ fn render_if_possible(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
             host.presented_frames = host.presented_frames.saturating_add(1);
         }
     } else if recreate {
-        recreate_surface(state);
+        let _ = recreate_surface(state);
     }
 }
 
@@ -676,165 +790,4 @@ fn schedule(state: &Rc<RefCell<State>>, needs_paint: bool, next_wake_ms: Option<
     if let Some(id) = cancel {
         window.clear_timeout_with_handle(id);
     }
-}
-
-fn apply_metrics(state: &Rc<RefCell<State>>, metrics: ViewportMetrics) {
-    let (runtime, logical_changed, dpr_changed, surface_changed, dropped_surface) = {
-        let mut host = state.borrow_mut();
-        if host.disposed {
-            return;
-        }
-        host.connected = metrics.connected;
-        let logical_changed = host.logical != (metrics.width, metrics.height);
-        let dpr_changed = (host.dpr - metrics.dpr.max(1.0)).abs() > 0.001;
-        host.logical = (metrics.width, metrics.height);
-        host.dpr = metrics.dpr.max(1.0);
-        if !metrics.connected || metrics.width <= 0.0 || metrics.height <= 0.0 {
-            (
-                host.runtime.clone(),
-                false,
-                false,
-                false,
-                host.surface.take(),
-            )
-        } else {
-            let physical = (
-                (metrics.width * host.dpr).round().max(1.0) as u32,
-                (metrics.height * host.dpr).round().max(1.0) as u32,
-            );
-            let surface_changed =
-                host.physical != physical || dpr_changed || host.surface.is_none();
-            host.physical = physical;
-            (
-                host.runtime.clone(),
-                logical_changed,
-                dpr_changed,
-                surface_changed,
-                None,
-            )
-        }
-    };
-    drop(dropped_surface);
-    if logical_changed {
-        let mut live = runtime.take();
-        live.set_viewport_size((metrics.width, metrics.height));
-        if let Some(target) = live.needs_variant_swap(metrics.width) {
-            if let Err(error) = live.switch_variant(&target) {
-                live.push_layout_error(format!("breakpoint variant swap failed: {error}"));
-            }
-        }
-        runtime.put(live);
-    } else if dpr_changed {
-        runtime.mark_dirty();
-    }
-    if surface_changed {
-        recreate_surface(state);
-    }
-    request_frame(state);
-}
-
-fn recreate_surface(state: &Rc<RefCell<State>>) {
-    let Some((mut backend, dpr, physical, generation, old_surface)) = ({
-        let mut host = state.borrow_mut();
-        let old_surface = host.surface.take();
-        if host.disposed
-            || !host.connected
-            || host.logical.0 <= 0.0
-            || host.logical.1 <= 0.0
-            || host.context_lost
-        {
-            None
-        } else {
-            host.backend.take().map(|backend| {
-                (
-                    backend,
-                    host.dpr,
-                    host.physical,
-                    host.backend_generation,
-                    old_surface,
-                )
-            })
-        }
-    }) else {
-        return;
-    };
-    drop(old_surface);
-    backend.set_dpr(dpr);
-    let surface = backend.new_surface(size(physical.0 as f32, physical.1 as f32));
-    let generation_changed = state.borrow().backend_generation != generation;
-    if generation_changed {
-        backend.invalidate_images();
-    }
-    let retry = {
-        let mut host = state.borrow_mut();
-        if host.disposed {
-            false
-        } else {
-            host.backend = Some(backend);
-            let current = host.connected
-                && host.logical.0 > 0.0
-                && host.logical.1 > 0.0
-                && !host.context_lost
-                && host.backend_generation == generation
-                && host.physical == physical
-                && (host.dpr - dpr).abs() <= 0.001;
-            if current {
-                host.surface = Some(surface);
-                false
-            } else {
-                host.connected && !host.context_lost && host.logical.0 > 0.0 && host.logical.1 > 0.0
-            }
-        }
-    };
-    if retry {
-        recreate_surface(state);
-    }
-}
-
-fn context_lost(state: &Rc<RefCell<State>>) {
-    let (runtime, surface, backend, generation) = {
-        let mut host = state.borrow_mut();
-        if host.disposed || host.context_lost {
-            return;
-        }
-        host.context_lost = true;
-        host.backend_generation = host.backend_generation.wrapping_add(1);
-        (
-            host.runtime.clone(),
-            host.surface.take(),
-            host.backend.take(),
-            host.backend_generation,
-        )
-    };
-    drop(surface);
-    if let Some(mut backend) = backend {
-        backend.invalidate_images();
-        let reinstall = {
-            let mut host = state.borrow_mut();
-            if host.disposed || host.backend_generation != generation {
-                false
-            } else {
-                host.backend = Some(backend);
-                !host.context_lost && host.connected && host.logical.0 > 0.0 && host.logical.1 > 0.0
-            }
-        };
-        if reinstall {
-            recreate_surface(state);
-        }
-    }
-    runtime.mark_dirty();
-}
-
-fn context_restored(state: &Rc<RefCell<State>>) {
-    let runtime = {
-        let mut host = state.borrow_mut();
-        if host.disposed || !host.context_lost {
-            return;
-        }
-        host.context_lost = false;
-        host.runtime.clone()
-    };
-    recreate_surface(state);
-    runtime.mark_dirty();
-    request_frame(state);
 }

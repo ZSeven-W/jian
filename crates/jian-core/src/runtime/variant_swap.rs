@@ -1,7 +1,9 @@
-use super::{collect_focus_chain, root_has_limits, select_viewport_root, Runtime};
+use super::layout_runtime::{root_has_limits, select_viewport_root};
+use super::Runtime;
 use crate::action_surface::{derive_actions, ActionDefinition, BUILD_SALT};
 use crate::document::{loader, RuntimeDocument};
 use crate::error::{CoreError, CoreResult};
+use crate::gesture::collect_focus_chain;
 use crate::layout::LayoutEngine;
 use crate::signal::scheduler::Scheduler;
 use crate::spatial::{NodeBBox, SpatialIndex};
@@ -40,6 +42,77 @@ pub enum SwapState {
 }
 
 impl Runtime {
+    pub fn configure_variants(
+        &mut self,
+        path: impl Into<String>,
+        table: jian_ops_schema::screen_projection::ScreenVariantTable,
+    ) {
+        self.active_screen_path = Some(path.into());
+        self.variant_table = table;
+    }
+
+    pub fn configure_variant_source(
+        &mut self,
+        source: PenDocument,
+        path: impl Into<String>,
+        table: jian_ops_schema::screen_projection::ScreenVariantTable,
+    ) {
+        self.variant_source = Some(source);
+        self.configure_variants(path, table);
+        if let Some(page_id) = self
+            .document
+            .as_ref()
+            .and_then(|document| document.active_page.clone())
+        {
+            self.active_variant_page_id = Some(page_id.clone());
+            self.active_page_key = page_id.clone();
+            self.widget_states.set_page_key(page_id);
+        }
+    }
+
+    pub fn selected_variant(&self) -> Option<&str> {
+        self.active_variant_page_id.as_deref()
+    }
+
+    pub fn active_page_key(&self) -> &str {
+        &self.active_page_key
+    }
+
+    /// Current projected screen path, when the document defines screens.
+    pub fn active_screen_path(&self) -> Option<&str> {
+        self.active_screen_path.as_deref()
+    }
+
+    /// Clone the projected route table for a host-owned router.
+    pub fn screen_table(&self) -> Option<crate::screens::ScreenTable> {
+        if let Some(source) = self.variant_source.clone() {
+            crate::screens::ScreenTable::from_projected(source, self.variant_table.clone())
+        } else {
+            crate::screens::ScreenTable::from_document(self.document.as_ref()?.schema.clone())
+        }
+    }
+
+    /// Changes whenever the mounted document's derived action set changes.
+    pub fn action_surface_generation(&self) -> u64 {
+        self.action_surface_generation
+    }
+
+    pub fn needs_variant_swap(&self, new_width: f32) -> Option<String> {
+        let path = self.active_screen_path.as_deref()?;
+        let variants = self.variant_table.0.get(path)?;
+        let selected = variants
+            .ranged
+            .iter()
+            .find(|entry| {
+                entry.range.min_width.unwrap_or(0.0) as f32 <= new_width
+                    && new_width <= entry.range.max_width.unwrap_or(f64::INFINITY) as f32
+            })
+            .map_or(variants.default_page_id.as_str(), |entry| {
+                entry.page_id.as_str()
+            });
+        (self.active_variant_page_id.as_deref() != Some(selected)).then(|| selected.to_owned())
+    }
+
     pub fn input_frozen(&self) -> bool {
         matches!(self.swap_state, SwapState::AwaitingIme { .. })
     }
@@ -227,6 +300,10 @@ impl Runtime {
         self.swap_state = SwapState::Idle;
         self.mutation_counter
             .set(self.mutation_counter.get().wrapping_add(1));
+        // The parked geometry was built from the current viewport and staged
+        // state, including defaults merged above. Do not make the next pump
+        // redundantly rebuild the layout that was just committed.
+        self.layout_mutation_seen = self.mutation_counter.get();
         Ok(())
     }
 

@@ -9,6 +9,21 @@ pub struct FrameDirective {
 }
 
 impl Runtime {
+    /// Update the host clock used by widgets, actions, and scheduled tasks.
+    pub fn set_now_ms(&mut self, now_ms: u64) {
+        self.note_time(now_ms);
+    }
+
+    pub fn note_time(&mut self, now_ms: u64) {
+        self.now_ms = self.now_ms.max(now_ms);
+        self.task_clock.advance_to(self.now_ms);
+        self.state.set_now_ms(self.now_ms);
+    }
+
+    pub fn last_now_ms(&self) -> u64 {
+        self.now_ms
+    }
+
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
     }

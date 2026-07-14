@@ -249,3 +249,75 @@ async fn cjk_coverage_and_rich_render_share_measurement_styles() {
     }));
     backend.end_frame(&mut surface);
 }
+
+#[wasm_bindgen_test(async)]
+async fn auto_and_fixed_width_height_render_with_their_unwrapped_measurement() {
+    super::tests::ensure_canvaskit();
+    let mut backend = CanvasKitBackend::load(canvas(), "/assets/canvaskit/")
+        .await
+        .unwrap();
+    let runs = [StyledRun {
+        text: "Jian unwrapped agreement text 你好",
+        font_family: Some("Roboto"),
+        font_size: 24.0,
+        font_weight: 400,
+        font_style: FontStyleKind::Normal,
+        letter_spacing: 1.0,
+    }];
+    let natural = backend.measure_backend().measure(&MeasureRequest {
+        runs: &runs,
+        line_height: 1.2,
+        max_width: None,
+    });
+    let constrained = backend.measure_backend().measure(&MeasureRequest {
+        runs: &runs,
+        line_height: 1.2,
+        max_width: Some(115.0),
+    });
+    assert_eq!(natural.line_count, 1);
+    assert!(constrained.line_count > 1);
+
+    for growth in ["fixed-width-height", "auto"] {
+        let raw = serde_json::json!({
+            "version": "1.2",
+            "responsive": true,
+            "children": [{
+                "type": "text",
+                "id": "copy",
+                "content": "Jian unwrapped agreement text 你好",
+                "fontFamily": "Roboto",
+                "fontSize": 24,
+                "letterSpacing": 1,
+                "lineHeight": 1.2,
+                "textGrowth": growth,
+                "width": 115,
+            }],
+        })
+        .to_string();
+        let mut runtime = jian_core::Runtime::new();
+        runtime.load_str(&raw).unwrap();
+        runtime
+            .build_layout_with(std::rc::Rc::new(backend.measure_backend()), (360.0, 160.0))
+            .unwrap();
+        let rich = collect_rich_draws_with_state(
+            runtime.document.as_ref().unwrap(),
+            &runtime.layout,
+            &runtime.state,
+        );
+        let (op_index, spans) = rich.text_runs.first().expect("text metadata");
+        let DrawOp::Text(run) = &rich.ops[*op_index] else {
+            panic!("metadata must index text")
+        };
+        let mut surface = backend.new_surface(size(360.0, 160.0));
+        backend.begin_frame(&mut surface, 0xffffffff);
+        backend.draw_text_runs(run, spans);
+        backend.end_frame(&mut surface);
+
+        assert!(
+            (surface.last_text_width() - natural.width).abs() <= 1.0,
+            "{growth} rendered width {} disagrees with natural measure {}",
+            surface.last_text_width(),
+            natural.width,
+        );
+    }
+}

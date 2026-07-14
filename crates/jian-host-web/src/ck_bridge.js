@@ -59,6 +59,7 @@ class Runtime {
     this.fonts = new Map();
     this.fontMgr = null;
     this.coverage = new Map();
+    this.failNextSurface = false;
     this.disposed = false;
   }
 
@@ -77,14 +78,22 @@ class Runtime {
     this.ck = null;
   }
 
-  makeSurface(canvas, width, height) {
-    canvas.width = Math.max(1, width);
-    canvas.height = Math.max(1, height);
-    const surface = this.ck.MakeWebGLCanvasSurface(canvas)
+  makeSurface(canvas, width, height, preserveDrawingBuffer) {
+    if (this.failNextSurface) {
+      this.failNextSurface = false;
+      throw new Error('injected CanvasKit surface creation failure');
+    }
+    const surface = this.ck.MakeWebGLCanvasSurface(
+      canvas,
+      null,
+      { preserveDrawingBuffer: Boolean(preserveDrawingBuffer) },
+    )
       || (this.ck.MakeSWCanvasSurface && this.ck.MakeSWCanvasSurface(canvas));
     if (!surface) throw new Error('CanvasKit failed to make a canvas surface');
     return new Surface(this, surface);
   }
+
+  failNextSurfaceForTest() { this.failNextSurface = true; }
 
   decodeImage(bytes) {
     const owned = new Uint8Array(bytes).slice();
@@ -290,10 +299,27 @@ class Surface {
     if (filterKind === 1 && this.ck.ImageFilter.MakeBlur) {
       imageFilter = this.ck.ImageFilter.MakeBlur(filter[0], filter[0], this.ck.TileMode.Decal, null);
     } else if (filterKind === 2 && this.ck.ImageFilter.MakeDropShadow) {
-      imageFilter = this.ck.ImageFilter.MakeDropShadow(
-        filter[0], filter[1], filter[2], filter[2],
-        this.ck.Color4f(filter[4], filter[5], filter[6], filter[7]), null,
-      );
+      const color = this.ck.Color4f(filter[4], filter[5], filter[6], filter[7]);
+      const spread = Number(filter[3] || 0);
+      const canMorph = spread > 0
+        ? this.ck.ImageFilter.MakeDilate
+        : this.ck.ImageFilter.MakeErode;
+      if (spread !== 0 && canMorph && this.ck.ImageFilter.MakeDropShadowOnly && this.ck.ImageFilter.MakeBlend) {
+        const amount = Math.abs(spread);
+        const morphology = spread > 0
+          ? this.ck.ImageFilter.MakeDilate(amount, amount, null)
+          : this.ck.ImageFilter.MakeErode(amount, amount, null);
+        const shadowOnly = this.ck.ImageFilter.MakeDropShadowOnly(
+          filter[0], filter[1], filter[2], filter[2], color, morphology,
+        );
+        imageFilter = this.ck.ImageFilter.MakeBlend(this.ck.BlendMode.SrcOver, shadowOnly, null);
+        shadowOnly.delete();
+        morphology.delete();
+      } else {
+        imageFilter = this.ck.ImageFilter.MakeDropShadow(
+          filter[0], filter[1], filter[2], filter[2], color, null,
+        );
+      }
     }
     if (imageFilter) {
       paint = new this.ck.Paint();
@@ -335,7 +361,24 @@ class Surface {
 
   drawImage(image, rect, opacity) {
     const paint = this.fillPaint(0xffffffff, opacity);
-    this.canvas.drawImageRect(image, this.ck.XYWHRect(0, 0, image.width(), image.height()), this.rect(rect), paint);
+    const width = image.width(), height = image.height();
+    let source = this.ck.XYWHRect(0, 0, width, height);
+    if (width > 0 && height > 0) {
+      const destinationWidth = Math.max(1, rect[2]);
+      const destinationHeight = Math.max(1, rect[3]);
+      const sourceAspect = width / height;
+      const destinationAspect = destinationWidth / destinationHeight;
+      let cropWidth = width, cropHeight = height;
+      if (sourceAspect > destinationAspect) cropWidth = height * destinationAspect;
+      else cropHeight = width / destinationAspect;
+      source = this.ck.XYWHRect(
+        (width - cropWidth) / 2,
+        (height - cropHeight) / 2,
+        cropWidth,
+        cropHeight,
+      );
+    }
+    this.canvas.drawImageRect(image, source, this.rect(rect), paint, false);
   }
 
   drawText(text, family, rect, size, weight, color, align, lineHeight) {
@@ -351,16 +394,21 @@ class Surface {
     paragraph.delete();
   }
 
-  drawRichText(texts, families, sizes, weights, italics, spacing, colors, rect, align, lineHeight) {
+  drawRichText(texts, families, sizes, weights, italics, spacing, colors, rect, growth, align, lineHeight) {
     const paragraph = this.runtime.makeParagraph(
       texts, families, sizes, weights, italics, spacing,
-      rect[2] > 0 ? rect[2] : -1, lineHeight, colors,
+      growth === 1 && rect[2] > 0 ? rect[2] : -1, lineHeight, colors,
     );
     if (!paragraph) return;
     const width = paragraph.getLongestLine ? paragraph.getLongestLine() : paragraph.getMaxIntrinsicWidth();
     const available = Math.max(0, rect[2]);
     const x = rect[0] + (align === 1 ? Math.max(0, available - width) / 2 : align === 2 ? Math.max(0, available - width) : 0);
-    this.canvas.drawParagraph(paragraph, x, rect[1]);
+    if (growth === 2) {
+      this.canvas.save();
+      this.canvas.clipRect(this.rect(rect), this.ck.ClipOp.Intersect, true);
+      this.canvas.drawParagraph(paragraph, x, rect[1]);
+      this.canvas.restore();
+    } else this.canvas.drawParagraph(paragraph, x, rect[1]);
     this.textWidth = width;
     paragraph.delete();
   }
@@ -368,7 +416,7 @@ class Surface {
   stops(values, opacity) {
     const colors = [], positions = [];
     for (let i = 0; i + 4 < values.length; i += 5) {
-      positions.push(values[i]);
+      positions.push(Math.max(0, Math.min(1, values[i])));
       colors.push(this.ck.Color4f(values[i + 1], values[i + 2], values[i + 3], values[i + 4] * opacity));
     }
     return { colors, positions };
@@ -394,7 +442,9 @@ class Surface {
     if (!colors.length) return;
     const radians = angle * Math.PI / 180;
     const cx = rect[0] + rect[2] / 2, cy = rect[1] + rect[3] / 2;
-    const dx = Math.cos(radians) * rect[2] / 2, dy = Math.sin(radians) * rect[3] / 2;
+    const unitX = Math.cos(radians), unitY = Math.sin(radians);
+    const extent = Math.abs(unitX) * rect[2] / 2 + Math.abs(unitY) * rect[3] / 2;
+    const dx = unitX * extent, dy = unitY * extent;
     const shader = this.ck.Shader.MakeLinearGradient([cx - dx, cy - dy], [cx + dx, cy + dy], colors, positions, this.ck.TileMode.Clamp);
     this.gradientPath(rect, radii, shader, stroke, strokeWidth);
   }
@@ -466,16 +516,26 @@ class Surface {
   }
 
   drawShadow(rect, radii, shadow) {
-    const path = this.rrect([rect[0] + shadow[0], rect[1] + shadow[1], rect[2], rect[3]], radii);
+    const spread = shadow[3];
+    const path = this.rrect([
+      rect[0] + shadow[0] - spread,
+      rect[1] + shadow[1] - spread,
+      Math.max(0, rect[2] + spread * 2),
+      Math.max(0, rect[3] + spread * 2),
+    ], Array.from(radii, (radius) => Math.max(0, radius + spread)));
     const paint = new this.ck.Paint();
     paint.setAntiAlias(true);
     paint.setColor(this.ck.Color4f(shadow[4], shadow[5], shadow[6], shadow[7]));
-    if (this.ck.MaskFilter.MakeBlur) {
-      const blur = this.ck.MaskFilter.MakeBlur(this.ck.BlurStyle.Normal, Math.max(0, shadow[2]), true);
+    const sigma = Math.max(0, shadow[2] * 0.5);
+    let blur = null;
+    if (sigma > 0 && this.ck.MaskFilter.MakeBlur) {
+      blur = this.ck.MaskFilter.MakeBlur(this.ck.BlurStyle.Normal, sigma, true);
+    }
+    if (blur) {
       paint.setMaskFilter(blur);
-      this.canvas.drawPath(path, paint);
-      blur.delete();
-    } else this.canvas.drawPath(path, paint);
+    }
+    this.canvas.drawPath(path, paint);
+    if (blur) blur.delete();
     paint.delete(); path.delete();
   }
 
@@ -514,7 +574,7 @@ class Surface {
   regionHasInk(x, y, width, height) {
     const bytes = this.pixels(x, y, width, height);
     for (let i = 0; i + 3 < bytes.length; i += 4) {
-      if (bytes[i] < 245 || bytes[i + 1] < 245 || bytes[i + 2] < 245) return true;
+      if (bytes[i + 3] > 0 && (bytes[i] < 245 || bytes[i + 1] < 245 || bytes[i + 2] < 245)) return true;
     }
     return false;
   }

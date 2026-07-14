@@ -27,12 +27,28 @@ mod callback_reentry;
 mod canvaskit_semantics;
 
 #[cfg(all(test, target_arch = "wasm32"))]
+#[path = "browser_tests/canvaskit_fidelity.rs"]
+mod canvaskit_fidelity;
+
+#[cfg(all(test, target_arch = "wasm32"))]
 #[path = "browser_tests/image_safety_reload.rs"]
 mod image_safety_reload;
 
 #[cfg(all(test, target_arch = "wasm32"))]
 #[path = "browser_tests/production_bridges.rs"]
 mod production_bridges;
+
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "browser_tests/viewport_surface_lifecycle.rs"]
+mod viewport_surface_lifecycle;
+
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "browser_tests/production_render_states.rs"]
+mod production_render_states;
+
+#[cfg(all(test, target_arch = "wasm32"))]
+#[path = "browser_tests/fresh_eyes.rs"]
+mod fresh_eyes;
 
 #[cfg(all(test, target_arch = "wasm32"))]
 #[path = "browser_tests.rs"]

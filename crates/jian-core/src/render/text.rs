@@ -28,7 +28,30 @@ pub struct RichDrawList {
     pub text_runs: Vec<(usize, Vec<TextSpan>)>,
 }
 
-pub(super) fn resolve_text(json: &Value, rect: Rect) -> Option<(DrawOp, Vec<TextSpan>)> {
+/// Explicit paragraph layout metadata for rich hosts. This stays beside the
+/// flat `DrawOp` so native backends continue to receive the legacy command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RichTextGrowth {
+    /// Non-responsive documents retain the pre-responsive flat DrawOp contract.
+    Legacy,
+    Auto,
+    FixedWidth,
+    FixedWidthHeight,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RichTextPlan {
+    pub op_index: usize,
+    pub spans: Vec<TextSpan>,
+    pub bounds: Rect,
+    pub growth: RichTextGrowth,
+}
+
+pub(super) fn resolve_text(
+    json: &Value,
+    rect: Rect,
+    responsive: bool,
+) -> Option<(DrawOp, Vec<TextSpan>, RichTextGrowth)> {
     if json.get("type").and_then(Value::as_str) != Some("text") {
         return None;
     }
@@ -102,15 +125,30 @@ pub(super) fn resolve_text(json: &Value, rect: Rect) -> Option<(DrawOp, Vec<Text
         _ => TextAlign::Start,
     };
     // Unitless multipliers only, per main's line-height normalization: a
-    // pixel-like 17 must not be taken as a 17x multiplier. This check used to
-    // live in `try_text`, which this branch removed, so it moves here with it.
+    // pixel-like 17 must not be taken as a 17x multiplier. The check used to
+    // live in `try_text`, which this branch removed, so it travels with it.
     let line_height = jian_ops_schema::node::text::canonical_line_height_multiplier(
         json.get("lineHeight").and_then(Value::as_f64),
     )
     .unwrap_or(0.0) as f32;
-    // Preserve the historical flat DrawOp exactly for every existing/native
-    // collector. Rich hosts consume `spans`; the fallback continues to use
-    // node-level fields, the legacy 16px default, and numeric-only weight.
+    let growth = if responsive {
+        match json.get("textGrowth").and_then(Value::as_str) {
+            Some("fixed-width") => RichTextGrowth::FixedWidth,
+            Some("fixed-width-height") => RichTextGrowth::FixedWidthHeight,
+            Some("auto") | None | Some(_) => RichTextGrowth::Auto,
+        }
+    } else {
+        RichTextGrowth::Legacy
+    };
+    // The zero sentinel is rich-host-only. Flat DrawOps from non-responsive
+    // documents always retain the authored width used before responsive text
+    // growth existed, keeping native output unchanged.
+    let max_width = match growth {
+        RichTextGrowth::FixedWidth | RichTextGrowth::Legacy => rect.size.width,
+        RichTextGrowth::FixedWidthHeight | RichTextGrowth::Auto => 0.0,
+    };
+    // Rich hosts consume `spans`; the flat fallback retains node-level style,
+    // the legacy 16px default, and numeric-only weight.
     let legacy_size = json.get("fontSize").and_then(Value::as_f64).unwrap_or(16.0) as f32;
     let legacy_weight = json
         .get("fontWeight")
@@ -124,11 +162,12 @@ pub(super) fn resolve_text(json: &Value, rect: Rect) -> Option<(DrawOp, Vec<Text
             font_weight: legacy_weight,
             color: node_color,
             origin: point(rect.min_x(), rect.min_y()),
-            max_width: rect.size.width,
+            max_width,
             align,
             line_height,
         }),
         spans,
+        growth,
     ))
 }
 
@@ -188,7 +227,7 @@ mod tests {
             "letterSpacing": 2,
             "fill": [{"type": "solid", "color": "#0000ff"}]
         });
-        let (_, spans) = resolve_text(&json, rect(0.0, 0.0, 80.0, 40.0)).unwrap();
+        let (_, spans, _) = resolve_text(&json, rect(0.0, 0.0, 80.0, 40.0), true).unwrap();
         assert_eq!(spans[0].font_size, 20.0);
         assert_eq!(spans[0].font_weight, 400);
         assert_eq!(spans[0].letter_spacing, 2.0);
@@ -208,7 +247,8 @@ mod tests {
             "fontWeight": "heavy",
             "fill": [{"type": "solid", "color": "#0000ff"}]
         });
-        let (DrawOp::Text(run), spans) = resolve_text(&json, rect(1.0, 2.0, 80.0, 40.0)).unwrap()
+        let (DrawOp::Text(run), spans, _) =
+            resolve_text(&json, rect(1.0, 2.0, 80.0, 40.0), true).unwrap()
         else {
             panic!("expected text")
         };
@@ -218,5 +258,46 @@ mod tests {
         assert_eq!(run.font_weight, 400);
         assert_eq!(run.color, Color::rgb(0, 0, 255));
         assert_eq!(spans[0].font_weight, 900);
+    }
+
+    #[test]
+    fn rich_draw_op_wrap_budget_matches_text_growth() {
+        for (growth, expected_width) in [
+            ("fixed-width", 80.0),
+            ("fixed-width-height", 0.0),
+            ("auto", 0.0),
+        ] {
+            let json = serde_json::json!({
+                "type": "text",
+                "content": "a deliberately long line",
+                "textGrowth": growth,
+            });
+            let (DrawOp::Text(run), _, _) =
+                resolve_text(&json, rect(0.0, 0.0, 80.0, 40.0), true).unwrap()
+            else {
+                panic!("expected text")
+            };
+            assert_eq!(run.max_width, expected_width, "growth={growth}");
+        }
+    }
+
+    #[test]
+    fn flat_nonresponsive_text_draw_op_keeps_the_authored_width() {
+        for growth in [None, Some("auto"), Some("fixed-width-height")] {
+            let mut json = serde_json::json!({
+                "type": "text",
+                "content": "legacy flat text",
+            });
+            if let Some(growth) = growth {
+                json["textGrowth"] = serde_json::json!(growth);
+            }
+            let (DrawOp::Text(run), _, growth_mode) =
+                resolve_text(&json, rect(0.0, 0.0, 80.0, 40.0), false).unwrap()
+            else {
+                panic!("expected text")
+            };
+            assert_eq!(run.max_width, 80.0, "growth={growth:?}");
+            assert_eq!(growth_mode, RichTextGrowth::Legacy);
+        }
     }
 }

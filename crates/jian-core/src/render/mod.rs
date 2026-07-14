@@ -8,17 +8,19 @@ pub mod commands;
 pub mod image_store;
 pub mod paint;
 pub mod scene;
+mod scene_commands;
 pub mod text;
 pub mod widget_style;
 
-pub use commands::{affine_to_array, RenderCommand};
+pub use commands::{affine_to_array, RenderCommand, ScenePaintCommand};
 pub use paint::{
     BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
     PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
     TextRun,
 };
 pub use scene::{collect_draws, collect_draws_with_state, collect_rich_draws_with_state};
-pub use text::{RichDrawList, TextSpan};
+pub use scene_commands::collect_scene_paint_commands_with_state;
+pub use text::{RichDrawList, RichTextGrowth, RichTextPlan, TextSpan};
 
 use crate::geometry::{Affine2, Rect, Size};
 

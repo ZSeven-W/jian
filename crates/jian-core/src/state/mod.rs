@@ -382,12 +382,16 @@ impl StateGraph {
     /// [`Self::restore_default_state`] (pack-side AOT seed) and by
     /// hosts that own the route table.
     pub fn route_set(&self, name: &str, value: Value) {
-        self.bump_mutation();
         let rv = RuntimeValue(value);
         let mut map = self.route.borrow_mut();
         if let Some(sig) = map.get(name) {
+            if sig.get() == rv {
+                return;
+            }
+            self.bump_mutation();
             sig.set(rv);
         } else {
+            self.bump_mutation();
             let sig = Signal::new(rv, self.scheduler.clone());
             map.insert(name.to_owned(), sig);
         }
@@ -523,6 +527,21 @@ mod tests {
         assert_eq!(g.app_get("count").unwrap().as_i64(), Some(0));
         g.app_set("count", json!(42));
         assert_eq!(g.app_get("count").unwrap().as_i64(), Some(42));
+    }
+
+    #[test]
+    fn equal_route_write_does_not_mutate_or_notify() {
+        let scheduler = Rc::new(Scheduler::new());
+        let mutations = Rc::new(Cell::new(0));
+        let graph = StateGraph::new_with_counter(scheduler, mutations.clone());
+        graph.route_set("path", json!("/detail"));
+        let first_mutation = mutations.get();
+        let first_version = graph.route.borrow()["path"].version();
+
+        graph.route_set("path", json!("/detail"));
+
+        assert_eq!(mutations.get(), first_mutation);
+        assert_eq!(graph.route.borrow()["path"].version(), first_version);
     }
 
     #[test]

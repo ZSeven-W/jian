@@ -1,3 +1,4 @@
+use super::Runtime;
 use crate::widget_state::{WidgetState, WidgetStateStore};
 use std::collections::BTreeMap;
 
@@ -114,6 +115,50 @@ impl ImeRegistry {
         }
         field.replace_range(start, end, replacement, 0);
         ImeConfirmOutcome::Applied
+    }
+}
+
+impl Runtime {
+    pub fn begin_ime_handshake(&mut self, snapshot: ImeSnapshot) -> u64 {
+        self.ime_registry.issue(snapshot)
+    }
+
+    pub fn confirm_ime_commit(&mut self, request_id: u64, text: &str) -> ImeConfirmOutcome {
+        let outcome = self
+            .ime_registry
+            .confirm_commit(request_id, text, &mut self.widget_states);
+        if outcome != ImeConfirmOutcome::NoOp {
+            self.complete_parked_after_ime(request_id);
+        }
+        outcome
+    }
+
+    pub fn confirm_ime_cancel(&mut self, request_id: u64) -> ImeConfirmOutcome {
+        let outcome = self
+            .ime_registry
+            .confirm_cancel(request_id, &mut self.widget_states);
+        if outcome != ImeConfirmOutcome::NoOp {
+            self.complete_parked_after_ime(request_id);
+        }
+        outcome
+    }
+
+    pub(super) fn active_ime_snapshot(&self) -> Option<ImeSnapshot> {
+        self.widget_states.iter().find_map(|(node_id, state)| {
+            let WidgetState::TextInput(field) = state else {
+                return None;
+            };
+            let composition = field.composition()?;
+            let region = composition
+                .region
+                .unwrap_or_else(|| (field.caret(), field.caret()));
+            Some(ImeSnapshot {
+                field_key: (self.active_page_key.clone(), node_id.to_owned()),
+                region,
+                text: composition.text.clone(),
+                durable_text: field.text().to_owned(),
+            })
+        })
     }
 }
 

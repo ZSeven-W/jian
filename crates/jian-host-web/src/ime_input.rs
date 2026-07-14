@@ -198,6 +198,10 @@ impl ImeInput {
         })
     }
 
+    pub(crate) fn keyboard_target(&self) -> EventTarget {
+        self.input.clone().into()
+    }
+
     #[cfg(all(test, target_arch = "wasm32"))]
     pub(crate) fn input(&self) -> &HtmlInputElement {
         &self.input

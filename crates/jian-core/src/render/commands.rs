@@ -2,7 +2,8 @@
 //! in tests and by replay tools. For live rendering the backend issues calls
 //! directly on the trait without constructing this enum.
 
-use super::paint::{DrawOp, ShadowSpec};
+use super::paint::{DrawOp, ShadowSpec, TextRun};
+use super::text::RichTextPlan;
 use crate::geometry::{Affine2, Rect};
 
 #[derive(Debug, Clone)]
@@ -18,6 +19,21 @@ pub enum RenderCommand {
     PopLayer,
     ApplyBlur { sigma: f32 },
     ApplyShadow(ShadowSpec),
+}
+
+/// Structured production scene stream retaining node state scopes and rich
+/// paragraph metadata.
+#[derive(Debug, Clone)]
+pub enum ScenePaintCommand {
+    PushClip(Rect),
+    PushTransform(Affine2),
+    Pop,
+    ApplyBlur(f32),
+    ApplyShadow(ShadowSpec),
+    PushLayer(Rect),
+    PopLayer,
+    Draw(DrawOp),
+    RichText { run: TextRun, plan: RichTextPlan },
 }
 
 pub fn affine_to_array(a: &Affine2) -> [f32; 6] {

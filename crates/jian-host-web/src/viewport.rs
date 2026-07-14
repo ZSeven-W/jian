@@ -80,6 +80,38 @@ impl Inner {
 
 pub(crate) struct ViewportBridge(Rc<Inner>);
 
+/// Resize the canvas backing store without letting intrinsic canvas dimensions
+/// feed back into an otherwise unstyled CSS box. An axis is pinned only when
+/// the corresponding attribute write demonstrably changed its rendered size.
+pub(crate) fn resize_backing_store_preserving_css_box(
+    canvas: &HtmlCanvasElement,
+    width: u32,
+    height: u32,
+) -> Result<(), JsValue> {
+    let width = width.max(1);
+    let height = height.max(1);
+    if canvas.width() == width && canvas.height() == height {
+        return Ok(());
+    }
+
+    let before = canvas.get_bounding_client_rect();
+    if canvas.width() != width {
+        canvas.set_width(width);
+    }
+    if canvas.height() != height {
+        canvas.set_height(height);
+    }
+    let after = canvas.get_bounding_client_rect();
+    let style = canvas.style();
+    if (after.width() - before.width()).abs() > 0.5 {
+        style.set_property("width", &format!("{}px", before.width()))?;
+    }
+    if (after.height() - before.height()).abs() > 0.5 {
+        style.set_property("height", &format!("{}px", before.height()))?;
+    }
+    Ok(())
+}
+
 impl ViewportBridge {
     pub(crate) fn attach(
         canvas: HtmlCanvasElement,

@@ -22,7 +22,7 @@
 //! desktop host crate.
 
 use crate::geometry::{point, rect, Point};
-use crate::render::text::{resolve_text, RichDrawList};
+use crate::render::text::{resolve_text, RichDrawList, RichTextPlan};
 use crate::render::{
     BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
     PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
@@ -119,7 +119,13 @@ pub fn collect_rich_draws_with_state(
             &mut visited,
         );
     }
-    RichDrawList { ops, text_runs }
+    RichDrawList {
+        ops,
+        text_runs: text_runs
+            .into_iter()
+            .map(|run: RichTextPlan| (run.op_index, run.spans))
+            .collect(),
+    }
 }
 
 /// Extra context the walker needs to paint *live* interactive widgets
@@ -171,7 +177,7 @@ fn walk(
     state: Option<&crate::state::StateGraph>,
     widgets: Option<&WidgetRenderCtx>,
     out: &mut Vec<DrawOp>,
-    text_runs: &mut Vec<(usize, Vec<crate::render::TextSpan>)>,
+    text_runs: &mut Vec<RichTextPlan>,
     visited: &mut std::collections::HashSet<crate::document::NodeKey>,
 ) {
     // Skip already-painted keys so a child cycle (NodeData.children
@@ -238,7 +244,15 @@ fn walk(
             })
             .is_some();
         if !handled {
-            emit_for_node(r, json, doc.schema.is_responsive(), state, out, text_runs);
+            emit_for_node(
+                r,
+                json,
+                doc.schema.is_responsive(),
+                state,
+                out,
+                text_runs,
+                true,
+            );
         }
     }
 
@@ -263,7 +277,7 @@ fn walk(
 /// nested children's schema (parent-relative coords) and clobber the
 /// layout engine's already-resolved absolute coords.
 #[derive(Default, Clone, Copy)]
-struct BindingOverrides {
+pub(super) struct BindingOverrides {
     x: Option<f32>,
     y: Option<f32>,
     w: Option<f32>,
@@ -271,7 +285,7 @@ struct BindingOverrides {
 }
 
 impl BindingOverrides {
-    fn apply_to_rect(self, r: crate::geometry::Rect) -> crate::geometry::Rect {
+    pub(super) fn apply_to_rect(self, r: crate::geometry::Rect) -> crate::geometry::Rect {
         rect(
             self.x.unwrap_or(r.origin.x),
             self.y.unwrap_or(r.origin.y),
@@ -298,7 +312,7 @@ impl BindingOverrides {
 ///   leaves this is enough to move them around.)
 /// - `fill[0].color` (hex string — written into the first fill's color
 ///   field, defaulting `type` to `"solid"`)
-fn apply_bindings(
+pub(super) fn apply_bindings(
     node: &mut Value,
     state: &crate::state::StateGraph,
     responsive: bool,
@@ -467,13 +481,14 @@ fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
     }
 }
 
-fn emit_for_node(
+pub(super) fn emit_for_node(
     r: crate::geometry::Rect,
     json: &Value,
     responsive: bool,
     state: Option<&crate::state::StateGraph>,
     out: &mut Vec<DrawOp>,
-    text_runs: &mut Vec<(usize, Vec<crate::render::TextSpan>)>,
+    text_runs: &mut Vec<RichTextPlan>,
+    direct_shadows: bool,
 ) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
 
@@ -485,12 +500,14 @@ fn emit_for_node(
     let image_source = image_source_for(json, responsive, state);
     if let Some((source, opacity)) = image_source {
         let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
-        if let Some(shadow) = first_shadow(json) {
-            out.push(DrawOp::ShadowedRect {
-                rect: rect_logical,
-                radii,
-                shadow,
-            });
+        if direct_shadows {
+            if let Some(shadow) = first_shadow(json) {
+                out.push(DrawOp::ShadowedRect {
+                    rect: rect_logical,
+                    radii,
+                    shadow,
+                });
+            }
         }
         out.push(DrawOp::Image {
             source,
@@ -560,8 +577,13 @@ fn emit_for_node(
     }
 
     // --- Text first: draw_rect isn't the right primitive for text.
-    if let Some((text_op, spans)) = resolve_text(json, r) {
-        text_runs.push((out.len(), spans));
+    if let Some((text_op, spans, growth)) = resolve_text(json, r, responsive) {
+        text_runs.push(RichTextPlan {
+            op_index: out.len(),
+            spans,
+            bounds: r,
+            growth,
+        });
         out.push(text_op);
         return;
     }
@@ -571,12 +593,14 @@ fn emit_for_node(
 
     // --- Shadows (first effect entry that's a drop shadow) paint
     // *underneath* the fill, so emit the shadow op first.
-    if let Some(shadow) = first_shadow(json) {
-        out.push(DrawOp::ShadowedRect {
-            rect: rect_logical,
-            radii,
-            shadow,
-        });
+    if direct_shadows {
+        if let Some(shadow) = first_shadow(json) {
+            out.push(DrawOp::ShadowedRect {
+                rect: rect_logical,
+                radii,
+                shadow,
+            });
+        }
     }
 
     // --- Fill can be solid or linear gradient. Inspect `fill[0]`.

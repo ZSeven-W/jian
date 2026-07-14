@@ -19,7 +19,11 @@ extern "C" {
         canvas: &HtmlCanvasElement,
         width: u32,
         height: u32,
+        preserve_drawing_buffer: bool,
     ) -> Result<CkSurface, JsValue>;
+    #[cfg(all(test, target_arch = "wasm32"))]
+    #[wasm_bindgen(method, js_name = failNextSurfaceForTest)]
+    pub fn fail_next_surface_for_test(this: &CkRuntime);
     #[wasm_bindgen(method, catch, js_name = decodeImage)]
     pub fn decode_image(this: &CkRuntime, bytes: &[u8]) -> Result<CkImage, JsValue>;
     #[wasm_bindgen(method, js_name = deleteImage)]
@@ -111,6 +115,7 @@ extern "C" {
         letter_spacing: &[f32],
         colors: &[u32],
         rect: &[f32],
+        growth: u8,
         align: u8,
         line_height: f32,
     );

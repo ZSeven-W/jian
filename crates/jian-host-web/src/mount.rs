@@ -49,6 +49,10 @@ impl Callbacks {
         call_callback(&self.error, "action", message.as_ref(), source);
     }
 
+    pub(crate) fn surface_error(&self, message: impl AsRef<str>) {
+        call_callback(&self.error, "internal", message.as_ref(), Some("surface"));
+    }
+
     pub(crate) fn layout_error(&self, message: impl AsRef<str>) {
         let message = message.as_ref();
         let source = if message.contains("viewport") {
@@ -224,6 +228,58 @@ impl JianHandle {
             .is_some_and(|host| host.pump.backend_has_image(key))
     }
 
+    pub(crate) fn test_last_frame_trace(&self) -> String {
+        self.inner.borrow().host.as_ref().map_or_else(
+            || "host unavailable".to_owned(),
+            |host| host.pump.last_frame_trace(),
+        )
+    }
+
+    pub(crate) fn test_last_frame_layer_trace(&self) -> String {
+        self.inner.borrow().host.as_ref().map_or_else(
+            || "host unavailable".to_owned(),
+            |host| host.pump.last_frame_layer_trace(),
+        )
+    }
+
+    pub(crate) fn test_read_pixel(&self, x: f32, y: f32) -> Option<[u8; 4]> {
+        self.inner
+            .borrow()
+            .host
+            .as_ref()
+            .and_then(|host| host.pump.read_logical_pixel(x, y))
+    }
+
+    pub(crate) fn test_region_has_ink(&self, x: f32, y: f32, width: f32, height: f32) -> bool {
+        self.inner
+            .borrow()
+            .host
+            .as_ref()
+            .is_some_and(|host| host.pump.logical_region_has_ink(x, y, width, height))
+    }
+
+    pub(crate) fn test_fail_next_surface(&self) {
+        if let Some(host) = self.inner.borrow().host.as_ref() {
+            host.pump.fail_next_surface_for_test();
+        }
+    }
+
+    pub(crate) fn test_needs_paint(&self) -> bool {
+        self.inner
+            .borrow()
+            .host
+            .as_ref()
+            .is_some_and(|host| host.pump.needs_paint_for_test())
+    }
+
+    pub(crate) fn test_has_pending_frame(&self) -> bool {
+        self.inner
+            .borrow()
+            .host
+            .as_ref()
+            .is_some_and(|host| host.pump.has_pending_frame_for_test())
+    }
+
     pub(crate) fn test_disposed(&self) -> bool {
         self.inner.borrow().disposed
     }
@@ -248,6 +304,12 @@ pub async fn mount_jian(
         .map_err(|error| JsValue::from_str(&error))?;
 
     let backend = CanvasKitBackend::load(canvas.clone(), &options.canvas_kit_base).await?;
+    #[cfg(all(test, target_arch = "wasm32"))]
+    let backend = {
+        let mut backend = backend;
+        backend.preserve_drawing_buffer_for_test();
+        backend
+    };
     let fonts = backend.font_registry();
     for font in &options.fonts {
         fonts
@@ -272,7 +334,6 @@ pub async fn mount_jian(
     runtime
         .build_layout_with(Rc::new(measure), (width, height))
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
-    runtime.rebuild_spatial();
     runtime.set_viewport_size((width, height));
     let runtime = Rc::new(RuntimeSlot::new(runtime));
     let pump = RafPump::start_with_clock(
@@ -286,6 +347,7 @@ pub async fn mount_jian(
     pump.refresh_navigation();
     let wake = pump.waker();
     let ime = ImeInput::attach_with_clock(&canvas, runtime.clone(), clock.clone(), wake.clone())?;
+    let ime_keyboard_target = ime.keyboard_target();
     pump.set_ime(ime);
     let mut live = runtime.take();
     let services = WebServices::install(
@@ -296,7 +358,13 @@ pub async fn mount_jian(
     );
     runtime.put(live);
     let services = services.map_err(|error| JsValue::from_str(&error))?;
-    let events = EventBridge::attach_with_clock(canvas, runtime.clone(), clock, wake)?;
+    let events = EventBridge::attach_with_clock_and_keyboard_target(
+        canvas,
+        runtime.clone(),
+        clock,
+        wake,
+        Some(ime_keyboard_target),
+    )?;
     pump.sync_viewport_now();
     let host = MountedHost {
         runtime,
