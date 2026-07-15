@@ -28,9 +28,6 @@ pub struct JianRuntimeError {
 pub type JianRuntimeErrorCallback =
     unsafe extern "C" fn(user_data: *mut c_void, error: *const JianRuntimeError);
 
-/// Task 5 consumes this callback; Task 4 needs the tail field to report when it is absent.
-pub type JianImeControl = unsafe extern "C" fn(user_data: *mut c_void, op: i32, request_id: u64);
-
 pub(crate) fn emit(
     callback: Option<JianRuntimeErrorCallback>,
     user_data: *mut c_void,

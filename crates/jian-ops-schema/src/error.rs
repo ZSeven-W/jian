@@ -1,3 +1,4 @@
+use std::fmt;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -50,6 +51,43 @@ pub enum LoadWarning {
         from_role: String,
         to: &'static str,
     },
+}
+
+impl fmt::Display for LoadWarning {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownField { field, .. } => write!(formatter, "unknown field `{field}`"),
+            Self::FutureFormatVersion {
+                found,
+                supported_max,
+            } => write!(
+                formatter,
+                "formatVersion `{found}` is newer than supported (`{supported_max}`); behaviour may be undefined"
+            ),
+            Self::ResponsiveBelowMinor { declared } => write!(
+                formatter,
+                "responsive mode is active with formatVersion `{declared}`; declare `1.2` or newer"
+            ),
+            Self::LogicModulesSkipped { reason } => {
+                write!(formatter, "`logicModules` skipped: {reason}")
+            }
+            Self::InvalidExpression { path, expr, reason } => {
+                write!(formatter, "invalid expression at `{path}`: `{expr}` — {reason}")
+            }
+            Self::ViewportWrite { path } => write!(
+                formatter,
+                "write to read-only `$viewport` at `{path}` is ignored"
+            ),
+            Self::LegacyRolePromoted {
+                path,
+                from_role,
+                to,
+            } => write!(
+                formatter,
+                "legacy role `{from_role}` at `{path}` promoted to `{to}` widget"
+            ),
+        }
+    }
 }
 
 pub struct LoadResult<T> {

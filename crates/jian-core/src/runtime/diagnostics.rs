@@ -5,6 +5,10 @@ impl Runtime {
         &self.load_warnings
     }
 
+    pub fn take_load_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.load_warnings)
+    }
+
     pub fn take_action_outcomes(&mut self) -> Vec<ReportedActionOutcome> {
         std::mem::take(&mut self.action_outcomes)
     }

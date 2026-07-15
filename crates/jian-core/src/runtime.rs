@@ -63,13 +63,14 @@ mod lifecycle;
 mod pointer_input;
 mod pump;
 mod reload_resources;
-mod text_input;
 mod text_geometry;
+mod text_input;
 mod variant_swap;
 mod websocket_runtime;
 
 pub use ime_handshake::{ImeConfirmOutcome, ImeControlOp, ImeHost, ImeSnapshot};
 pub use pump::FrameDirective;
+pub use text_input::{EditableInputKind, EditableTextSnapshot};
 pub use variant_swap::{ParkedBuild, SwapState};
 
 /// Default audit-log size. 1000 entries is generous for in-session

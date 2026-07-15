@@ -424,8 +424,47 @@ impl StateGraph {
     }
 
     pub fn set_viewport(&self, width: f32, height: f32, dpr: f32) {
-        for (key, value) in [("width", width), ("height", height), ("dpr", dpr)] {
-            let runtime = RuntimeValue(serde_json::json!(value));
+        self.set_viewport_size(width, height);
+        self.set_viewport_number("dpr", dpr);
+    }
+
+    pub fn set_viewport_size(&self, width: f32, height: f32) {
+        for (key, value) in [("width", width), ("height", height)] {
+            self.set_viewport_number(key, value);
+        }
+    }
+
+    fn set_viewport_number(&self, key: &str, value: f32) {
+        let runtime = RuntimeValue(serde_json::json!(value));
+        let mut viewport = self.viewport.borrow_mut();
+        if let Some(signal) = viewport.get(key) {
+            signal.set(runtime);
+        } else {
+            viewport.insert(key.into(), Signal::new(runtime, self.scheduler.clone()));
+        }
+    }
+
+    pub fn set_viewport_occlusion(
+        &self,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        left: f32,
+        keyboard_height: f32,
+    ) {
+        for (key, value) in [
+            (
+                "safeArea",
+                serde_json::json!({
+                    "top": top,
+                    "right": right,
+                    "bottom": bottom,
+                    "left": left,
+                }),
+            ),
+            ("keyboard", serde_json::json!({ "height": keyboard_height })),
+        ] {
+            let runtime = RuntimeValue(value);
             let mut viewport = self.viewport.borrow_mut();
             if let Some(signal) = viewport.get(key) {
                 signal.set(runtime);

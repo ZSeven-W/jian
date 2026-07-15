@@ -1,5 +1,6 @@
-use crate::diagnostics::{JianImeControl, JianRuntimeErrorCallback};
+use crate::diagnostics::JianRuntimeErrorCallback;
 use crate::error::{read_utf8, FfiError, FfiResult, DOCUMENT_CAP, STRING_CAP};
+use crate::ime::{JianImeControl, JianInputFocusChanged, JianTextStateChanged};
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
 use std::ptr;
@@ -16,6 +17,8 @@ pub struct JianCallbacks {
     pub needs_redraw: Option<JianNeedsRedraw>,
     pub runtime_error: Option<JianRuntimeErrorCallback>,
     pub ime_control: Option<JianImeControl>,
+    pub input_focus_changed: Option<JianInputFocusChanged>,
+    pub text_state_changed: Option<JianTextStateChanged>,
 }
 
 /// Engine construction descriptor. `asset_base` is the v1 tail.
@@ -69,6 +72,8 @@ pub(crate) struct Callbacks {
     pub needs_redraw: Option<JianNeedsRedraw>,
     pub runtime_error: Option<JianRuntimeErrorCallback>,
     pub ime_control: Option<JianImeControl>,
+    pub input_focus_changed: Option<JianInputFocusChanged>,
+    pub text_state_changed: Option<JianTextStateChanged>,
 }
 
 pub(crate) struct CreateOptions {
@@ -116,6 +121,12 @@ unsafe fn parse_callbacks(pointer: *const JianCallbacks) -> FfiResult<Callbacks>
         },
         ime_control: unsafe {
             read_covered(base, size, offset_of!(JianCallbacks, ime_control)).unwrap_or(None)
+        },
+        input_focus_changed: unsafe {
+            read_covered(base, size, offset_of!(JianCallbacks, input_focus_changed)).unwrap_or(None)
+        },
+        text_state_changed: unsafe {
+            read_covered(base, size, offset_of!(JianCallbacks, text_state_changed)).unwrap_or(None)
         },
     })
 }

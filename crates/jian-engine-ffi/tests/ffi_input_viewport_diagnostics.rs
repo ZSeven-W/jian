@@ -54,6 +54,8 @@ fn callbacks(log: &ErrorLog, ime_control: Option<JianImeControl>) -> JianCallbac
         needs_redraw: None,
         runtime_error: Some(record_runtime_error),
         ime_control,
+        input_focus_changed: None,
+        text_state_changed: None,
     }
 }
 

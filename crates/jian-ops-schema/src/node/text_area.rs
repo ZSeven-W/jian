@@ -26,6 +26,8 @@ pub struct TextAreaNode {
     /// Initial value. Two-way binding lives on `bindings.bind:value`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_key_hint: Option<String>,
     /// Lucide glyph drawn at the left content edge. See `TextInputNode`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leading_icon: Option<String>,

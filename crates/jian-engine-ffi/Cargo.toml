@@ -20,3 +20,5 @@ textlayout = ["jian-skia/textlayout"]
 jian-core = { path = "../jian-core" }
 jian-skia = { path = "../jian-skia" }
 
+[dev-dependencies]
+serde_json = { workspace = true }

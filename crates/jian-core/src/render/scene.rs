@@ -903,18 +903,9 @@ fn emit_live_text_input(
     };
 
     let live = st.text();
-    // Inline the IME preedit at the caret for display.
-    let display: String = match st.composition() {
-        Some(c) if !c.text.is_empty() => {
-            let caret = st.caret().min(live.len());
-            let mut s = String::with_capacity(live.len() + c.text.len());
-            s.push_str(&live[..caret]);
-            s.push_str(&c.text);
-            s.push_str(&live[caret..]);
-            s
-        }
-        _ => live.to_owned(),
-    };
+    // Platform preedit replaces its composing region in the same effective
+    // text exposed by the native IME boundary.
+    let display = st.effective_text();
     let placeholder = json
         .get("placeholder")
         .and_then(|v| v.as_str())

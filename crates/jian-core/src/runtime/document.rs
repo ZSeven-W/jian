@@ -16,8 +16,15 @@ use std::rc::Rc;
 
 impl Runtime {
     pub fn load_str(&mut self, src: &str) -> CoreResult<()> {
-        let schema = load_str(src)?.value;
-        self.replace_document(schema)
+        let loaded = load_str(src)?;
+        let warnings = loaded
+            .warnings
+            .into_iter()
+            .map(|warning| warning.to_string())
+            .collect::<Vec<_>>();
+        self.replace_document(loaded.value)?;
+        self.load_warnings.extend(warnings);
+        Ok(())
     }
 
     /// Atomically hot-reload a document together with the layout/spatial data
@@ -25,9 +32,22 @@ impl Runtime {
     /// measurement, and constraint work completes against detached state
     /// before the live document, tasks, or image ownership are changed.
     pub fn load_str_and_relayout(&mut self, src: &str) -> CoreResult<()> {
-        let schema = load_str(src)?.value;
+        let loaded = load_str(src)?;
+        let warnings = loaded
+            .warnings
+            .into_iter()
+            .map(|warning| warning.to_string())
+            .collect::<Vec<_>>();
         let preferred_path = self.active_screen_path.clone();
-        self.replace_document_for_path_mode(schema, preferred_path.as_deref(), None, true, true)
+        self.replace_document_for_path_mode(
+            loaded.value,
+            preferred_path.as_deref(),
+            None,
+            true,
+            true,
+        )?;
+        self.load_warnings.extend(warnings);
+        Ok(())
     }
 
     /// Swap the runtime's document tree for `schema`, reusing the

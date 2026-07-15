@@ -2813,6 +2813,20 @@
                 "null"
               ]
             },
+            "secure": {
+              "description": "Request secure platform text entry (password-style keyboard traits).",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "returnKeyHint": {
+              "description": "Platform return-key hint (`default`, `done`, `go`, `next`, `search`, or `send`). Unknown values degrade to `default` at the host boundary.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "leadingIcon": {
               "description": "Lucide glyph drawn at the left content edge (e.g. `mail`, `lock`). The painter insets the text/caret past it so the whole box stays one interactive node. `None` = no leading icon.",
               "type": [
@@ -3718,6 +3732,12 @@
             },
             "value": {
               "description": "Initial value. Two-way binding lives on `bindings.bind:value`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "returnKeyHint": {
               "type": [
                 "string",
                 "null"
@@ -5567,6 +5587,12 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "returnKeyHint": {
+              "type": [
+                "string",
+                "null"
               ]
             },
             "leadingIcon": {

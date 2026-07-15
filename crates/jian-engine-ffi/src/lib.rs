@@ -3,23 +3,35 @@
 mod desc;
 mod diagnostics;
 mod error;
+mod ime;
 mod input;
 mod lifecycle;
 mod render;
 mod status;
+mod text;
 mod viewport;
 
 pub use desc::{
     JianCallbacks, JianCreateDesc, JianPointerPhase, JianSurfaceDesc, JianTestCallClass,
 };
-pub use diagnostics::{
-    JianImeControl, JianRuntimeError, JianRuntimeErrorCallback, JianRuntimeErrorKind,
+pub use diagnostics::{JianRuntimeError, JianRuntimeErrorCallback, JianRuntimeErrorKind};
+pub use ime::{
+    jian_ime_cancel, jian_ime_commit, jian_ime_set_composing_region, jian_ime_set_composing_text,
+    jian_text_batch_begin, jian_text_batch_end, jian_text_insert, jian_text_replace_range,
+    jian_text_set_selection, JianFieldInfo, JianImeControl, JianImeControlOp,
+    JianInputFocusChanged, JianInputKind, JianReturnKeyHint, JianTextStateChanged,
 };
 pub use input::jian_pointer;
 #[cfg(debug_assertions)]
 pub use input::jian_test_app_number;
 pub use lifecycle::JianEngine;
 pub use status::JianStatus;
+pub use text::{
+    jian_text_caret_rect, jian_text_caret_rect_for_offset, jian_text_get_range,
+    jian_text_get_state, jian_text_position_at_point, jian_text_range_at_point,
+    jian_text_rects_for_range, JianTextGranularity, JianTextRect, JianTextState,
+    JianWritingDirection,
+};
 pub use viewport::{jian_set_keyboard, jian_set_safe_area, JianInsets, JianRect};
 #[cfg(debug_assertions)]
 pub use viewport::{jian_test_node_rect, jian_test_viewport_number};

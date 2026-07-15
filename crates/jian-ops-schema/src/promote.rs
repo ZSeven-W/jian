@@ -225,6 +225,8 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             limits: c.limits,
             placeholder,
             value,
+            secure: None,
+            return_key_hint: None,
             leading_icon,
             trailing_icon,
             fill: c.fill.clone(),
@@ -247,6 +249,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
             limits: c.limits,
             placeholder,
             value,
+            return_key_hint: None,
             leading_icon,
             trailing_icon,
             max_visible_lines: None,
@@ -389,6 +392,7 @@ pub fn promote_frame(frame: &FrameNode, kind: WidgetKind) -> PenNode {
                 .as_deref()
                 .and_then(|v| v.trim().parse::<f64>().ok())
                 .map(NumberOrExpression::Number),
+            return_key_hint: None,
             leading_icon,
             trailing_icon,
             min: None,

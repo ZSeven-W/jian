@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 pub enum ImeControlOp {
     Commit,
     Cancel,
+    Dismiss,
 }
 
 pub trait ImeHost {
@@ -75,6 +76,18 @@ impl ImeRegistry {
         }
     }
 
+    fn field_key(&self, id: u64) -> Option<(String, String)> {
+        self.requests
+            .get(&id)
+            .map(|request| request.snapshot.field_key.clone())
+    }
+
+    fn snapshot(&self, id: u64) -> Option<ImeSnapshot> {
+        self.requests
+            .get(&id)
+            .map(|request| request.snapshot.clone())
+    }
+
     pub fn confirm_commit(
         &mut self,
         id: u64,
@@ -124,40 +137,133 @@ impl Runtime {
     }
 
     pub fn confirm_ime_commit(&mut self, request_id: u64, text: &str) -> ImeConfirmOutcome {
+        self.confirm_ime_commit_with_cursor(request_id, text, 1)
+    }
+
+    pub fn confirm_ime_commit_with_cursor(
+        &mut self,
+        request_id: u64,
+        text: &str,
+        new_cursor_position: i32,
+    ) -> ImeConfirmOutcome {
+        let snapshot = self.ime_registry.snapshot(request_id);
+        let field = self.ime_registry.field_key(request_id);
         let outcome = self
             .ime_registry
             .confirm_commit(request_id, text, &mut self.widget_states);
+        if outcome == ImeConfirmOutcome::Applied {
+            if let Some(snapshot) = snapshot.as_ref() {
+                self.position_confirmed_cursor(snapshot, text, new_cursor_position);
+            }
+        }
+        self.sync_confirmed_field(field.as_ref(), outcome);
         if outcome != ImeConfirmOutcome::NoOp {
             self.complete_parked_after_ime(request_id);
         }
         outcome
     }
 
+    fn position_confirmed_cursor(
+        &mut self,
+        snapshot: &ImeSnapshot,
+        replacement: &str,
+        new_cursor_position: i32,
+    ) {
+        use crate::render::{byte_to_utf16_offset, utf16_len, utf16_to_byte_offset};
+
+        let (page, node) = &snapshot.field_key;
+        let Some(WidgetState::TextInput(field)) = self.widget_states.get_for_page_mut(page, node)
+        else {
+            return;
+        };
+        let insertion = i64::from(byte_to_utf16_offset(
+            &snapshot.durable_text,
+            snapshot.region.0,
+        ));
+        let replacement_len = i64::from(utf16_len(replacement));
+        let requested = if new_cursor_position > 0 {
+            insertion + replacement_len + i64::from(new_cursor_position) - 1
+        } else {
+            insertion + i64::from(new_cursor_position)
+        };
+        let requested = requested.clamp(0, i64::from(utf16_len(field.text()))) as u32;
+        let cursor = utf16_to_byte_offset(field.text(), requested);
+        field.set_effective_selection(cursor, cursor, self.now_ms);
+    }
+
     pub fn confirm_ime_cancel(&mut self, request_id: u64) -> ImeConfirmOutcome {
+        let field = self.ime_registry.field_key(request_id);
         let outcome = self
             .ime_registry
             .confirm_cancel(request_id, &mut self.widget_states);
+        self.sync_confirmed_field(field.as_ref(), outcome);
         if outcome != ImeConfirmOutcome::NoOp {
             self.complete_parked_after_ime(request_id);
         }
         outcome
+    }
+
+    fn sync_confirmed_field(
+        &mut self,
+        field: Option<&(String, String)>,
+        outcome: ImeConfirmOutcome,
+    ) {
+        if outcome == ImeConfirmOutcome::Applied {
+            if let Some((page, node)) = field {
+                if page == &self.active_page_key {
+                    self.sync_widget_binding(node);
+                }
+            }
+        }
+    }
+
+    pub fn focused_ime_snapshot(&self) -> Option<ImeSnapshot> {
+        let node_id = self.focused_widget_id()?;
+        self.ime_snapshot_for(&self.active_page_key, &node_id)
+    }
+
+    pub fn cancel_ime_snapshot_locally(&mut self, snapshot: &ImeSnapshot) -> bool {
+        let (page, node) = &snapshot.field_key;
+        let Some(WidgetState::TextInput(field)) = self.widget_states.get_for_page_mut(page, node)
+        else {
+            return false;
+        };
+        let changed = field.cancel_composition(self.now_ms);
+        if changed && page == &self.active_page_key {
+            self.sync_widget_binding(node);
+        }
+        changed
     }
 
     pub(super) fn active_ime_snapshot(&self) -> Option<ImeSnapshot> {
         self.widget_states.iter().find_map(|(node_id, state)| {
-            let WidgetState::TextInput(field) = state else {
-                return None;
-            };
-            let composition = field.composition()?;
-            let region = composition
-                .region
-                .unwrap_or_else(|| (field.caret(), field.caret()));
-            Some(ImeSnapshot {
-                field_key: (self.active_page_key.clone(), node_id.to_owned()),
-                region,
-                text: composition.text.clone(),
-                durable_text: field.text().to_owned(),
-            })
+            self.ime_snapshot_from_state(&self.active_page_key, node_id, state)
+        })
+    }
+
+    fn ime_snapshot_for(&self, page: &str, node: &str) -> Option<ImeSnapshot> {
+        let state = self.widget_states.get_for_page(page, node)?;
+        self.ime_snapshot_from_state(page, node, state)
+    }
+
+    fn ime_snapshot_from_state(
+        &self,
+        page: &str,
+        node: &str,
+        state: &WidgetState,
+    ) -> Option<ImeSnapshot> {
+        let WidgetState::TextInput(field) = state else {
+            return None;
+        };
+        let composition = field.composition()?;
+        let region = composition
+            .region
+            .unwrap_or_else(|| (field.caret(), field.caret()));
+        Some(ImeSnapshot {
+            field_key: (page.to_owned(), node.to_owned()),
+            region,
+            text: composition.text.clone(),
+            durable_text: field.text().to_owned(),
         })
     }
 }

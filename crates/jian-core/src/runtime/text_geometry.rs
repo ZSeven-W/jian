@@ -153,7 +153,7 @@ impl Runtime {
             .widget_states
             .get(id)
             .and_then(|state| match state {
-                crate::widget_state::WidgetState::TextInput(state) => Some(state.text().to_owned()),
+                crate::widget_state::WidgetState::TextInput(state) => Some(state.effective_text()),
                 _ => None,
             })
             .unwrap_or_else(|| schema_text(&data.schema));

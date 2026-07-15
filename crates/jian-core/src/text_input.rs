@@ -13,7 +13,7 @@ pub const CARET_BLINK_PERIOD_MS: u64 = 500;
 
 /// Byte-offset selection. `anchor` is where the selection started;
 /// `focus` is the moving end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Selection {
     pub anchor: usize,
     pub focus: usize,
@@ -45,6 +45,8 @@ impl Selection {
 pub struct Composition {
     pub text: String,
     pub cursor: usize,
+    /// Selection inside `text`, expressed as UTF-8 byte offsets.
+    pub selection: Selection,
     pub region: Option<(usize, usize)>,
 }
 
@@ -98,6 +100,51 @@ impl TextInputState {
 
     pub fn composition(&self) -> Option<&Composition> {
         self.composition.as_ref()
+    }
+
+    /// Text exposed to a platform input method, with preedit replacing its
+    /// durable composing region.
+    pub fn effective_text(&self) -> String {
+        let Some(composition) = self.composition.as_ref() else {
+            return self.text.clone();
+        };
+        let (start, end) = composition
+            .region
+            .unwrap_or_else(|| (self.caret(), self.caret()));
+        let mut text = String::with_capacity(
+            self.text
+                .len()
+                .saturating_sub(end.saturating_sub(start))
+                .saturating_add(composition.text.len()),
+        );
+        text.push_str(&self.text[..start]);
+        text.push_str(&composition.text);
+        text.push_str(&self.text[end..]);
+        text
+    }
+
+    /// Selection in the effective (durable + preedit) UTF-8 text.
+    pub fn effective_selection(&self) -> Selection {
+        let Some(composition) = self.composition.as_ref() else {
+            return self.selection;
+        };
+        let start = composition
+            .region
+            .map(|region| region.0)
+            .unwrap_or(self.caret());
+        Selection {
+            anchor: start.saturating_add(composition.selection.anchor),
+            focus: start.saturating_add(composition.selection.focus),
+        }
+    }
+
+    pub fn effective_composing_range(&self) -> Option<(usize, usize)> {
+        let composition = self.composition.as_ref()?;
+        let start = composition
+            .region
+            .map(|region| region.0)
+            .unwrap_or(self.caret());
+        Some((start, start.saturating_add(composition.text.len())))
     }
 
     pub fn highlight_range(&self) -> Option<(usize, usize)> {
@@ -242,17 +289,59 @@ impl TextInputState {
     }
 
     pub fn set_composition(&mut self, text: impl Into<String>, cursor: usize, now_ms: u64) {
-        let _ = self.consume_pending(now_ms);
+        self.set_composing_text(text, cursor, cursor, now_ms);
+    }
+
+    pub fn set_composing_text(
+        &mut self,
+        text: impl Into<String>,
+        selection_start: usize,
+        selection_end: usize,
+        now_ms: u64,
+    ) {
+        let text = text.into();
+        let region = self.composition.as_ref().and_then(|value| value.region);
+        let region = region.unwrap_or_else(|| {
+            let (start, end) = self.take_pending_range();
+            if start != end {
+                self.text.replace_range(start..end, "");
+            }
+            self.selection = Selection::caret(start);
+            (start, start)
+        });
+        let start = prev_char_boundary(&text, selection_start.min(selection_end));
+        let end = prev_char_boundary(&text, selection_start.max(selection_end));
         self.composition = Some(Composition {
-            text: text.into(),
-            cursor,
-            region: None,
+            text,
+            cursor: end,
+            selection: Selection {
+                anchor: start,
+                focus: end,
+            },
+            region: Some(region),
         });
         self.touch(now_ms);
     }
 
     pub fn clear_composition(&mut self) {
         self.composition = None;
+    }
+
+    /// Cancel preedit locally. Its durable region is deleted and the caret is
+    /// left at the composing start; a selection consumed at start is not
+    /// restored.
+    pub fn cancel_composition(&mut self, now_ms: u64) -> bool {
+        let Some(composition) = self.composition.take() else {
+            return false;
+        };
+        let (start, end) = composition
+            .region
+            .unwrap_or_else(|| (self.caret(), self.caret()));
+        self.text.replace_range(start..end, "");
+        self.selection = Selection::caret(start);
+        self.select_all = false;
+        self.touch(now_ms);
+        true
     }
 
     pub fn reset_transient(&mut self) {
@@ -275,6 +364,7 @@ impl TextInputState {
             let text = self.text[start..end].to_owned();
             self.composition = Some(Composition {
                 cursor: text.len(),
+                selection: Selection::caret(text.len()),
                 text,
                 region: Some((start, end)),
             });
@@ -283,8 +373,9 @@ impl TextInputState {
     }
 
     pub fn replace_range(&mut self, start: usize, end: usize, replacement: &str, now_ms: u64) {
-        let start = prev_char_boundary(&self.text, start.min(end));
-        let end = prev_char_boundary(&self.text, start.max(end));
+        let (raw_start, raw_end) = (start.min(end), start.max(end));
+        let start = prev_char_boundary(&self.text, raw_start);
+        let end = prev_char_boundary(&self.text, raw_end);
         self.text.replace_range(start..end, replacement);
         self.selection = Selection::caret(start + replacement.len());
         self.select_all = false;
@@ -299,6 +390,65 @@ impl TextInputState {
                 self.insert_str(&c.text, now_ms);
             }
         }
+    }
+
+    /// Replace the active composition (or pending durable selection) with
+    /// committed text and return the durable insertion start.
+    pub fn commit_text(&mut self, text: &str, now_ms: u64) -> usize {
+        if let Some(composition) = self.composition.take() {
+            let (start, end) = composition
+                .region
+                .unwrap_or_else(|| (self.caret(), self.caret()));
+            self.replace_range(start, end, text, now_ms);
+            return start;
+        }
+        let (start, end) = self.take_pending_range();
+        self.replace_range(start, end, text, now_ms);
+        start
+    }
+
+    /// Set a selection expressed in the effective text. A range inside the
+    /// active preedit remains a composing-relative selection; moving outside
+    /// commits the current preedit first.
+    pub fn set_effective_selection(&mut self, start: usize, end: usize, now_ms: u64) {
+        if let Some(composition) = self.composition.as_mut() {
+            let base = composition.region.map(|region| region.0).unwrap_or(0);
+            let limit = base.saturating_add(composition.text.len());
+            if start >= base && end >= base && start <= limit && end <= limit {
+                let start = prev_char_boundary(&composition.text, start - base);
+                let end = prev_char_boundary(&composition.text, end - base);
+                composition.selection = Selection {
+                    anchor: start,
+                    focus: end,
+                };
+                composition.cursor = end;
+                self.touch(now_ms);
+                return;
+            }
+            self.commit_composition(now_ms);
+        }
+        let start = prev_char_boundary(&self.text, start);
+        let end = prev_char_boundary(&self.text, end);
+        self.selection = Selection {
+            anchor: start,
+            focus: end,
+        };
+        self.select_all = false;
+        self.touch(now_ms);
+    }
+
+    /// Replace a range expressed in effective-text byte offsets.
+    pub fn replace_effective_range(
+        &mut self,
+        start: usize,
+        end: usize,
+        replacement: &str,
+        now_ms: u64,
+    ) {
+        if self.composition.is_some() {
+            self.commit_composition(now_ms);
+        }
+        self.replace_range(start, end, replacement, now_ms);
     }
 }
 

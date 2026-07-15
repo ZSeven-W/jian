@@ -3,6 +3,7 @@ use crate::desc::JianTestCallClass;
 use crate::desc::{Callbacks, CreateOptions, JianPointerPhase};
 use crate::diagnostics;
 use crate::error::{FfiError, FfiResult};
+use crate::ime::ImeState;
 use crate::render::{paint_commands, prepare_commands};
 use crate::viewport::{JianInsets, JianRect};
 use crate::JianStatus;
@@ -25,17 +26,20 @@ enum RenderMode {
 }
 
 pub(crate) struct Lifecycle {
-    runtime: Runtime,
+    pub(crate) runtime: Runtime,
     backend: SkiaBackend,
     mode: RenderMode,
-    suspended: bool,
+    pub(crate) suspended: bool,
     pending_relayout: bool,
     logical: (f32, f32),
     physical: (u32, u32),
     dpr: f32,
     insets: JianInsets,
     keyboard: f32,
-    callbacks: Callbacks,
+    pub(crate) callbacks: Callbacks,
+    pub(crate) ime: ImeState,
+    #[cfg(feature = "textlayout")]
+    pub(crate) text_geometry: std::rc::Rc<jian_skia::SkiaTextGeometry>,
     cpu_surface: Option<SkiaSurface>,
     #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
     metal_surface: Option<jian_skia::surface::metal::MetalSurface>,
@@ -62,12 +66,12 @@ impl Lifecycle {
             .set_viewport_occlusion(0.0, 0.0, 0.0, 0.0, 0.0);
         runtime.scheduler.flush();
         #[cfg(feature = "textlayout")]
-        runtime
-            .build_layout_with(
-                std::rc::Rc::new(jian_skia::SkiaMeasure::new()),
-                (options.width, options.height),
-            )
-            .map_err(layout_error)?;
+        {
+            let measure = std::rc::Rc::new(jian_skia::SkiaMeasure::new());
+            runtime
+                .build_layout_with(measure, (options.width, options.height))
+                .map_err(layout_error)?;
+        }
         #[cfg(not(feature = "textlayout"))]
         runtime
             .build_layout((options.width, options.height))
@@ -88,6 +92,13 @@ impl Lifecycle {
             );
         }
 
+        #[cfg(feature = "textlayout")]
+        let text_geometry = {
+            let geometry = std::rc::Rc::new(jian_skia::SkiaTextGeometry::new());
+            runtime.install_text_geometry(geometry.clone());
+            geometry
+        };
+
         let mut lifecycle = Self {
             runtime,
             backend: SkiaBackend::new(),
@@ -100,12 +111,16 @@ impl Lifecycle {
             insets: JianInsets::default(),
             keyboard: 0.0,
             callbacks: options.callbacks,
+            ime: ImeState::new(),
+            #[cfg(feature = "textlayout")]
+            text_geometry,
             cpu_surface: None,
             #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
             metal_surface: None,
             _storage_dir: options.storage_dir,
             _asset_base: options.asset_base,
         };
+        lifecycle.refresh_text_geometry();
         lifecycle.emit_runtime_diagnostics();
         Ok(lifecycle)
     }
@@ -650,7 +665,9 @@ pub(crate) unsafe fn call_engine(
     engine.in_call.set(true);
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let lifecycle = unsafe { &mut *engine.lifecycle.get() };
+        let ime_observation = lifecycle.begin_ime_observation();
         let result = call(lifecycle);
+        lifecycle.finish_ime_observation(ime_observation);
         if let Err(error) = &result {
             lifecycle.emit_call_error(error);
         }

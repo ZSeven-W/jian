@@ -14,11 +14,15 @@ pub struct SkiaSurface {
 }
 
 impl SkiaSurface {
+    /// Fallible raster allocation for FFI callers that must report OOM.
+    pub fn try_new_raster(width: i32, height: i32) -> Option<Self> {
+        let inner = skia_safe::surfaces::raster_n32_premul((width, height))?;
+        Some(Self { inner })
+    }
+
     /// Build a CPU raster surface at `width × height` logical pixels.
     pub fn new_raster(width: i32, height: i32) -> Self {
-        let inner = skia_safe::surfaces::raster_n32_premul((width, height))
-            .expect("skia raster surface allocation failed");
-        Self { inner }
+        Self::try_new_raster(width, height).expect("skia raster surface allocation failed")
     }
 
     /// Snapshot the surface into a PNG byte vector. Useful for golden

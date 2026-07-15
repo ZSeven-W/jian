@@ -14,7 +14,7 @@ impl Runtime {
             .is_responsive();
         if responsive {
             self.viewport.size = size(available.0, available.1);
-            self.state.set_viewport(available.0, available.1, 1.0);
+            self.state.set_viewport_size(available.0, available.1);
         }
         let live_doc = self.document.as_ref().expect("no document loaded");
         let mut materialized;
@@ -112,7 +112,7 @@ impl Runtime {
     fn update_viewport_size(&mut self, viewport: (f32, f32), relayout: bool) {
         if (self.viewport.size.width, self.viewport.size.height) != viewport {
             self.viewport.size = size(viewport.0, viewport.1);
-            self.state.set_viewport(viewport.0, viewport.1, 1.0);
+            self.state.set_viewport_size(viewport.0, viewport.1);
             self.scheduler.flush();
             self.mutation_counter
                 .set(self.mutation_counter.get().wrapping_add(1));
