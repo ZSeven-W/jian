@@ -212,7 +212,7 @@ pub fn make_fetch_body(reg: &ActionRegistry, body: &Value) -> Result<BoxedAction
         if let Some(s) = b.as_str() {
             Some(Expression::compile(s)?)
         } else if b.is_null() {
-            None
+            Some(Expression::compile("null")?)
         } else {
             let s = serde_json::to_string(b).unwrap();
             Some(Expression::compile(&s)?)

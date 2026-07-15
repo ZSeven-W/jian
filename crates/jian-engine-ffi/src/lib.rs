@@ -1,13 +1,18 @@
 //! C ABI boundary for native Jian Player shells.
 
+mod capabilities;
 mod desc;
 mod diagnostics;
 mod error;
+mod fonts;
 mod ime;
 mod input;
 mod lifecycle;
 mod render;
 mod status;
+mod storage;
+#[cfg(debug_assertions)]
+mod test_support;
 mod text;
 mod viewport;
 
@@ -15,6 +20,9 @@ pub use desc::{
     JianCallbacks, JianCreateDesc, JianPointerPhase, JianSurfaceDesc, JianTestCallClass,
 };
 pub use diagnostics::{JianRuntimeError, JianRuntimeErrorCallback, JianRuntimeErrorKind};
+pub use fonts::jian_register_font;
+#[cfg(debug_assertions)]
+pub use fonts::jian_test_font_generation;
 pub use ime::{
     jian_ime_cancel, jian_ime_commit, jian_ime_set_composing_region, jian_ime_set_composing_text,
     jian_text_batch_begin, jian_text_batch_end, jian_text_insert, jian_text_replace_range,
@@ -298,3 +306,13 @@ pub unsafe extern "C" fn jian_test_get_insets(
         })
     }
 }
+pub use capabilities::{
+    jian_capability_result, JianCapabilityKind, JianCapabilityRequest,
+    JianCapabilityRequestCallback, JianCapabilityRequestData, JianCapabilityResult,
+    JianCapabilityResultData, JianClipboardReadRequest, JianClipboardReadResult,
+    JianClipboardWriteRequest, JianClipboardWriteResult, JianConfirmRequest, JianConfirmResult,
+    JianHeader, JianHttpFetchRequest, JianHttpFetchResult, JianImageFetchRequest,
+    JianImageFetchResult, JianOpenUrlRequest, JianOpenUrlResult,
+};
+#[cfg(debug_assertions)]
+pub use test_support::{jian_test_reload, jian_test_variant_build_count};

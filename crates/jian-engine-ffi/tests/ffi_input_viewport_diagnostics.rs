@@ -56,6 +56,8 @@ fn callbacks(log: &ErrorLog, ime_control: Option<JianImeControl>) -> JianCallbac
         ime_control,
         input_focus_changed: None,
         text_state_changed: None,
+        capability_request: None,
+        capability_cancelled: None,
     }
 }
 
@@ -288,7 +290,9 @@ fn asynchronous_action_failure_is_a_callback_not_a_status() {
     let records = log.records.lock().unwrap();
     assert!(records.iter().any(|record| {
         record.kind == JianRuntimeErrorKind::Action
-            && record.message.contains("NullNetworkClient")
+            && record
+                .message
+                .contains("capability_request callback is unavailable")
             && record.source.as_deref() == Some("onTap")
     }));
     drop(records);

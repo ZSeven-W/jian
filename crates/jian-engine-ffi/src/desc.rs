@@ -1,3 +1,4 @@
+use crate::capabilities::{JianCapabilityCancelled, JianCapabilityRequestCallback};
 use crate::diagnostics::JianRuntimeErrorCallback;
 use crate::error::{read_utf8, FfiError, FfiResult, DOCUMENT_CAP, STRING_CAP};
 use crate::ime::{JianImeControl, JianInputFocusChanged, JianTextStateChanged};
@@ -19,6 +20,8 @@ pub struct JianCallbacks {
     pub ime_control: Option<JianImeControl>,
     pub input_focus_changed: Option<JianInputFocusChanged>,
     pub text_state_changed: Option<JianTextStateChanged>,
+    pub capability_request: Option<JianCapabilityRequestCallback>,
+    pub capability_cancelled: Option<JianCapabilityCancelled>,
 }
 
 /// Engine construction descriptor. `asset_base` is the v1 tail.
@@ -74,6 +77,8 @@ pub(crate) struct Callbacks {
     pub ime_control: Option<JianImeControl>,
     pub input_focus_changed: Option<JianInputFocusChanged>,
     pub text_state_changed: Option<JianTextStateChanged>,
+    pub capability_request: Option<JianCapabilityRequestCallback>,
+    pub capability_cancelled: Option<JianCapabilityCancelled>,
 }
 
 pub(crate) struct CreateOptions {
@@ -127,6 +132,13 @@ unsafe fn parse_callbacks(pointer: *const JianCallbacks) -> FfiResult<Callbacks>
         },
         text_state_changed: unsafe {
             read_covered(base, size, offset_of!(JianCallbacks, text_state_changed)).unwrap_or(None)
+        },
+        capability_request: unsafe {
+            read_covered(base, size, offset_of!(JianCallbacks, capability_request)).unwrap_or(None)
+        },
+        capability_cancelled: unsafe {
+            read_covered(base, size, offset_of!(JianCallbacks, capability_cancelled))
+                .unwrap_or(None)
         },
     })
 }

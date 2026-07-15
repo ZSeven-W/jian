@@ -145,6 +145,8 @@ fn callbacks_table_has_independent_tail_growth_validation() {
         ime_control: None,
         input_focus_changed: None,
         text_state_changed: None,
+        capability_request: None,
+        capability_cancelled: None,
     };
     let mut desc = exact_desc(DOC, 10.0, 8.0, 1.0);
     desc.callbacks = &minimum;
@@ -159,6 +161,8 @@ fn callbacks_table_has_independent_tail_growth_validation() {
         ime_control: None,
         input_focus_changed: None,
         text_state_changed: None,
+        capability_request: None,
+        capability_cancelled: None,
     };
     desc.callbacks = &larger;
     assert_eq!(unsafe { create(&desc) }, Err(JianStatus::InvalidArg));
@@ -253,6 +257,8 @@ fn synchronous_callback_reentry_is_wrong_thread() {
         ime_control: None,
         input_focus_changed: None,
         text_state_changed: None,
+        capability_request: None,
+        capability_cancelled: None,
     };
     let mut desc = exact_desc(DOC, 10.0, 8.0, 1.0);
     desc.callbacks = &callbacks;

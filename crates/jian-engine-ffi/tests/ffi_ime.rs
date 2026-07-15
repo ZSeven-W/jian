@@ -69,6 +69,8 @@ fn callbacks(log: &CallbackLog, with_ime: bool) -> JianCallbacks {
         ime_control: with_ime.then_some(ime_control),
         input_focus_changed: Some(focus_changed),
         text_state_changed: Some(text_changed),
+        capability_request: None,
+        capability_cancelled: None,
     }
 }
 

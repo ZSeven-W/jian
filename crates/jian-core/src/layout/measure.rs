@@ -75,6 +75,12 @@ pub struct MeasureResult {
 
 pub trait MeasureBackend {
     fn measure(&self, req: &MeasureRequest<'_>) -> MeasureResult;
+
+    /// Monotonic process-global font registry generation observed by this
+    /// backend. Estimating/headless backends have no registry and stay at 0.
+    fn font_generation(&self) -> u64 {
+        0
+    }
 }
 
 /// Default backend: character-count heuristic. Sufficient for

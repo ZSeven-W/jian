@@ -195,6 +195,10 @@ impl MeasureBackend for SkiaMeasure {
         // below is fine.
         crate::font_lock::with_font_lock(|| self.measure_locked(req))
     }
+
+    fn font_generation(&self) -> u64 {
+        crate::bundled_fonts::generation()
+    }
 }
 
 impl SkiaMeasure {

@@ -1,10 +1,12 @@
+use crate::capabilities::CapabilityBridge;
 #[cfg(debug_assertions)]
 use crate::desc::JianTestCallClass;
 use crate::desc::{Callbacks, CreateOptions, JianPointerPhase};
 use crate::diagnostics;
 use crate::error::{FfiError, FfiResult};
-use crate::ime::ImeState;
+use crate::ime::{ImeState, JianImeControlOp};
 use crate::render::{paint_commands, prepare_commands};
+use crate::storage::DirectoryStorage;
 use crate::viewport::{JianInsets, JianRect};
 use crate::JianStatus;
 use jian_core::geometry::point;
@@ -38,6 +40,7 @@ pub(crate) struct Lifecycle {
     keyboard: f32,
     pub(crate) callbacks: Callbacks,
     pub(crate) ime: ImeState,
+    pub(crate) capabilities: std::rc::Rc<CapabilityBridge>,
     #[cfg(feature = "textlayout")]
     pub(crate) text_geometry: std::rc::Rc<jian_skia::SkiaTextGeometry>,
     cpu_surface: Option<SkiaSurface>,
@@ -51,6 +54,17 @@ impl Lifecycle {
     pub(crate) fn new(options: CreateOptions) -> FfiResult<Self> {
         let physical = validate_viewport(options.width, options.height, options.dpr)?;
         let mut runtime = Runtime::new();
+        let capabilities = CapabilityBridge::new(options.callbacks.capability_request.is_some());
+        runtime.network = capabilities.clone();
+        runtime.async_feedback = capabilities.clone();
+        runtime.platform = capabilities.clone();
+        runtime.image_resolver = capabilities.clone();
+        if let Some(storage_dir) = options.storage_dir.as_ref() {
+            runtime.storage = std::rc::Rc::new(DirectoryStorage::new(storage_dir));
+        }
+        if let Some(asset_base) = options.asset_base.as_ref() {
+            runtime.set_image_document_dir(asset_base);
+        }
         runtime.load_str(&options.document).map_err(|error| {
             FfiError::new(
                 JianStatus::BadDocument,
@@ -83,9 +97,6 @@ impl Lifecycle {
             .state
             .set_viewport_occlusion(0.0, 0.0, 0.0, 0.0, 0.0);
         runtime.scheduler.flush();
-        if let Some(asset_base) = options.asset_base.as_ref() {
-            runtime.set_image_document_dir(asset_base);
-        }
         if options.callbacks.ime_control.is_none() {
             runtime.push_load_warning(
                 "ime_control callback is null; platform composition will cancel locally",
@@ -112,6 +123,7 @@ impl Lifecycle {
             keyboard: 0.0,
             callbacks: options.callbacks,
             ime: ImeState::new(),
+            capabilities,
             #[cfg(feature = "textlayout")]
             text_geometry,
             cpu_surface: None,
@@ -152,22 +164,62 @@ impl Lifecycle {
         self.runtime.state.set_viewport(width, height, dpr);
         self.sync_occlusion_signals();
 
+        let was_frozen = self.runtime.input_frozen();
+        let mut variant_commit = if let Some(target) = self.runtime.needs_variant_swap(width) {
+            match self.runtime.switch_variant(&target) {
+                Ok(committed) => committed,
+                Err(error) => {
+                    self.logical = previous.0;
+                    self.physical = previous.1;
+                    self.dpr = previous.2;
+                    self.insets = previous.3;
+                    self.keyboard = previous.4;
+                    self.runtime.set_viewport_size_without_relayout(previous.0);
+                    self.runtime
+                        .state
+                        .set_viewport(previous.0 .0, previous.0 .1, previous.2);
+                    self.sync_occlusion_signals();
+                    return Err(layout_error(error));
+                }
+            }
+        } else {
+            false
+        };
+        if !was_frozen {
+            if let Some(request_id) = self.runtime.pending_variant_ime_request() {
+                if let Some(callback) = self.callbacks.ime_control {
+                    unsafe {
+                        callback(
+                            self.callbacks.user_data,
+                            JianImeControlOp::Commit as i32,
+                            request_id,
+                        )
+                    };
+                } else {
+                    self.runtime.confirm_ime_cancel(request_id);
+                    variant_commit = true;
+                }
+            }
+        }
+
         if self.suspended {
             self.runtime.set_text_geometry_ready(false);
             self.pending_relayout = true;
-        } else if let Err(error) = self.runtime.relayout() {
-            self.logical = previous.0;
-            self.physical = previous.1;
-            self.dpr = previous.2;
-            self.insets = previous.3;
-            self.keyboard = previous.4;
-            self.runtime.set_viewport_size_without_relayout(previous.0);
-            self.runtime
-                .state
-                .set_viewport(previous.0 .0, previous.0 .1, previous.2);
-            self.sync_occlusion_signals();
-            let _ = self.runtime.relayout();
-            return Err(layout_error(error));
+        } else if !variant_commit {
+            if let Err(error) = self.runtime.relayout() {
+                self.logical = previous.0;
+                self.physical = previous.1;
+                self.dpr = previous.2;
+                self.insets = previous.3;
+                self.keyboard = previous.4;
+                self.runtime.set_viewport_size_without_relayout(previous.0);
+                self.runtime
+                    .state
+                    .set_viewport(previous.0 .0, previous.0 .1, previous.2);
+                self.sync_occlusion_signals();
+                let _ = self.runtime.relayout();
+                return Err(layout_error(error));
+            }
         }
         self.cpu_surface = None;
         self.notify(None);
@@ -668,6 +720,8 @@ pub(crate) unsafe fn call_engine(
         let ime_observation = lifecycle.begin_ime_observation();
         let result = call(lifecycle);
         lifecycle.finish_ime_observation(ime_observation);
+        let capabilities = lifecycle.capabilities.clone();
+        capabilities.emit_callbacks(lifecycle);
         if let Err(error) = &result {
             lifecycle.emit_call_error(error);
         }
@@ -697,9 +751,16 @@ pub(crate) unsafe fn destroy_engine(pointer: *mut JianEngine) -> JianStatus {
     if engine.owner != std::thread::current().id() || engine.in_call.get() {
         return JianStatus::WrongThread;
     }
-    match catch_unwind(AssertUnwindSafe(|| unsafe {
+    engine.in_call.set(true);
+    let outcome = catch_unwind(AssertUnwindSafe(|| unsafe {
+        let lifecycle = &mut *engine.lifecycle.get();
+        lifecycle.runtime.cancel_all_tasks();
+        lifecycle.capabilities.cancel_all();
+        let capabilities = lifecycle.capabilities.clone();
+        capabilities.emit_callbacks(lifecycle);
         drop(Box::from_raw(pointer));
-    })) {
+    }));
+    match outcome {
         Ok(()) => JianStatus::Ok,
         Err(_) => JianStatus::Poisoned,
     }

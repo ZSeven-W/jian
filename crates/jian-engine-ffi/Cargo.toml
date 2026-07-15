@@ -19,6 +19,10 @@ textlayout = ["jian-skia/textlayout"]
 [dependencies]
 jian-core = { path = "../jian-core" }
 jian-skia = { path = "../jian-skia" }
+async-trait = "0.1"
+futures = "0.3"
+serde_json = { workspace = true }
+serde = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

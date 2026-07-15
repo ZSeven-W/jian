@@ -2433,8 +2433,12 @@ dependencies = [
 name = "jian-engine-ffi"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "futures",
  "jian-core",
  "jian-skia",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

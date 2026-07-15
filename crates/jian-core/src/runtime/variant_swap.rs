@@ -25,8 +25,7 @@ pub struct ParkedBuild {
     pub warnings: Vec<String>,
     staged_state: Rc<StateGraph>,
     mutation_counter_at_build: u64,
-    // TODO(M1c): include font generation in the commit recheck once the
-    // measurement backend exposes a real monotonic generation seam.
+    font_generation_at_build: u64,
     build_count: usize,
     pub(crate) started_at_ms: u64,
 }
@@ -117,6 +116,15 @@ impl Runtime {
         matches!(self.swap_state, SwapState::AwaitingIme { .. })
     }
 
+    /// Request id that must be resolved before a parked responsive swap can
+    /// commit. Hosts surface this through their IME-control boundary.
+    pub fn pending_variant_ime_request(&self) -> Option<u64> {
+        match self.swap_state {
+            SwapState::AwaitingIme { request_id, .. } => Some(request_id),
+            SwapState::Idle => None,
+        }
+    }
+
     pub fn abandon_variant_swap(&mut self) {
         if let SwapState::AwaitingIme { request_id, .. } = self.swap_state {
             self.ime_registry.detach(request_id);
@@ -189,6 +197,7 @@ impl Runtime {
         started_at_ms: u64,
         build_count: usize,
     ) -> CoreResult<ParkedBuild> {
+        let font_generation_at_build = self.layout.measure.font_generation();
         let source = self
             .variant_source
             .as_ref()
@@ -256,13 +265,16 @@ impl Runtime {
             warnings,
             staged_state: staging_state,
             mutation_counter_at_build: self.mutation_counter(),
+            font_generation_at_build,
             build_count,
             started_at_ms,
         })
     }
 
     pub(crate) fn commit_parked(&mut self, mut parked: ParkedBuild) -> CoreResult<()> {
-        if parked.mutation_counter_at_build != self.mutation_counter() {
+        if parked.mutation_counter_at_build != self.mutation_counter()
+            || parked.font_generation_at_build != self.layout.measure.font_generation()
+        {
             parked = self.build_parked(
                 &parked.target_page_id,
                 parked.started_at_ms,
