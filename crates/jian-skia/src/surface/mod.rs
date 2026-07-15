@@ -44,7 +44,7 @@ mod raster;
 pub mod d3d;
 #[cfg(all(target_os = "linux", feature = "gl"))]
 pub mod gl;
-#[cfg(all(target_os = "macos", feature = "metal"))]
+#[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "metal"))]
 pub mod metal;
 
 pub use raster::SkiaSurface;

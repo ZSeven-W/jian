@@ -1,0 +1,13 @@
+[package]
+name = "jian-ios-spike"
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.78"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[target.'cfg(target_os = "ios")'.dependencies]
+jian-core = { path = "../../crates/jian-core" }
+jian-skia = { path = "../../crates/jian-skia", default-features = false, features = ["metal", "textlayout"] }

@@ -2491,6 +2491,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jian-ios-spike"
+version = "0.0.1"
+dependencies = [
+ "jian-core",
+ "jian-skia",
+]
+
+[[package]]
 name = "jian-ops-schema"
 version = "0.0.1"
 dependencies = [
@@ -2520,9 +2528,13 @@ dependencies = [
  "jian-core",
  "jian-host-desktop",
  "jian-ops-schema",
+ "objc2 0.5.2",
+ "objc2-metal",
+ "objc2-quartz-core 0.2.2",
  "raw-window-handle",
  "serde_json",
  "skia-safe",
+ "unicode-segmentation",
 ]
 
 [[package]]

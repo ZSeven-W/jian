@@ -17,7 +17,12 @@ description  = "Skia-safe RenderBackend implementation for jian-core"
 # `--features metal` on Linux compiles cleanly without dragging the
 # Metal codepath in.
 default = []
-metal   = ["skia-safe/metal"]
+metal   = [
+    "skia-safe/metal",
+    "dep:objc2",
+    "dep:objc2-metal",
+    "dep:objc2-quartz-core",
+]
 d3d     = ["skia-safe/d3d"]
 gl      = ["skia-safe/gl"]
 vulkan  = ["skia-safe/vulkan"]
@@ -44,6 +49,23 @@ futures         = "0.3"
 # the crate is tiny (~30 LoC of types) and gating it on every
 # `target_os` × `feature` combo isn't worth the Cargo.toml noise.
 raw-window-handle = "0.6"
+unicode-segmentation = "1.13"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2 = { version = "0.5.2", optional = true }
+objc2-metal = { version = "0.2.2", optional = true, features = [
+    "MTLCommandBuffer",
+    "MTLCommandQueue",
+    "MTLDevice",
+    "MTLDrawable",
+    "MTLResource",
+    "MTLTexture",
+] }
+objc2-quartz-core = { version = "0.2.2", optional = true, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "objc2-metal",
+] }
 
 [dev-dependencies]
 serde_json        = { workspace = true }

@@ -1,65 +1,121 @@
-//! macOS / iOS Metal-backed `SkiaSurface` factory (Plan 8 Task 2,
-//! `metal` feature).
+//! Metal-backed Skia frames for a shell-owned `CAMetalLayer`.
 //!
-//! ## Status
-//!
-//! **Skeleton only.** [`from_window`] currently panics with a clear
-//! message — the real implementation needs a focused session against
-//! a real CAMetalLayer + MTLDevice + MTLCommandQueue lifecycle that
-//! co-operates with `jian-host-desktop::run`'s frame loop. Until
-//! then `jian-host-desktop` keeps the existing softbuffer raster
-//! presenter as the default; hosts that flip the `metal` feature on
-//! see this panic and know to gate their startup on a real impl.
-//!
-//! ## Implementation outline (for the follow-up)
-//!
-//! 1. Pull `metal = "..."` (RustCrypto-style crate that wraps
-//!    Foundation's MTL types) under `[target."cfg(target_os =
-//!    \"macos\")".dependencies]` of jian-skia.
-//! 2. Convert the host-supplied `raw_window_handle::AppKitWindowHandle`
-//!    into the `NSView`'s `CAMetalLayer` (creating one if the view
-//!    doesn't already have a Metal-backed layer; on macOS winit
-//!    leaves layer creation to the host).
-//! 3. Build a `skia_safe::gpu::mtl::BackendContext` from
-//!    `(MTLDevice, MTLCommandQueue)` and feed it to
-//!    `gpu::direct_contexts::make_metal`.
-//! 4. Each frame: pull the next `CAMetalDrawable` from the layer,
-//!    wrap its `MTLTexture` in
-//!    `gpu::BackendRenderTarget::new_metal((w, h), texture)` and
-//!    `surfaces::wrap_backend_render_target(...)`. The returned
-//!    `SkSurface` is what `SkiaSurface` carries.
-//! 5. After `end_frame` flushes, ask the drawable to `present()` and
-//!    drop it before pulling the next one.
-//! 6. Resize: drop the cached `BackendRenderTarget`s and rebuild on
-//!    the next frame; the layer's drawableSize follows the window's
-//!    physical size automatically.
-//!
-//! See `crates/jian-host-desktop/src/run.rs::redraw` for the call
-//! site that today drives `SkiaSurface::new_raster`. The eventual
-//! GPU-aware redraw will pick this factory based on `HostConfig`.
+//! [`MetalSurface`] owns the Metal command queue and Skia context, but stores
+//! only a raw borrowed pointer to the layer. It never retains or releases the
+//! layer. The shell must keep that layer alive until `MetalSurface` is dropped
+//! and must replace it only by dropping/suspending this object before creating
+//! another one.
+
+use std::ffi::c_void;
+use std::ptr::NonNull;
+
+use objc2::{rc::Retained, runtime::ProtocolObject};
+use objc2_metal::{
+    MTLCommandBuffer, MTLCommandQueue, MTLDevice, MTLDrawable, MTLPixelFormat, MTLTexture,
+};
+use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
+use skia_safe::gpu::{self, backend_render_targets, mtl, SurfaceOrigin};
+use skia_safe::ColorType;
 
 use crate::SkiaSurface;
-use raw_window_handle::RawWindowHandle;
 
-/// Build a Metal-backed `SkiaSurface` of `width × height` physical
-/// pixels for the supplied window handle. Returns an `Err` while
-/// the platform glue is unimplemented so a host can fall back to
-/// the raster surface gracefully — earlier draft `panic!`-ed,
-/// which would crash any host that flipped on `--features metal`
-/// before the real impl lands.
-///
-/// `raw_handle` is taken by value because the eventual
-/// implementation needs to retain Foundation references for the
-/// layer's lifetime; the caller passes a handle from
-/// `winit::window::Window::window_handle()` and surrenders
-/// ownership of the bridge.
-pub fn from_window(
-    _raw_handle: RawWindowHandle,
-    _width: i32,
-    _height: i32,
-) -> Result<SkiaSurface, &'static str> {
-    Err("jian-skia: Metal GPU surface not yet implemented; \
-         `--features metal` enables the API surface but the platform \
-         glue is a Plan 8 Task 2 follow-up. Hosts that hit this \
-         error should fall back to `SkiaSurface::new_raster`.")
+/// A persistent Metal queue and Skia context bound to a borrowed layer.
+pub struct MetalSurface {
+    layer: NonNull<CAMetalLayer>,
+    command_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    context: gpu::DirectContext,
+}
+
+impl MetalSurface {
+    /// Creates a Metal renderer for a shell-owned `CAMetalLayer *`.
+    ///
+    /// The layer must already have an `MTLDevice`, use a Skia-compatible pixel
+    /// format (the Player uses `BGRA8Unorm`), and have `framebufferOnly = false`.
+    ///
+    /// # Safety
+    ///
+    /// `layer` must point to a live `CAMetalLayer` on the current thread. The
+    /// caller must keep it alive and must not replace it until this value is
+    /// dropped. This function borrows the pointer and never retains/releases
+    /// the layer.
+    pub unsafe fn from_ca_metal_layer(layer: *mut c_void) -> Result<Self, &'static str> {
+        let layer = NonNull::new(layer.cast::<CAMetalLayer>())
+            .ok_or("jian-skia: CAMetalLayer pointer is null")?;
+        let layer_ref = unsafe { layer.as_ref() };
+        if unsafe { layer_ref.framebufferOnly() } {
+            return Err("jian-skia: CAMetalLayer.framebufferOnly must be false");
+        }
+        if unsafe { layer_ref.pixelFormat() } != MTLPixelFormat::BGRA8Unorm {
+            return Err("jian-skia: CAMetalLayer.pixelFormat must be BGRA8Unorm");
+        }
+
+        let device =
+            unsafe { layer_ref.device() }.ok_or("jian-skia: CAMetalLayer has no MTLDevice")?;
+        let command_queue = device
+            .newCommandQueue()
+            .ok_or("jian-skia: MTLDevice could not create a command queue")?;
+        let backend = unsafe {
+            mtl::BackendContext::new(
+                Retained::as_ptr(&device) as mtl::Handle,
+                Retained::as_ptr(&command_queue) as mtl::Handle,
+            )
+        };
+        let context = gpu::direct_contexts::make_metal(&backend, None)
+            .ok_or("jian-skia: Skia could not create a Metal direct context")?;
+
+        Ok(Self {
+            layer,
+            command_queue,
+            context,
+        })
+    }
+
+    /// Acquires, paints, flushes, and presents one layer drawable.
+    ///
+    /// `Ok(false)` means `nextDrawable` returned `nil`; `draw` is not called,
+    /// allowing the engine to leave its dirty bit set and retry later.
+    pub fn draw_frame(
+        &mut self,
+        draw: impl FnOnce(&mut SkiaSurface),
+    ) -> Result<bool, &'static str> {
+        let layer = unsafe { self.layer.as_ref() };
+        let Some(drawable) = (unsafe { layer.nextDrawable() }) else {
+            return Ok(false);
+        };
+        let texture = unsafe { drawable.texture() };
+        let width = i32::try_from(texture.width())
+            .map_err(|_| "jian-skia: Metal drawable width exceeds i32")?;
+        let height = i32::try_from(texture.height())
+            .map_err(|_| "jian-skia: Metal drawable height exceeds i32")?;
+        if width <= 0 || height <= 0 {
+            return Err("jian-skia: Metal drawable has zero size");
+        }
+
+        let texture_info =
+            unsafe { mtl::TextureInfo::new(Retained::as_ptr(&texture) as mtl::Handle) };
+        let backend_target = backend_render_targets::make_mtl((width, height), &texture_info);
+        let surface = gpu::surfaces::wrap_backend_render_target(
+            &mut self.context,
+            &backend_target,
+            SurfaceOrigin::TopLeft,
+            ColorType::BGRA8888,
+            None,
+            None,
+        )
+        .ok_or("jian-skia: Skia could not wrap the Metal drawable")?;
+        let mut surface = SkiaSurface { inner: surface };
+
+        draw(&mut surface);
+        self.context.flush_and_submit();
+        drop(surface);
+
+        let command_buffer = self
+            .command_queue
+            .commandBuffer()
+            .ok_or("jian-skia: MTLCommandQueue could not create a command buffer")?;
+        let drawable = ProtocolObject::<dyn MTLDrawable>::from_ref(&*drawable);
+        command_buffer.presentDrawable(drawable);
+        command_buffer.commit();
+        Ok(true)
+    }
 }
