@@ -37,6 +37,7 @@ libc            = "0.2"
 # Transliterate Unicode strings to ASCII for slug normalisation
 # (spec §3.3 — Chinese/Japanese/Korean/etc → English-ish).
 deunicode       = "1.6"
+unicode-segmentation = "1.13"
 
 [dev-dependencies]
 insta     = { workspace = true }

@@ -138,7 +138,7 @@ impl SkiaMeasure {
 /// still shapes with the right metrics here — otherwise `fit_content`
 /// heights are computed from fallback glyphs and every text block lands
 /// at the wrong height.
-fn build_collection(font_resolver: &FontResolver) -> FontCollection {
+pub(crate) fn build_collection(font_resolver: &FontResolver) -> FontCollection {
     let mut fc = FontCollection::new();
     fc.set_default_font_manager(font_resolver.ordered_font_manager(), None);
     if let Some(provider) = crate::bundled_fonts::asset_provider() {

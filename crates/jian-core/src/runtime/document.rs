@@ -382,6 +382,7 @@ impl Runtime {
             .set_page_key(self.active_page_key.clone());
         self.image_store.begin_reload_ownership();
         self.document = Some(doc);
+        self.text_geometry_ready = staged_geometry.is_some();
         if let Some((layout, spatial, layout_warnings)) = staged_geometry {
             self.layout.install(layout);
             self.spatial = spatial;

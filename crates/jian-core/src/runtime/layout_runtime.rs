@@ -88,6 +88,7 @@ impl Runtime {
         spatial.rebuild(items);
         self.layout.install(staged);
         self.spatial = spatial;
+        self.text_geometry_ready = true;
         if focused_became_hidden {
             self.focus.clear();
         }

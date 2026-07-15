@@ -64,6 +64,7 @@ mod pointer_input;
 mod pump;
 mod reload_resources;
 mod text_input;
+mod text_geometry;
 mod variant_swap;
 mod websocket_runtime;
 
@@ -84,6 +85,8 @@ pub struct Runtime {
     pub spatial: SpatialIndex,
     pub image_store: crate::render::image_store::ImageStore,
     pub image_resolver: Rc<dyn crate::render::image_store::ImageResolver>,
+    text_geometry: Option<Rc<dyn crate::render::TextGeometry>>,
+    text_geometry_ready: bool,
     image_completions: ImageCompletionQueue,
     image_requests: BTreeMap<String, ImageRequest>,
     image_request_sources: BTreeMap<String, String>,

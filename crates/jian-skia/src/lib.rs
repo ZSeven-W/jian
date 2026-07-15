@@ -50,6 +50,8 @@ pub mod path;
 pub mod shader_cache;
 pub mod startup;
 pub mod surface;
+#[cfg(feature = "textlayout")]
+pub mod text_geometry;
 
 pub use backend::SkiaBackend;
 #[cfg(feature = "textlayout")]
@@ -66,5 +68,7 @@ pub use font_resolve::{
 pub use image_registry::{InstanceImageRegistry, RegisteredBackend};
 #[cfg(feature = "textlayout")]
 pub use measure::SkiaMeasure;
+#[cfg(feature = "textlayout")]
+pub use text_geometry::{SkiaTextField, SkiaTextGeometry};
 pub use shader_cache::ShaderCache;
 pub use surface::SkiaSurface;

@@ -284,6 +284,7 @@ impl Runtime {
         self.document = Some(parked.document);
         self.layout = parked.layout;
         self.spatial = parked.spatial;
+        self.text_geometry_ready = true;
         self.widget_states = parked.widget_states;
         self.action_surface_inputs = parked.action_surface_inputs;
         self.action_surface_generation = self.action_surface_generation.wrapping_add(1);

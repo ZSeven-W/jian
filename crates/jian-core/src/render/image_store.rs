@@ -1,7 +1,9 @@
 use super::{DecodeError, RenderBackend};
 use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
-#[cfg(any(unix, windows))]
+// Only the Linux (/proc/self/fd) and macOS (F_GETPATH) confinement
+// branches name PathBuf; other targets infer it.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use std::path::PathBuf;
 
 use base64::Engine as _;
