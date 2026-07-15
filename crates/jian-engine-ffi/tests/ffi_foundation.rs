@@ -141,6 +141,8 @@ fn callbacks_table_has_independent_tail_growth_validation() {
         size: size_of::<usize>(),
         user_data: ptr::null_mut(),
         needs_redraw: None,
+        runtime_error: None,
+        ime_control: None,
     };
     let mut desc = exact_desc(DOC, 10.0, 8.0, 1.0);
     desc.callbacks = &minimum;
@@ -151,6 +153,8 @@ fn callbacks_table_has_independent_tail_growth_validation() {
         size: size_of::<JianCallbacks>() + 8,
         user_data: ptr::null_mut(),
         needs_redraw: None,
+        runtime_error: None,
+        ime_control: None,
     };
     desc.callbacks = &larger;
     assert_eq!(unsafe { create(&desc) }, Err(JianStatus::InvalidArg));
@@ -241,6 +245,8 @@ fn synchronous_callback_reentry_is_wrong_thread() {
         size: size_of::<JianCallbacks>(),
         user_data: (&context as *const ReentryContext).cast_mut().cast(),
         needs_redraw: Some(reenter_from_callback),
+        runtime_error: None,
+        ime_control: None,
     };
     let mut desc = exact_desc(DOC, 10.0, 8.0, 1.0);
     desc.callbacks = &callbacks;

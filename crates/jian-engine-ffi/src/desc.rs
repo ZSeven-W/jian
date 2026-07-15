@@ -1,3 +1,4 @@
+use crate::diagnostics::{JianImeControl, JianRuntimeErrorCallback};
 use crate::error::{read_utf8, FfiError, FfiResult, DOCUMENT_CAP, STRING_CAP};
 use std::ffi::c_void;
 use std::mem::{offset_of, size_of};
@@ -13,6 +14,8 @@ pub struct JianCallbacks {
     pub size: usize,
     pub user_data: *mut c_void,
     pub needs_redraw: Option<JianNeedsRedraw>,
+    pub runtime_error: Option<JianRuntimeErrorCallback>,
+    pub ime_control: Option<JianImeControl>,
 }
 
 /// Engine construction descriptor. `asset_base` is the v1 tail.
@@ -60,19 +63,12 @@ pub enum JianTestCallClass {
     TextGeometry = 4,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct JianInsets {
-    pub top: f32,
-    pub right: f32,
-    pub bottom: f32,
-    pub left: f32,
-}
-
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Callbacks {
     pub user_data: *mut c_void,
     pub needs_redraw: Option<JianNeedsRedraw>,
+    pub runtime_error: Option<JianRuntimeErrorCallback>,
+    pub ime_control: Option<JianImeControl>,
 }
 
 pub(crate) struct CreateOptions {
@@ -114,6 +110,12 @@ unsafe fn parse_callbacks(pointer: *const JianCallbacks) -> FfiResult<Callbacks>
         },
         needs_redraw: unsafe {
             read_covered(base, size, offset_of!(JianCallbacks, needs_redraw)).unwrap_or(None)
+        },
+        runtime_error: unsafe {
+            read_covered(base, size, offset_of!(JianCallbacks, runtime_error)).unwrap_or(None)
+        },
+        ime_control: unsafe {
+            read_covered(base, size, offset_of!(JianCallbacks, ime_control)).unwrap_or(None)
         },
     })
 }

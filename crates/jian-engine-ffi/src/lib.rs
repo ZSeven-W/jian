@@ -1,16 +1,28 @@
 //! C ABI boundary for native Jian Player shells.
 
 mod desc;
+mod diagnostics;
 mod error;
+mod input;
 mod lifecycle;
 mod render;
 mod status;
+mod viewport;
 
 pub use desc::{
-    JianCallbacks, JianCreateDesc, JianInsets, JianPointerPhase, JianSurfaceDesc, JianTestCallClass,
+    JianCallbacks, JianCreateDesc, JianPointerPhase, JianSurfaceDesc, JianTestCallClass,
 };
+pub use diagnostics::{
+    JianImeControl, JianRuntimeError, JianRuntimeErrorCallback, JianRuntimeErrorKind,
+};
+pub use input::jian_pointer;
+#[cfg(debug_assertions)]
+pub use input::jian_test_app_number;
 pub use lifecycle::JianEngine;
 pub use status::JianStatus;
+pub use viewport::{jian_set_keyboard, jian_set_safe_area, JianInsets, JianRect};
+#[cfg(debug_assertions)]
+pub use viewport::{jian_test_node_rect, jian_test_viewport_number};
 
 use crate::desc::{parse_create, surface_handle};
 use crate::error::{
@@ -216,69 +228,6 @@ pub unsafe extern "C" fn jian_get_pixel_size(
             width.write(value.0);
             height.write(value.1);
             Ok(())
-        })
-    }
-}
-
-/// Update the four logical safe-area insets.
-///
-/// # Safety
-///
-/// `engine` must be live and called on its owner thread.
-#[no_mangle]
-pub unsafe extern "C" fn jian_set_safe_area(
-    engine: *mut JianEngine,
-    top: f32,
-    right: f32,
-    bottom: f32,
-    left: f32,
-) -> JianStatus {
-    unsafe {
-        call_engine(engine, |lifecycle| {
-            lifecycle.set_safe_area(JianInsets {
-                top,
-                right,
-                bottom,
-                left,
-            })
-        })
-    }
-}
-
-/// Update the logical keyboard occlusion height.
-///
-/// # Safety
-///
-/// `engine` must be live and called on its owner thread.
-#[no_mangle]
-pub unsafe extern "C" fn jian_set_keyboard(engine: *mut JianEngine, height: f32) -> JianStatus {
-    unsafe { call_engine(engine, |lifecycle| lifecycle.set_keyboard(height)) }
-}
-
-/// Dispatch one touch event in surface-logical coordinates.
-///
-/// # Safety
-///
-/// `engine` must be live and called on its owner thread.
-#[no_mangle]
-pub unsafe extern "C" fn jian_pointer(
-    engine: *mut JianEngine,
-    id: u32,
-    phase: i32,
-    x: f32,
-    y: f32,
-    now_ms: u64,
-) -> JianStatus {
-    unsafe {
-        call_engine(engine, |lifecycle| {
-            let phase = match phase {
-                value if value == JianPointerPhase::Down as i32 => JianPointerPhase::Down,
-                value if value == JianPointerPhase::Move as i32 => JianPointerPhase::Move,
-                value if value == JianPointerPhase::Up as i32 => JianPointerPhase::Up,
-                value if value == JianPointerPhase::Cancel as i32 => JianPointerPhase::Cancel,
-                _ => return Err(FfiError::invalid("pointer phase is invalid")),
-            };
-            lifecycle.pointer(id, phase, x, y, now_ms)
         })
     }
 }

@@ -1,8 +1,10 @@
 #[cfg(debug_assertions)]
 use crate::desc::JianTestCallClass;
-use crate::desc::{Callbacks, CreateOptions, JianInsets, JianPointerPhase};
+use crate::desc::{Callbacks, CreateOptions, JianPointerPhase};
+use crate::diagnostics;
 use crate::error::{FfiError, FfiResult};
 use crate::render::{paint_commands, prepare_commands};
+use crate::viewport::{JianInsets, JianRect};
 use crate::JianStatus;
 use jian_core::geometry::point;
 use jian_core::gesture::{PointerEvent, PointerPhase};
@@ -51,6 +53,14 @@ impl Lifecycle {
                 format!("document could not be loaded: {error}"),
             )
         })?;
+        runtime.enable_action_reporting();
+        runtime
+            .state
+            .set_viewport(options.width, options.height, options.dpr);
+        runtime
+            .state
+            .set_viewport_occlusion(0.0, 0.0, 0.0, 0.0, 0.0);
+        runtime.scheduler.flush();
         #[cfg(feature = "textlayout")]
         runtime
             .build_layout_with(
@@ -65,11 +75,20 @@ impl Lifecycle {
         runtime
             .state
             .set_viewport(options.width, options.height, options.dpr);
+        runtime
+            .state
+            .set_viewport_occlusion(0.0, 0.0, 0.0, 0.0, 0.0);
+        runtime.scheduler.flush();
         if let Some(asset_base) = options.asset_base.as_ref() {
             runtime.set_image_document_dir(asset_base);
         }
+        if options.callbacks.ime_control.is_none() {
+            runtime.push_load_warning(
+                "ime_control callback is null; platform composition will cancel locally",
+            );
+        }
 
-        Ok(Self {
+        let mut lifecycle = Self {
             runtime,
             backend: SkiaBackend::new(),
             mode: RenderMode::Unselected,
@@ -86,7 +105,9 @@ impl Lifecycle {
             metal_surface: None,
             _storage_dir: options.storage_dir,
             _asset_base: options.asset_base,
-        })
+        };
+        lifecycle.emit_runtime_diagnostics();
+        Ok(lifecycle)
     }
 
     pub(crate) fn pixel_size(&self) -> (u32, u32) {
@@ -100,32 +121,40 @@ impl Lifecycle {
 
     pub(crate) fn resize(&mut self, width: f32, height: f32, dpr: f32) -> FfiResult<()> {
         let physical = validate_viewport(width, height, dpr)?;
-        if self.suspended {
-            self.runtime
-                .set_viewport_size_without_relayout((width, height));
-            self.runtime.state.set_viewport(width, height, dpr);
-            self.runtime.set_text_geometry_ready(false);
-            self.pending_relayout = true;
-        } else {
-            let previous = (self.logical, self.dpr);
-            self.runtime
-                .set_viewport_size_without_relayout((width, height));
-            self.runtime.state.set_viewport(width, height, dpr);
-            if let Err(error) = self.runtime.relayout() {
-                self.runtime.set_viewport_size_without_relayout(previous.0);
-                self.runtime
-                    .state
-                    .set_viewport(previous.0 .0, previous.0 .1, previous.1);
-                let _ = self.runtime.relayout();
-                return Err(layout_error(error));
-            }
-        }
+        let previous = (
+            self.logical,
+            self.physical,
+            self.dpr,
+            self.insets,
+            self.keyboard,
+        );
         self.logical = (width, height);
         self.physical = physical;
         self.dpr = dpr;
-        self.cpu_surface = None;
         self.clamp_occlusion();
-        self.runtime.mark_dirty();
+        self.runtime
+            .set_viewport_size_without_relayout((width, height));
+        self.runtime.state.set_viewport(width, height, dpr);
+        self.sync_occlusion_signals();
+
+        if self.suspended {
+            self.runtime.set_text_geometry_ready(false);
+            self.pending_relayout = true;
+        } else if let Err(error) = self.runtime.relayout() {
+            self.logical = previous.0;
+            self.physical = previous.1;
+            self.dpr = previous.2;
+            self.insets = previous.3;
+            self.keyboard = previous.4;
+            self.runtime.set_viewport_size_without_relayout(previous.0);
+            self.runtime
+                .state
+                .set_viewport(previous.0 .0, previous.0 .1, previous.2);
+            self.sync_occlusion_signals();
+            let _ = self.runtime.relayout();
+            return Err(layout_error(error));
+        }
+        self.cpu_surface = None;
         self.notify(None);
         Ok(())
     }
@@ -151,8 +180,14 @@ impl Lifecycle {
                 "safe-area insets exceed the logical surface",
             ));
         }
+        let previous = self.insets;
         self.insets = insets;
-        self.occlusion_changed()
+        if let Err(error) = self.occlusion_changed() {
+            self.insets = previous;
+            self.restore_occlusion_after_failure();
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub(crate) fn set_keyboard(&mut self, height: f32) -> FfiResult<()> {
@@ -161,20 +196,45 @@ impl Lifecycle {
                 "keyboard height must fit the logical surface",
             ));
         }
+        let previous = self.keyboard;
         self.keyboard = height;
-        self.occlusion_changed()
+        if let Err(error) = self.occlusion_changed() {
+            self.keyboard = previous;
+            self.restore_occlusion_after_failure();
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn occlusion_changed(&mut self) -> FfiResult<()> {
+        self.sync_occlusion_signals();
         if self.suspended {
             self.pending_relayout = true;
             self.runtime.set_text_geometry_ready(false);
         } else {
             self.runtime.relayout().map_err(layout_error)?;
         }
-        self.runtime.mark_dirty();
         self.notify(None);
         Ok(())
+    }
+
+    fn sync_occlusion_signals(&mut self) {
+        self.runtime.state.set_viewport_occlusion(
+            self.insets.top,
+            self.insets.right,
+            self.insets.bottom,
+            self.insets.left,
+            self.keyboard,
+        );
+        self.runtime.scheduler.flush();
+        self.runtime.mark_dirty();
+    }
+
+    fn restore_occlusion_after_failure(&mut self) {
+        self.sync_occlusion_signals();
+        if !self.suspended {
+            let _ = self.runtime.relayout();
+        }
     }
 
     fn clamp_occlusion(&mut self) {
@@ -430,6 +490,46 @@ impl Lifecycle {
     }
 
     #[cfg(debug_assertions)]
+    pub(crate) fn app_number(&self, key: &str) -> Option<f64> {
+        self.runtime.state.app_get(key)?.as_f64()
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn viewport_number(&self, key: &str) -> Option<f64> {
+        self.runtime.state.viewport_snapshot().get(key)?.as_f64()
+    }
+
+    #[cfg(debug_assertions)]
+    pub(crate) fn node_rect(&self, id: &str) -> Option<JianRect> {
+        let document = self.runtime.document.as_ref()?;
+        let key = document.tree.get(id)?;
+        let rect = self.runtime.layout.node_rect(key)?;
+        Some(JianRect {
+            x: rect.origin.x,
+            y: rect.origin.y,
+            width: rect.size.width,
+            height: rect.size.height,
+        })
+    }
+
+    pub(crate) fn emit_runtime_diagnostics(&mut self) {
+        diagnostics::drain_runtime(
+            &mut self.runtime,
+            self.callbacks.runtime_error,
+            self.callbacks.user_data,
+        );
+    }
+
+    pub(crate) fn emit_call_error(&self, error: &FfiError) {
+        diagnostics::emit_call_error(
+            self.callbacks.runtime_error,
+            self.callbacks.user_data,
+            error.status,
+            &error.message,
+        );
+    }
+
+    #[cfg(debug_assertions)]
     pub(crate) fn test_suspended_status(&self, class: JianTestCallClass) -> JianStatus {
         if !self.suspended {
             return JianStatus::Ok;
@@ -550,7 +650,12 @@ pub(crate) unsafe fn call_engine(
     engine.in_call.set(true);
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         let lifecycle = unsafe { &mut *engine.lifecycle.get() };
-        call(lifecycle)
+        let result = call(lifecycle);
+        if let Err(error) = &result {
+            lifecycle.emit_call_error(error);
+        }
+        lifecycle.emit_runtime_diagnostics();
+        result
     }));
     engine.in_call.set(false);
     match outcome {
