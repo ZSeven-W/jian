@@ -1,0 +1,22 @@
+[package]
+name         = "jian-engine-ffi"
+version      = { workspace = true }
+edition      = { workspace = true }
+rust-version = { workspace = true }
+license      = { workspace = true }
+repository   = { workspace = true }
+authors      = { workspace = true }
+description  = "Stable C ABI for embedding the Jian engine"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = []
+metal = ["jian-skia/metal"]
+textlayout = ["jian-skia/textlayout"]
+
+[dependencies]
+jian-core = { path = "../jian-core" }
+jian-skia = { path = "../jian-skia" }
+

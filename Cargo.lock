@@ -2430,6 +2430,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "jian-engine-ffi"
+version = "0.0.1"
+dependencies = [
+ "jian-core",
+ "jian-skia",
+]
+
+[[package]]
 name = "jian-gallery"
 version = "0.0.1"
 dependencies = [
