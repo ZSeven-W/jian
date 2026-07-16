@@ -342,8 +342,8 @@ fn register_seed_state_graph(driver: &mut StartupDriver, shared: &Rc<BootstrapSh
             .as_ref()
             .cloned()
             .ok_or_else(|| "ParseSchema produced no schema".to_owned())?;
-        let mut runtime = Runtime::new_from_document(schema)
-            .map_err(|e| format!("Runtime::new_from_document: {e}"))?;
+        let mut runtime = Runtime::new_from_document_with_viewport(schema, shared.viewport)
+            .map_err(|e| format!("Runtime::new_from_document_with_viewport: {e}"))?;
         // Plan 19 D2 cold-start: install the AOT pre-compiled-
         // expression snapshot before any binding evaluates. The
         // cache is empty at this point (`Runtime::new_from_document`

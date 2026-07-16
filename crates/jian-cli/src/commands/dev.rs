@@ -60,7 +60,7 @@ pub fn run(args: DevArgs) -> Result<ExitCode> {
     // Runtime constructor takes ownership.
     let icon = crate::icon_loader::resolve_app_icon(&args.path, args.icon.as_deref(), &schema);
 
-    let mut rt = Runtime::new_from_document(schema)
+    let mut rt = Runtime::new_from_document_with_viewport(schema, (w, h))
         .with_context(|| format!("build runtime from {}", path.display()))?;
     rt.build_layout((w, h)).with_context(|| "layout")?;
     rt.rebuild_spatial();

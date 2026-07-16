@@ -307,8 +307,8 @@ fn compute_aot_payload(
              Fix: ensure every node's `id` is unique before `jian pack --aot`",
         ));
     }
-    let mut rt = jian_core::Runtime::new_from_document(doc.clone())
-        .map_err(|e| anyhow!("Runtime::new_from_document: {e}"))?;
+    let mut rt = jian_core::Runtime::new_from_document_with_viewport(doc.clone(), viewport)
+        .map_err(|e| anyhow!("Runtime::new_from_document_with_viewport: {e}"))?;
     rt.build_layout(viewport)
         .map_err(|e| anyhow!("build_layout({:?}): {e}", viewport))?;
     // Plan 19 D2: pre-compile every queued binding source AND

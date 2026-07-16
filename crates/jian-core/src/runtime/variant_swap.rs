@@ -26,6 +26,7 @@ pub struct ParkedBuild {
     staged_state: Rc<StateGraph>,
     mutation_counter_at_build: u64,
     font_generation_at_build: u64,
+    viewport_at_build: (f32, f32),
     build_count: usize,
     pub(crate) started_at_ms: u64,
 }
@@ -109,7 +110,16 @@ impl Runtime {
             .map_or(variants.default_page_id.as_str(), |entry| {
                 entry.page_id.as_str()
             });
-        (self.active_variant_page_id.as_deref() != Some(selected)).then(|| selected.to_owned())
+        // While a swap is parked on an IME handshake, the pending target — not
+        // the still-live variant — is what the confirmation will commit.
+        // Compare against it so a second resize that crosses back re-parks the
+        // now-correct target instead of silently leaving the stale one to
+        // commit later.
+        let current = match &self.swap_state {
+            SwapState::AwaitingIme { parked, .. } => Some(parked.target_page_id.as_str()),
+            SwapState::Idle => self.active_variant_page_id.as_deref(),
+        };
+        (current != Some(selected)).then(|| selected.to_owned())
     }
 
     pub fn input_frozen(&self) -> bool {
@@ -226,12 +236,27 @@ impl Runtime {
         let document =
             loader::build_with(schema, &staging_state, loader::SeedMode::PreserveExisting)?;
 
+        // Mirror `build_layout`: responsive geometry is computed from a
+        // materialized clone so layout-affecting bindings (e.g. a width bound to
+        // `$viewport.width`) resolve against the staged state for this variant,
+        // while the committed live document keeps its raw bindings for later
+        // re-materialization. Without this the swapped-in variant would lay out
+        // with authored placeholder values.
+        let mut materialized = document.clone();
+        for (_, node) in materialized.tree.nodes.iter_mut() {
+            crate::binding::materialize_layout_bindings(
+                &mut node.schema,
+                &staging_state,
+                Some(target_page_id),
+            );
+        }
+
         let viewport = (self.viewport.size.width, self.viewport.size.height);
         let mut layout = LayoutEngine::with_backend(self.layout.measure.clone());
-        let roots = layout.build_responsive(&document.tree, true)?;
+        let roots = layout.build_responsive(&materialized.tree, true)?;
         let mut warnings = layout.constraint_lints().to_vec();
-        if let Some(root) = select_viewport_root(&document.tree, &mut warnings) {
-            if root_has_limits(&document.tree.nodes[root].schema) {
+        if let Some(root) = select_viewport_root(&materialized.tree, &mut warnings) {
+            if root_has_limits(&materialized.tree.nodes[root].schema) {
                 warnings.push("responsive viewport root min/max bounds are ignored".to_owned());
             }
             layout.override_root_for_viewport(root, viewport)?;
@@ -240,11 +265,25 @@ impl Runtime {
             layout.compute_responsive(root, viewport)?;
         }
         let mut spatial = SpatialIndex::new();
-        spatial.rebuild(document.tree.nodes.iter().filter_map(|(key, _)| {
-            layout
-                .node_scene_rect(&document, key)
-                .map(|rect| NodeBBox { key, rect })
-        }));
+        spatial.rebuild(
+            materialized
+                .tree
+                .nodes
+                .iter()
+                .filter(|(_, node)| {
+                    // Mirror the normal layout path: `visible: false` nodes are
+                    // not drawn and must not be hit-testable either.
+                    serde_json::to_value(&node.schema)
+                        .ok()
+                        .and_then(|json| json.get("visible").and_then(|value| value.as_bool()))
+                        .unwrap_or(true)
+                })
+                .filter_map(|(key, _)| {
+                    layout
+                        .node_scene_rect(&materialized, key)
+                        .map(|rect| NodeBBox { key, rect })
+                }),
+        );
 
         let mut widget_states = self
             .widget_states
@@ -266,14 +305,21 @@ impl Runtime {
             staged_state: staging_state,
             mutation_counter_at_build: self.mutation_counter(),
             font_generation_at_build,
+            viewport_at_build: viewport,
             build_count,
             started_at_ms,
         })
     }
 
     pub(crate) fn commit_parked(&mut self, mut parked: ParkedBuild) -> CoreResult<()> {
+        // The viewport is compared directly rather than through the mutation
+        // counter: a host that re-lays out between park and commit (e.g. the
+        // desktop resize path calls `build_layout` after parking) moves
+        // `self.viewport` without bumping the counter, and its later
+        // `set_viewport_size` becomes a no-op that never bumps either.
         if parked.mutation_counter_at_build != self.mutation_counter()
             || parked.font_generation_at_build != self.layout.measure.font_generation()
+            || parked.viewport_at_build != (self.viewport.size.width, self.viewport.size.height)
         {
             parked = self.build_parked(
                 &parked.target_page_id,
@@ -293,6 +339,12 @@ impl Runtime {
         parked
             .widget_states
             .set_mutation_counter(self.mutation_counter.clone());
+        // Rotate image ownership across the document swap exactly like a normal
+        // mount: begin a new ownership generation before installing the tree,
+        // then re-admit against the swapped-in variant so its images (which may
+        // differ from the previous variant's) are registered and requested, and
+        // release any that no longer appear.
+        self.image_store.begin_reload_ownership();
         self.document = Some(parked.document);
         self.layout = parked.layout;
         self.spatial = parked.spatial;
@@ -300,6 +352,11 @@ impl Runtime {
         self.widget_states = parked.widget_states;
         self.action_surface_inputs = parked.action_surface_inputs;
         self.action_surface_generation = self.action_surface_generation.wrapping_add(1);
+        self.state.clear_image_keys();
+        self.admit_document_images();
+        self.image_store.finish_reload_ownership();
+        self.image_request_sources
+            .retain(|key, _| self.image_store.state(key).is_some());
         for warning in parked.warnings {
             if !self.load_warnings.contains(&warning) {
                 self.load_warnings.push(warning);
@@ -327,6 +384,15 @@ impl Runtime {
                 request_id: current,
                 parked,
             } if current == request_id => {
+                // A resize that crossed out and back while the handshake was
+                // pending re-parked the still-live variant. Committing it
+                // would only churn observable state (focus cleared, caret
+                // reset) for a document that is already mounted — drop the
+                // park instead and just lift the freeze.
+                if self.active_variant_page_id.as_deref() == Some(parked.target_page_id.as_str())
+                {
+                    return;
+                }
                 if let Err(error) = self.commit_parked(*parked) {
                     self.push_layout_error(format!("variant swap commit failed: {error}"));
                     self.swap_state = SwapState::Idle;
@@ -338,11 +404,50 @@ impl Runtime {
 }
 
 fn copy_live_seed_state(live: &StateGraph, staging: &StateGraph) {
+    // The staging graph must evaluate every binding scope exactly like the
+    // live graph, otherwise layout-binding materialization for the parked
+    // variant resolves against nulls/defaults and diverges from the geometry
+    // a live relayout would later compute. The responsive flag is copied
+    // first: responsive `$storage` reads go through the storage cache, and
+    // `replace_storage` only populates the staging cache when the flag is
+    // already set.
+    staging.set_responsive(live.is_responsive());
+    staging.set_now_ms(live.now_ms());
+    staging.replace_viewport(&live.viewport_snapshot());
+    staging.replace_route(&live.route_snapshot());
+    if live.is_responsive() {
+        // Responsive `$storage` evaluation reads the storage cache, not the
+        // signal map: hydrated values exist only in the cache, and the map can
+        // retain entries a wipe already dropped from the cache. Copy the
+        // cache's present entries verbatim; reseeding through the map would
+        // resurrect cleared values or miss hydrated ones.
+        if let serde_json::Value::Object(entries) = live.storage_cache.snapshot() {
+            for (key, value) in entries {
+                staging.storage_cache.set_local(&key, value);
+            }
+        }
+    } else {
+        staging.replace_storage(&live.storage_snapshot());
+    }
     for (name, signal) in live.app.borrow().iter() {
         staging.app_set(name, signal.get().0);
     }
     for (name, signal) in live.vars.borrow().iter() {
         staging.vars_set(name, signal.get().0);
+    }
+    // Retained `$page`/`$self` values survive variant swaps; the loader's
+    // `PreserveExisting` seeding only fills keys that are still missing, so
+    // copying them here means a switch back re-materializes against the
+    // user's mutated values rather than authored defaults.
+    for (page_key, fields) in live.page.borrow().iter() {
+        for (name, signal) in fields {
+            staging.page_set(page_key, name, signal.get().0);
+        }
+    }
+    for ((page_key, node_id), fields) in live.self_.borrow().iter() {
+        for (name, signal) in fields {
+            staging.self_set(page_key, node_id, name, signal.get().0);
+        }
     }
 }
 
@@ -355,6 +460,24 @@ fn merge_staged_defaults(staging: &StateGraph, live: &StateGraph) {
     for (name, signal) in staging.vars.borrow().iter() {
         if live.vars_get(name).is_none() {
             live.vars_set(name, signal.get().0);
+        }
+    }
+    // First-visit `$page`/`$self` defaults seeded into the staging graph must
+    // reach the live graph too, or post-commit evaluation of the committed
+    // variant's page-scoped bindings would see missing keys where the parked
+    // build saw the authored defaults.
+    for (page_key, fields) in staging.page.borrow().iter() {
+        for (name, signal) in fields {
+            if live.page_get(page_key, name).is_none() {
+                live.page_set(page_key, name, signal.get().0);
+            }
+        }
+    }
+    for ((page_key, node_id), fields) in staging.self_.borrow().iter() {
+        for (name, signal) in fields {
+            if live.self_get(page_key, node_id, name).is_none() {
+                live.self_set(page_key, node_id, name, signal.get().0);
+            }
         }
     }
 }

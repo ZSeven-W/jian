@@ -392,3 +392,154 @@ fn unprojected_responsive_initial_load_normalizes_page_ids() {
     assert_eq!(ids, ["~root~2", "~root~3", "~root"]);
     assert_eq!(runtime.active_page_key(), "~root~2");
 }
+
+// Regression: a host that knows its first-frame size must get the breakpoint
+// variant for that size at construction, not the 800x600 default (which lands
+// on desktop). Non-responsive documents ignore the viewport argument so their
+// construction stays identical to `new_from_document`.
+#[test]
+fn constructor_with_viewport_selects_breakpoint_variant_for_that_width() {
+    let source: PenDocument = serde_json::from_str(
+        r#"{"version":"1.2","responsive":true,"children":[
+          {"type":"frame","id":"desktop","screen":"/","width":800,"height":600,
+           "children":[{"type":"rectangle","id":"probe","width":90,"height":10}]},
+          {"type":"frame","id":"mobile","screen":"/","breakpoint":{"maxWidth":480},
+           "width":320,"height":600,
+           "children":[{"type":"rectangle","id":"probe","width":60,"height":10}]}]}"#,
+    )
+    .unwrap();
+
+    let narrow = Runtime::new_from_document_with_viewport(source.clone(), (320.0, 600.0)).unwrap();
+    assert_eq!(narrow.active_page_key(), "mobile@0-480");
+
+    let wide = Runtime::new_from_document_with_viewport(source.clone(), (1280.0, 800.0)).unwrap();
+    assert_eq!(wide.active_page_key(), "desktop");
+
+    let defaulted = Runtime::new_from_document(source).unwrap();
+    assert_eq!(defaulted.active_page_key(), "desktop");
+}
+
+// Regression: while a swap is parked on an IME handshake, a second resize
+// that crosses back into the live variant's breakpoint must replace the
+// pending target. Previously `needs_variant_swap` compared only against the
+// live variant, returned `None`, and the confirmation committed the stale
+// parked variant for a viewport it no longer matched.
+#[test]
+fn resize_back_while_parked_reparks_the_correct_target() {
+    let mut runtime = variant_runtime();
+    freeze_variant_runtime(&mut runtime); // parks mobile@0-480, composition active
+
+    let target = runtime.needs_variant_swap(800.0);
+    assert_eq!(
+        target.as_deref(),
+        Some("desktop"),
+        "a parked swap must track the latest breakpoint selection"
+    );
+    assert!(!runtime.switch_variant("desktop").unwrap());
+    assert!(runtime.input_frozen());
+
+    let request = match runtime.swap_state {
+        SwapState::AwaitingIme { request_id, .. } => request_id,
+        _ => unreachable!(),
+    };
+    runtime.confirm_ime_cancel(request);
+    assert_eq!(runtime.active_page_key(), "desktop");
+    assert!(!runtime.input_frozen());
+    // The re-parked target equals the live variant, so the confirmation drops
+    // the park instead of committing: the mounted document and its widget
+    // state (confirmed text, no caret churn) survive untouched.
+    let key = runtime
+        .document
+        .as_ref()
+        .unwrap()
+        .tree
+        .get("field")
+        .unwrap();
+    let node = runtime.document.as_ref().unwrap().tree.nodes[key]
+        .schema
+        .clone();
+    match runtime.widget_states.get_or_init(&node, &runtime.state) {
+        Some(crate::widget_state::WidgetState::TextInput(text)) => {
+            assert_eq!(text.text(), "abIMEz");
+        }
+        _ => panic!("missing text input state"),
+    }
+}
+
+// Non-responsive documents must ignore the constructor's viewport argument
+// entirely: state seeds and page selection stay identical to
+// `new_from_document` regardless of the size passed.
+#[test]
+fn constructor_viewport_argument_is_ignored_for_non_responsive_docs() {
+    let source: PenDocument = serde_json::from_str(
+        r#"{"version":"1.2","children":[
+          {"type":"frame","id":"root","width":100,"height":100}]}"#,
+    )
+    .unwrap();
+    let sized = Runtime::new_from_document_with_viewport(source.clone(), (402.0, 874.0)).unwrap();
+    let defaulted = Runtime::new_from_document(source).unwrap();
+    assert_eq!(sized.active_page_key(), defaulted.active_page_key());
+    assert_eq!(
+        sized.state.viewport_snapshot(),
+        defaulted.state.viewport_snapshot(),
+        "non-responsive construction must keep the 800x600 default viewport"
+    );
+}
+
+// Regression: parked materialization must read responsive `$storage` through
+// the storage cache, exactly like live evaluation. The signal map is not
+// authoritative — hydrated values exist only in the cache, and a wiped key
+// can linger in the map after the cache dropped it.
+#[test]
+fn parked_materialization_reads_hydrated_storage_not_stale_map_entries() {
+    let source: PenDocument = serde_json::from_str(
+        r#"{"version":"1.2","responsive":true,"children":[
+          {"type":"frame","id":"home-d","screen":"/","width":800,"height":600,
+           "children":[{"type":"rectangle","id":"a","width":1,"height":5}]},
+          {"type":"frame","id":"home-m","screen":"/","breakpoint":{"maxWidth":480},
+           "width":320,"height":600,"children":[
+             {"type":"rectangle","id":"hydrated","width":1,"height":5,
+              "bindings":{"width":"$storage.w"}},
+             {"type":"rectangle","id":"wiped","width":7,"height":5,
+              "bindings":{"width":"$storage.gone"}}]}]}"#,
+    )
+    .unwrap();
+    let (projected, _) = jian_ops_schema::screen_projection::project_screens(&source);
+    let (normalized, variants) = projected.unwrap();
+    let desktop = normalized
+        .pages
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|page| page.id == "home-d")
+        .unwrap()
+        .clone();
+    let mut mounted = normalized.clone();
+    mounted.pages = Some(vec![desktop]);
+    let mut runtime = Runtime::new_from_document(mounted).unwrap();
+    runtime.configure_variant_source(normalized, "/", variants);
+
+    // Hydrated-only value: present in the cache, absent from the signal map.
+    runtime
+        .state
+        .storage_cache
+        .set_local("w", serde_json::json!(240.0));
+    // Wiped value: the map keeps a stale entry after the cache dropped it.
+    runtime.state.storage_set("gone", serde_json::json!(555.0));
+    runtime.state.storage_cache.remove("gone");
+
+    assert!(runtime.switch_variant("home-m@0-480").unwrap());
+    let doc = runtime.document.as_ref().unwrap();
+    let hydrated = runtime.layout.node_rect(doc.tree.get("hydrated").unwrap());
+    assert_eq!(
+        hydrated.unwrap().size.width,
+        240.0,
+        "hydrated storage values must materialize in the parked build"
+    );
+    let wiped = runtime.layout.node_rect(doc.tree.get("wiped").unwrap());
+    assert_eq!(
+        wiped.unwrap().size.width,
+        7.0,
+        "a wiped storage key must not be resurrected from the stale signal map"
+    );
+}

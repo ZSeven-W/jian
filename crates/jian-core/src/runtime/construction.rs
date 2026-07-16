@@ -112,13 +112,38 @@ impl Runtime {
     /// An undeclared `app.capabilities` field means "no capabilities" —
     /// every IO action will be denied. Ship the `.op` with an explicit
     /// declaration to unlock network/storage/etc.
-    #[allow(clippy::arc_with_non_send_sync)]
+    ///
+    /// Responsive breakpoint variants are selected against the default
+    /// 800x600 viewport. A host that already knows its first-frame size must
+    /// use [`Self::new_from_document_with_viewport`], otherwise the initially
+    /// mounted variant can be wrong for the real window and nothing corrects
+    /// it until a resize-driven swap.
     pub fn new_from_document(schema: PenDocument) -> CoreResult<Self> {
+        Self::new_from_document_with_viewport(schema, (800.0, 600.0))
+    }
+
+    /// [`Self::new_from_document`], but the initial responsive breakpoint
+    /// variant is selected for the host's real first-frame viewport.
+    ///
+    /// Non-responsive documents ignore `viewport` entirely and construct
+    /// byte-for-byte like `new_from_document` (their layout viewport stays at
+    /// the 800x600 default so later occlusion-driven relayouts are
+    /// unaffected).
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub fn new_from_document_with_viewport(
+        schema: PenDocument,
+        viewport: (f32, f32),
+    ) -> CoreResult<Self> {
         let scheduler = Rc::new(Scheduler::new());
         let effects = EffectRegistry::new();
         effects.install_on(&scheduler);
 
-        let prepared = super::document_prepare::prepare_document(schema, (800.0, 600.0), None);
+        let viewport = if schema.is_responsive() {
+            viewport
+        } else {
+            (800.0, 600.0)
+        };
+        let prepared = super::document_prepare::prepare_document(schema, viewport, None);
         let schema = prepared.mounted;
         let audit = Rc::new(AuditLog::new(AUDIT_LOG_CAPACITY));
         let declared = schema
@@ -172,7 +197,7 @@ impl Runtime {
             image_requests: BTreeMap::new(),
             image_request_sources: BTreeMap::new(),
             image_document_dir: PathBuf::new(),
-            viewport: Viewport::new(size(800.0, 600.0)),
+            viewport: Viewport::new(size(viewport.0, viewport.1)),
             load_warnings: prepared.warnings,
             layout_errors: Vec::new(),
             variant_table: prepared.variants,
@@ -221,7 +246,7 @@ impl Runtime {
             fail_next_variant_build: Cell::new(false),
         };
         runtime.widget_states.set_page_key(active_page_key);
-        runtime.state.set_viewport(800.0, 600.0, 1.0);
+        runtime.state.set_viewport(viewport.0, viewport.1, 1.0);
         runtime.admit_document_images();
         Ok(runtime)
     }

@@ -309,7 +309,7 @@ pub fn run(args: PlayerArgs) -> Result<ExitCode> {
     // re-constructs the runtime for real against the corrected
     // viewport.
     if args.size.is_none() {
-        let mut probe = Runtime::new_from_document(schema.clone())
+        let mut probe = Runtime::new_from_document_with_viewport(schema.clone(), (w, h))
             .with_context(|| format!("probe runtime for {}", resolved_path.display()))?;
         probe.build_layout((w, h)).with_context(|| "probe layout")?;
         if let Some((mw, mh)) = measured_content_bounds(&probe) {
