@@ -7,7 +7,7 @@ use std::mem::{offset_of, size_of};
 use std::ptr;
 
 pub type JianNeedsRedraw =
-    unsafe extern "C" fn(user_data: *mut c_void, has_next_wake: bool, next_wake_ms: u64);
+    Option<unsafe extern "C" fn(user_data: *mut c_void, has_next_wake: bool, next_wake_ms: u64)>;
 
 /// Callback table. Future callbacks grow only at the tail.
 #[repr(C)]
@@ -15,13 +15,13 @@ pub type JianNeedsRedraw =
 pub struct JianCallbacks {
     pub size: usize,
     pub user_data: *mut c_void,
-    pub needs_redraw: Option<JianNeedsRedraw>,
-    pub runtime_error: Option<JianRuntimeErrorCallback>,
-    pub ime_control: Option<JianImeControl>,
-    pub input_focus_changed: Option<JianInputFocusChanged>,
-    pub text_state_changed: Option<JianTextStateChanged>,
-    pub capability_request: Option<JianCapabilityRequestCallback>,
-    pub capability_cancelled: Option<JianCapabilityCancelled>,
+    pub needs_redraw: JianNeedsRedraw,
+    pub runtime_error: JianRuntimeErrorCallback,
+    pub ime_control: JianImeControl,
+    pub input_focus_changed: JianInputFocusChanged,
+    pub text_state_changed: JianTextStateChanged,
+    pub capability_request: JianCapabilityRequestCallback,
+    pub capability_cancelled: JianCapabilityCancelled,
 }
 
 /// Engine construction descriptor. `asset_base` is the v1 tail.
@@ -72,13 +72,13 @@ pub enum JianTestCallClass {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Callbacks {
     pub user_data: *mut c_void,
-    pub needs_redraw: Option<JianNeedsRedraw>,
-    pub runtime_error: Option<JianRuntimeErrorCallback>,
-    pub ime_control: Option<JianImeControl>,
-    pub input_focus_changed: Option<JianInputFocusChanged>,
-    pub text_state_changed: Option<JianTextStateChanged>,
-    pub capability_request: Option<JianCapabilityRequestCallback>,
-    pub capability_cancelled: Option<JianCapabilityCancelled>,
+    pub needs_redraw: JianNeedsRedraw,
+    pub runtime_error: JianRuntimeErrorCallback,
+    pub ime_control: JianImeControl,
+    pub input_focus_changed: JianInputFocusChanged,
+    pub text_state_changed: JianTextStateChanged,
+    pub capability_request: JianCapabilityRequestCallback,
+    pub capability_cancelled: JianCapabilityCancelled,
 }
 
 pub(crate) struct CreateOptions {

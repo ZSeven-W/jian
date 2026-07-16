@@ -55,9 +55,10 @@ pub struct JianFieldInfo {
 }
 
 pub type JianInputFocusChanged =
-    unsafe extern "C" fn(user_data: *mut c_void, focused: bool, info: *const JianFieldInfo);
-pub type JianTextStateChanged = unsafe extern "C" fn(user_data: *mut c_void);
-pub type JianImeControl = unsafe extern "C" fn(user_data: *mut c_void, op: i32, request_id: u64);
+    Option<unsafe extern "C" fn(user_data: *mut c_void, focused: bool, info: *const JianFieldInfo)>;
+pub type JianTextStateChanged = Option<unsafe extern "C" fn(user_data: *mut c_void)>;
+pub type JianImeControl =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, op: i32, request_id: u64)>;
 
 pub(crate) struct ImeState {
     batch_depth: u8,

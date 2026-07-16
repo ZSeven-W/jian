@@ -26,10 +26,10 @@ pub struct JianRuntimeError {
 }
 
 pub type JianRuntimeErrorCallback =
-    unsafe extern "C" fn(user_data: *mut c_void, error: *const JianRuntimeError);
+    Option<unsafe extern "C" fn(user_data: *mut c_void, error: *const JianRuntimeError)>;
 
 pub(crate) fn emit(
-    callback: Option<JianRuntimeErrorCallback>,
+    callback: JianRuntimeErrorCallback,
     user_data: *mut c_void,
     kind: JianRuntimeErrorKind,
     message: &str,
@@ -54,7 +54,7 @@ pub(crate) fn emit(
 
 pub(crate) fn drain_runtime(
     runtime: &mut Runtime,
-    callback: Option<JianRuntimeErrorCallback>,
+    callback: JianRuntimeErrorCallback,
     user_data: *mut c_void,
 ) {
     for warning in runtime.take_load_warnings() {
@@ -98,7 +98,7 @@ pub(crate) fn drain_runtime(
 }
 
 pub(crate) fn emit_call_error(
-    callback: Option<JianRuntimeErrorCallback>,
+    callback: JianRuntimeErrorCallback,
     user_data: *mut c_void,
     status: JianStatus,
     message: &str,

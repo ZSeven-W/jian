@@ -126,12 +126,15 @@ pub struct JianCapabilityRequest {
     pub data: JianCapabilityRequestData,
 }
 
-pub type JianCapabilityRequestCallback = unsafe extern "C" fn(
-    user_data: *mut c_void,
-    request_id: u64,
-    request: *const JianCapabilityRequest,
-);
-pub type JianCapabilityCancelled = unsafe extern "C" fn(user_data: *mut c_void, request_id: u64);
+pub type JianCapabilityRequestCallback = Option<
+    unsafe extern "C" fn(
+        user_data: *mut c_void,
+        request_id: u64,
+        request: *const JianCapabilityRequest,
+    ),
+>;
+pub type JianCapabilityCancelled =
+    Option<unsafe extern "C" fn(user_data: *mut c_void, request_id: u64)>;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -545,7 +548,11 @@ impl ImageResolver for CapabilityBridge {
 }
 
 unsafe fn emit_request(
-    callback: JianCapabilityRequestCallback,
+    callback: unsafe extern "C" fn(
+        user_data: *mut c_void,
+        request_id: u64,
+        request: *const JianCapabilityRequest,
+    ),
     user_data: *mut c_void,
     id: u64,
     owned: &OwnedRequest,
