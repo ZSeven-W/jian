@@ -52,12 +52,17 @@ pub fn classify_binding(property: &str) -> InvalidationClass {
         other => {
             // Spec table: unlisted properties default to paint-only, with a
             // debug diagnostic so silently misclassified layout props surface.
+            // (`other` is only read under debug_assertions; bind it through
+            // to avoid an unused-variable warning in release builds.)
             #[cfg(debug_assertions)]
-            if !matches!(other, "fill" | "fills" | "opacity" | "color")
-                && !other.starts_with("bind:")
             {
-                eprintln!("binding property `{other}` unclassified; treated as paint-only");
+                if !matches!(other, "fill" | "fills" | "opacity" | "color")
+                    && !other.starts_with("bind:")
+                {
+                    eprintln!("binding property `{other}` unclassified; treated as paint-only");
+                }
             }
+            let _ = other;
             InvalidationClass::PaintOnly
         }
     }
