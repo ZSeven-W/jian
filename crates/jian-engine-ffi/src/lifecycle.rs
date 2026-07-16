@@ -7,7 +7,10 @@ use crate::error::{FfiError, FfiResult};
 use crate::ime::{ImeState, JianImeControlOp};
 use crate::render::{paint_commands, prepare_commands};
 use crate::storage::DirectoryStorage;
-use crate::viewport::{JianInsets, JianRect};
+use crate::viewport::JianInsets;
+// JianRect is only used by the debug-only `node_rect` test helper below.
+#[cfg(debug_assertions)]
+use crate::viewport::JianRect;
 use crate::JianStatus;
 use jian_core::geometry::point;
 use jian_core::gesture::{PointerEvent, PointerPhase};
@@ -64,6 +67,30 @@ impl Lifecycle {
         }
         if let Some(asset_base) = options.asset_base.as_ref() {
             runtime.set_image_document_dir(asset_base);
+        }
+        // For a responsive document, establish the real viewport before the
+        // initial mount so `load_str` selects the breakpoint variant for this
+        // creation width rather than the runtime's default 800x600. Hosts such
+        // as the iOS Player create directly at their logical size and may issue
+        // no follow-up resize, which would otherwise strand a mis-selected
+        // variant. Selecting the correct variant up front keeps the normal mount
+        // path (layout-binding materialization + image admission), avoiding the
+        // partial rebuild a post-mount variant swap would perform.
+        //
+        // Non-responsive documents are deliberately left untouched: their layout
+        // viewport must stay at the default so later occlusion-driven relayouts
+        // behave byte-for-byte as before (`build_layout` never writes the
+        // viewport field for them). We gate on the document's own `responsive`
+        // flag, matching `PenDocument::is_responsive`.
+        let responsive = serde_json::from_str::<serde_json::Value>(&options.document)
+            .ok()
+            .and_then(|value| value.get("responsive").and_then(serde_json::Value::as_bool))
+            .unwrap_or(false);
+        if responsive {
+            runtime.set_viewport_size_without_relayout((options.width, options.height));
+            runtime
+                .state
+                .set_viewport(options.width, options.height, options.dpr);
         }
         runtime.load_str(&options.document).map_err(|error| {
             FfiError::new(

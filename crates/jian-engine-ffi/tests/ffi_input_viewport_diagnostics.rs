@@ -47,7 +47,7 @@ unsafe extern "C" fn record_runtime_error(user_data: *mut c_void, error: *const 
 
 unsafe extern "C" fn noop_ime_control(_user_data: *mut c_void, _op: i32, _request_id: u64) {}
 
-fn callbacks(log: &ErrorLog, ime_control: Option<JianImeControl>) -> JianCallbacks {
+fn callbacks(log: &ErrorLog, ime_control: JianImeControl) -> JianCallbacks {
     JianCallbacks {
         size: size_of::<JianCallbacks>(),
         user_data: (log as *const ErrorLog).cast_mut().cast(),
@@ -317,5 +317,181 @@ fn create_reports_load_and_missing_ime_warnings_through_borrowed_payloads() {
         record.kind == JianRuntimeErrorKind::Warning && record.message.contains("min/max")
     }));
     drop(records);
+    unsafe { destroy(engine) };
+}
+
+// Regression: a responsive document must mount the variant that matches the
+// *creation* viewport width, not the runtime's default 800x600. An iPhone
+// Player creates the engine directly at its logical width (e.g. 402), which
+// falls inside the mobile breakpoint; if initial mount ran against the stale
+// default width it would wrongly land on the tablet variant and never correct
+// itself when the host issues no follow-up resize.
+//
+// The `bound` rectangle additionally guards that the selected variant is
+// mounted through the full layout path: its width binds to `$viewport.width`,
+// so a complete mount resolves it to the creation width (402). A shortcut that
+// mounted the wrong variant and merely swapped afterwards would skip layout-
+// binding materialization and leave it at the authored `1`.
+#[test]
+#[cfg(debug_assertions)]
+fn create_selects_initial_variant_for_creation_width() {
+    const DOCUMENT: &[u8] = br#"{
+      "version":"1.2","formatVersion":"1.2","responsive":true,
+      "children":[
+        {"type":"frame","id":"home-mobile","screen":"/home",
+         "breakpoint":{"minWidth":0,"maxWidth":480},"width":320,"height":720,
+         "children":[
+           {"type":"rectangle","id":"probe","x":10,"y":10,"width":60,"height":40},
+           {"type":"rectangle","id":"bound","x":10,"y":60,"width":1,"height":10,
+            "bindings":{"width":"$viewport.width"}}]},
+        {"type":"frame","id":"home-tablet","screen":"/home",
+         "breakpoint":{"minWidth":480.5,"maxWidth":1024},"width":768,"height":720,
+         "children":[
+           {"type":"rectangle","id":"probe","x":10,"y":10,"width":90,"height":40},
+           {"type":"rectangle","id":"bound","x":10,"y":60,"width":1,"height":10,
+            "bindings":{"width":"$viewport.width"}}]}
+      ]
+    }"#;
+    let mut descriptor = desc(DOCUMENT, ptr::null());
+    descriptor.width = 402.0;
+    descriptor.height = 874.0;
+    descriptor.dpr = 3.0;
+    let create_call: unsafe extern "C" fn(
+        *const JianCreateDesc,
+        *mut *mut JianEngine,
+    ) -> JianStatus = jian_create;
+    let mut engine = ptr::null_mut();
+    assert_eq!(
+        unsafe { create_call(&descriptor, &mut engine) },
+        JianStatus::Ok
+    );
+    assert!(!engine.is_null());
+
+    let node_rect: unsafe extern "C" fn(
+        *mut JianEngine,
+        *const u8,
+        usize,
+        *mut JianRect,
+    ) -> JianStatus = jian_test_node_rect;
+    let mut probe = JianRect::default();
+    assert_eq!(
+        unsafe { node_rect(engine, b"probe".as_ptr(), 5, &mut probe) },
+        JianStatus::Ok
+    );
+    assert_eq!(
+        probe.width, 60.0,
+        "creation width 402 is inside the mobile breakpoint (0-480); the mobile \
+         variant (probe width 60) must mount, not the tablet variant (probe width 90)"
+    );
+    let mut bound = JianRect::default();
+    assert_eq!(
+        unsafe { node_rect(engine, b"bound".as_ptr(), 5, &mut bound) },
+        JianStatus::Ok
+    );
+    assert_eq!(
+        bound.width, 402.0,
+        "the mounted variant must resolve `$viewport.width` layout bindings for \
+         the creation width; a post-mount swap shortcut would leave the authored 1"
+    );
+    unsafe { destroy(engine) };
+}
+
+// A device rotation reaches the runtime as a jian_resize on the host's layout
+// pass. Portrait (402) sits in the mobile breakpoint; landscape (874) sits in
+// the tablet breakpoint. The resize must swap the mounted variant live, and
+// rotating back must swap it back — this is the responsive rotation acceptance
+// exercised through the exact C-ABI the iOS Player drives.
+#[test]
+#[cfg(debug_assertions)]
+fn rotation_resize_swaps_responsive_variant_live() {
+    const DOCUMENT: &[u8] = br#"{
+      "version":"1.2","formatVersion":"1.2","responsive":true,
+      "children":[
+        {"type":"frame","id":"home-mobile","screen":"/home",
+         "breakpoint":{"minWidth":0,"maxWidth":480},"width":320,"height":720,
+         "children":[
+           {"type":"rectangle","id":"probe","x":10,"y":10,"width":60,"height":40},
+           {"type":"rectangle","id":"bound","x":10,"y":60,"width":1,"height":10,
+            "bindings":{"width":"$viewport.width"}}]},
+        {"type":"frame","id":"home-tablet","screen":"/home",
+         "breakpoint":{"minWidth":480.5,"maxWidth":1024},"width":768,"height":720,
+         "children":[
+           {"type":"rectangle","id":"probe","x":10,"y":10,"width":90,"height":40},
+           {"type":"rectangle","id":"bound","x":10,"y":60,"width":1,"height":10,
+            "bindings":{"width":"$viewport.width"}}]}
+      ]
+    }"#;
+    let mut descriptor = desc(DOCUMENT, ptr::null());
+    descriptor.width = 402.0;
+    descriptor.height = 874.0;
+    descriptor.dpr = 3.0;
+    let create_call: unsafe extern "C" fn(
+        *const JianCreateDesc,
+        *mut *mut JianEngine,
+    ) -> JianStatus = jian_create;
+    let mut engine = ptr::null_mut();
+    assert_eq!(
+        unsafe { create_call(&descriptor, &mut engine) },
+        JianStatus::Ok
+    );
+
+    let node_rect: unsafe extern "C" fn(
+        *mut JianEngine,
+        *const u8,
+        usize,
+        *mut JianRect,
+    ) -> JianStatus = jian_test_node_rect;
+    let resize: unsafe extern "C" fn(*mut JianEngine, f32, f32, f32) -> JianStatus =
+        jian_engine_ffi::jian_resize;
+    let width_of = move |engine: *mut JianEngine, id: &[u8]| -> f32 {
+        let mut rect = JianRect::default();
+        assert_eq!(
+            unsafe { node_rect(engine, id.as_ptr(), id.len(), &mut rect) },
+            JianStatus::Ok
+        );
+        rect.width
+    };
+
+    assert_eq!(
+        width_of(engine, b"probe"),
+        60.0,
+        "portrait mounts the mobile variant"
+    );
+    assert_eq!(
+        width_of(engine, b"bound"),
+        402.0,
+        "mobile variant resolves $viewport.width to the portrait width"
+    );
+    // Rotate to landscape: logical width crosses into the tablet breakpoint.
+    assert_eq!(
+        unsafe { resize(engine, 874.0, 402.0, 3.0) },
+        JianStatus::Ok
+    );
+    assert_eq!(
+        width_of(engine, b"probe"),
+        90.0,
+        "landscape width 874 must swap to the tablet variant live"
+    );
+    assert_eq!(
+        width_of(engine, b"bound"),
+        874.0,
+        "the live variant swap must materialize the new variant's $viewport.width \
+         layout bindings for the landscape width, not leave the authored 1"
+    );
+    // Rotate back to portrait: the mobile variant must return.
+    assert_eq!(
+        unsafe { resize(engine, 402.0, 874.0, 3.0) },
+        JianStatus::Ok
+    );
+    assert_eq!(
+        width_of(engine, b"probe"),
+        60.0,
+        "rotating back to portrait must restore the mobile variant"
+    );
+    assert_eq!(
+        width_of(engine, b"bound"),
+        402.0,
+        "rotating back must re-materialize the mobile variant bindings"
+    );
     unsafe { destroy(engine) };
 }
