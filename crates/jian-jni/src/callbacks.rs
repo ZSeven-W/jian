@@ -24,6 +24,7 @@ use jni::{JNIEnv, JavaVM};
 
 use jian_engine_ffi::{JianCallbacks, JianCapabilityRequest, JianFieldInfo, JianRuntimeError};
 
+use crate::engine_thread::{enter_callback_frame, exit_callback_frame};
 use crate::marshal;
 
 thread_local! {
@@ -124,11 +125,20 @@ fn upcall(ctx: &EngineCtx, capacity: i32, body: impl FnOnce(&mut JNIEnv, &JObjec
         return;
     };
     let receiver = ctx.receiver.clone();
+    // Bracket the callback so a native re-entered from the Java callback (e.g.
+    // nativeDestroy) sees `in_callback_frame()` and defers per the no-re-entry
+    // rule. The guard restores the depth even if the body panics.
+    let _frame = CallbackFrame::enter();
     let _framed = env.with_local_frame(capacity, |env| -> Result<(), jni::errors::Error> {
         // Catch INSIDE the frame so a panic in marshalling or a JNI wrapper
         // can never unwind across the C callback ABI (which would abort) and
-        // so `with_local_frame` still runs `PopLocalFrame`.
-        let _ = catch_unwind(AssertUnwindSafe(|| body(env, receiver.as_obj())));
+        // so `with_local_frame` still runs `PopLocalFrame`. The caught
+        // payload is disposed through the guarded dropper: a panic_any
+        // payload whose own Drop panics would otherwise re-panic before the
+        // frame closure returns and skip PopLocalFrame.
+        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| body(env, receiver.as_obj()))) {
+            crate::engine_thread::drop_guarded(payload);
+        }
         Ok(())
     });
     // Clear any exception the Java callback left pending; describe it first
@@ -137,6 +147,23 @@ fn upcall(ctx: &EngineCtx, capacity: i32, body: impl FnOnce(&mut JNIEnv, &JObjec
     if let Ok(true) = env.exception_check() {
         let _ = env.exception_describe();
         let _ = env.exception_clear();
+    }
+}
+
+/// RAII bracket for a C callback frame (drives `close_deferred` routing on
+/// callback-origin destroy). Restores the depth on drop, panic or not.
+struct CallbackFrame;
+
+impl CallbackFrame {
+    fn enter() -> Self {
+        enter_callback_frame();
+        CallbackFrame
+    }
+}
+
+impl Drop for CallbackFrame {
+    fn drop(&mut self) {
+        exit_callback_frame();
     }
 }
 

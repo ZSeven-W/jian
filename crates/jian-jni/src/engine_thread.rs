@@ -80,7 +80,7 @@ fn run_guarded(what: &str, f: impl FnOnce()) {
 /// pathological case (a caught payload whose destructor panics); the
 /// forgotten value may own arbitrary resources, but never losing the destroy
 /// is worth that trade on a teardown path that should never be hit.
-fn drop_guarded(payload: Box<dyn Any + Send + 'static>) {
+pub(crate) fn drop_guarded(payload: Box<dyn Any + Send + 'static>) {
     if let Err(poison) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
         std::mem::forget(poison);
     }
