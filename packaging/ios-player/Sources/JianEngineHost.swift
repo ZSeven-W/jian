@@ -188,6 +188,7 @@ final class JianEngineHost: NSObject {
             return
         }
         isSuspended = false
+        performAutoTapIfRequested()
     }
 
     private func makeCallbacks() -> JianCallbacks {
@@ -239,6 +240,26 @@ final class JianEngineHost: NSObject {
         if status != JianStatus_Ok.rawValue {
             reportFailure(status, operation: "jian_set_keyboard", engine: engine)
         }
+    }
+
+    /// Debug instrumentation: `-jianAutoTap x y` in the launch arguments
+    /// injects one tap through the REAL `jian_pointer` path shortly after
+    /// attach — deterministic acceptance driving without host-window
+    /// coordinate mapping (used by the M3 T9 checklist).
+    func performAutoTapIfRequested() {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-jianAutoTap"),
+              arguments.count > index + 2,
+              let x = Double(arguments[index + 1]),
+              let y = Double(arguments[index + 2]) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self, self.isAlive else { return }
+            NSLog("Jian auto-tap at %.1f,%.1f", x, y)
+            self.dispatchPointer(id: 900, phase: 0, point: CGPoint(x: x, y: y))
+            self.dispatchPointer(id: 900, phase: 2, point: CGPoint(x: x, y: y))
+        }
+        #endif
     }
 
     func dispatchPointer(id: UInt32, phase: Int32, point: CGPoint) {
@@ -337,6 +358,7 @@ final class JianEngineHost: NSObject {
     }
 
     func deferFocusChange(focused: Bool, configuration: JianFieldConfiguration?) {
+        NSLog("Jian focus changed: %@", focused ? "focused" : "unfocused")
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isAlive, let view = self.view else { return }
             if let configuration {
