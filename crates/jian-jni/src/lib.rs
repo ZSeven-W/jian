@@ -11,6 +11,8 @@ pub mod registry;
 #[cfg(target_os = "android")]
 pub mod alog;
 #[cfg(target_os = "android")]
+pub mod bindings;
+#[cfg(target_os = "android")]
 pub mod callbacks;
 #[cfg(target_os = "android")]
 pub mod window;
