@@ -9,7 +9,11 @@ pub mod marshal;
 pub mod registry;
 
 #[cfg(target_os = "android")]
+pub mod alog;
+#[cfg(target_os = "android")]
 pub mod callbacks;
+#[cfg(target_os = "android")]
+pub mod window;
 
 pub use engine_thread::{Dispatch, EngineThread, STATUS_CLOSING};
 pub use registry::Registry;
