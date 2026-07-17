@@ -5,7 +5,11 @@
 //! window ownership are Android-only modules (M4 plan Task 5).
 
 pub mod engine_thread;
+pub mod marshal;
 pub mod registry;
+
+#[cfg(target_os = "android")]
+pub mod callbacks;
 
 pub use engine_thread::{Dispatch, EngineThread, STATUS_CLOSING};
 pub use registry::Registry;
