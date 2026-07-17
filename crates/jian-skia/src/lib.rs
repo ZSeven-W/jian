@@ -68,7 +68,7 @@ pub use font_resolve::{
 pub use image_registry::{InstanceImageRegistry, RegisteredBackend};
 #[cfg(feature = "textlayout")]
 pub use measure::SkiaMeasure;
-#[cfg(feature = "textlayout")]
-pub use text_geometry::{SkiaTextField, SkiaTextGeometry};
 pub use shader_cache::ShaderCache;
 pub use surface::SkiaSurface;
+#[cfg(feature = "textlayout")]
+pub use text_geometry::{SkiaTextField, SkiaTextGeometry};

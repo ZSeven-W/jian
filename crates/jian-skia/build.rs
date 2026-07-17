@@ -20,4 +20,13 @@ fn main() {
     if target_os == "windows" && textlayout {
         println!("cargo:rustc-link-lib=advapi32");
     }
+    // Android EGL surface (`gl` feature): khronos-egl is built with
+    // `no-pkg-config` (the NDK ships no egl.pc), so the system links are
+    // emitted here — gated so host tests and non-GL builds are untouched.
+    let gl = std::env::var("CARGO_FEATURE_GL").is_ok();
+    if target_os == "android" && gl {
+        println!("cargo:rustc-link-lib=EGL");
+        println!("cargo:rustc-link-lib=GLESv2");
+        println!("cargo:rustc-link-lib=android");
+    }
 }

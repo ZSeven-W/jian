@@ -24,7 +24,7 @@ metal   = [
     "dep:objc2-quartz-core",
 ]
 d3d     = ["skia-safe/d3d"]
-gl      = ["skia-safe/gl"]
+gl      = ["skia-safe/gl", "dep:khronos-egl"]
 vulkan  = ["skia-safe/vulkan"]
 # Paragraph shaping (ICU + harfbuzz). Opt-in because it bloats the
 # binary by ~15 MB. Without it, `jian-skia` falls back to the canvas'
@@ -70,3 +70,8 @@ objc2-quartz-core = { version = "0.2.2", optional = true, features = [
 [dev-dependencies]
 serde_json        = { workspace = true }
 jian-host-desktop = { path = "../jian-host-desktop" }
+
+# Android EGL surface (behind `gl`): static-linked against the system
+# libEGL/libGLESv2 (no pkg-config on the NDK; links emitted by build.rs).
+[target.'cfg(target_os = "android")'.dependencies]
+khronos-egl = { version = "6", features = ["static", "no-pkg-config"], optional = true }
