@@ -27,10 +27,12 @@ use std::thread::{self, JoinHandle, ThreadId};
 /// Shell-side dispatch-rejected status (never produced by the C ABI).
 pub const STATUS_CLOSING: i32 = -1;
 
-/// Best-effort stderr log that CANNOT panic. `eprintln!` panics on a failed
-/// stderr write, and every use here is on a teardown path where an
-/// unwinding panic would drop a live payload unguarded or lose the destroy;
-/// `write_fmt` returning `Err` is ignored instead.
+/// Best-effort stderr log that cannot panic on a WRITE failure (unlike
+/// `eprintln!`, which does). Every use here is on a teardown path where an
+/// unwinding panic would drop a live payload unguarded or lose the destroy,
+/// so the `write_fmt` `Err` is ignored instead of panicked on. The format
+/// arguments are only literals, `&str`, and an OS-backed `io::Error`, whose
+/// `Display` impls do not panic.
 macro_rules! log_teardown {
     ($($arg:tt)*) => {{
         use std::io::Write as _;
