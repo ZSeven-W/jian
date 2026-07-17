@@ -14,7 +14,7 @@ pub unsafe extern "C" fn jian_register_font(
     length: usize,
 ) -> JianStatus {
     unsafe {
-        call_engine(engine, |_| {
+        call_engine(engine, |lifecycle| {
             let owned = read_font(bytes, length)?;
             #[cfg(feature = "textlayout")]
             {
@@ -22,10 +22,15 @@ pub unsafe extern "C" fn jian_register_font(
                     .map(|_| ())
                     .map_err(|error| {
                         FfiError::invalid(format!("font registration failed: {error}"))
-                    })
+                    })?;
+                // §6.5 fanout: immediate relayout on the registering engine
+                // (other engines catch the generation in their next pump).
+                lifecycle.note_font_registered();
+                Ok(())
             }
             #[cfg(not(feature = "textlayout"))]
             {
+                let _ = lifecycle;
                 let _ = owned;
                 Err(FfiError::invalid(
                     "font registration requires the textlayout feature",

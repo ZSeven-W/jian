@@ -48,6 +48,8 @@ exclude = [
   "JianTestCallClass",
   "jian_test_app_number",
   "jian_test_font_generation",
+  "jian_test_force_attach_failure",
+  "jian_test_force_context_loss",
   "jian_test_force_panic",
   "jian_test_get_insets",
   "jian_test_node_rect",

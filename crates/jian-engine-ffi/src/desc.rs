@@ -41,7 +41,9 @@ pub struct JianCreateDesc {
     pub asset_base_len: usize,
 }
 
-/// Platform surface descriptor. On iOS `handle` is a borrowed CAMetalLayer*.
+/// Platform surface descriptor. On iOS `handle` is a borrowed CAMetalLayer*;
+/// on Android it is a borrowed ANativeWindow* (acquired by the shell via
+/// ANativeWindow_fromSurface and released only after suspend/destroy returns).
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct JianSurfaceDesc {

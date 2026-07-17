@@ -463,10 +463,7 @@ fn rotation_resize_swaps_responsive_variant_live() {
         "mobile variant resolves $viewport.width to the portrait width"
     );
     // Rotate to landscape: logical width crosses into the tablet breakpoint.
-    assert_eq!(
-        unsafe { resize(engine, 874.0, 402.0, 3.0) },
-        JianStatus::Ok
-    );
+    assert_eq!(unsafe { resize(engine, 874.0, 402.0, 3.0) }, JianStatus::Ok);
     assert_eq!(
         width_of(engine, b"probe"),
         90.0,
@@ -479,10 +476,7 @@ fn rotation_resize_swaps_responsive_variant_live() {
          layout bindings for the landscape width, not leave the authored 1"
     );
     // Rotate back to portrait: the mobile variant must return.
-    assert_eq!(
-        unsafe { resize(engine, 402.0, 874.0, 3.0) },
-        JianStatus::Ok
-    );
+    assert_eq!(unsafe { resize(engine, 402.0, 874.0, 3.0) }, JianStatus::Ok);
     assert_eq!(
         width_of(engine, b"probe"),
         60.0,

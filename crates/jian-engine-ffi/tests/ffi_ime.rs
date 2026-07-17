@@ -544,3 +544,63 @@ fn shaped_hit_testing_round_trips_and_uax29_ranges_cross_the_raw_ffi() {
     assert_eq!((start, end), (11, 17));
     unsafe { destroy(engine) };
 }
+
+// jian.h escape-hatch contract (documented since M3): an explicit selection
+// set OUTSIDE the active composing range must keep the composition alive with
+// the caret at the requested absolute offset — Android's far-cursor
+// `setComposingText` semantics depend on it. Regression for M4 plan Task 3b:
+// `set_effective_selection` used to COMMIT the preedit instead.
+#[test]
+fn selection_outside_composition_keeps_the_preedit() {
+    let log = Box::new(CallbackLog::default());
+    let table = callbacks(&log, true);
+    let doc = one_field("hello ");
+    let engine = unsafe { create(&doc, &table) };
+    unsafe { tap(engine, 1, 20.0, 20.0) };
+
+    let set_composing: unsafe extern "C" fn(
+        *mut JianEngine,
+        *const u8,
+        usize,
+        u32,
+        u32,
+    ) -> JianStatus = jian_ime_set_composing_text;
+    assert_eq!(
+        unsafe { set_composing(engine, b"wo".as_ptr(), 2, 2, 2) },
+        JianStatus::Ok
+    );
+    let state = unsafe { get_state(engine) };
+    assert!(state.has_composing);
+    let composing = (state.composing_start, state.composing_end);
+
+    // Caret to the document start — outside the composing range.
+    let set_selection: unsafe extern "C" fn(*mut JianEngine, u32, u32) -> JianStatus =
+        jian_text_set_selection;
+    assert_eq!(unsafe { set_selection(engine, 0, 0) }, JianStatus::Ok);
+
+    let state = unsafe { get_state(engine) };
+    assert!(
+        state.has_composing,
+        "composition must survive an outside selection (jian.h escape hatch)"
+    );
+    assert_eq!((state.composing_start, state.composing_end), composing);
+    assert_eq!((state.selection_start, state.selection_end), (0, 0));
+
+    // The detached caret governs later commits' text placement rule per the
+    // ABI: committing now replaces the COMPOSING range, not the caret.
+    let commit: unsafe extern "C" fn(*mut JianEngine, *const u8, usize, i32, u64) -> JianStatus =
+        jian_ime_commit;
+    assert_eq!(
+        unsafe { commit(engine, b"world".as_ptr(), 5, 1, 0) },
+        JianStatus::Ok
+    );
+    let text = unsafe { get_range(engine, 0, u32::MAX) };
+    assert_eq!(text, "hello world");
+    // The explicit-commit caret formula wins over the detached caret:
+    // N = 1 lands at the committed end (UTF-16 offset 11), not at 0.
+    let state = unsafe { get_state(engine) };
+    assert!(!state.has_composing);
+    assert_eq!((state.selection_start, state.selection_end), (11, 11));
+
+    unsafe { destroy(engine) };
+}

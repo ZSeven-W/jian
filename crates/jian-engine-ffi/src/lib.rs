@@ -1,5 +1,8 @@
 //! C ABI boundary for native Jian Player shells.
 
+#[cfg(all(feature = "debug-hooks", not(debug_assertions)))]
+compile_error!("the debug-hooks feature requires debug assertions (never ship it in release)");
+
 mod capabilities;
 mod desc;
 mod diagnostics;
@@ -247,6 +250,36 @@ pub unsafe extern "C" fn jian_get_pixel_size(
             let value = lifecycle.pixel_size();
             width.write(value.0);
             height.write(value.1);
+            Ok(())
+        })
+    }
+}
+
+/// Debug fault seam (M4 plan Task 3 Step 1b): the next attach/resume fails
+/// AFTER the window/GPU acquisition point, proving the caller's
+/// immediate-release path against a real acquisition.
+#[cfg(all(feature = "debug-hooks", debug_assertions))]
+#[doc(hidden)]
+#[no_mangle]
+pub unsafe extern "C" fn jian_test_force_attach_failure(engine: *mut JianEngine) -> JianStatus {
+    unsafe {
+        call_engine(engine, |lifecycle| {
+            lifecycle.force_attach_failure = true;
+            Ok(())
+        })
+    }
+}
+
+/// Debug fault seam: the next GPU frame reports a forced context loss
+/// (surface dropped, `GpuError` returned) — the deterministic
+/// `GpuError`-frame → suspend/resume recovery repro.
+#[cfg(all(feature = "debug-hooks", debug_assertions))]
+#[doc(hidden)]
+#[no_mangle]
+pub unsafe extern "C" fn jian_test_force_context_loss(engine: *mut JianEngine) -> JianStatus {
+    unsafe {
+        call_engine(engine, |lifecycle| {
+            lifecycle.force_context_loss = true;
             Ok(())
         })
     }

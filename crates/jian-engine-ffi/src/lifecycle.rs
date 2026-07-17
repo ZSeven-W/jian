@@ -33,6 +33,10 @@ enum RenderMode {
 pub(crate) struct Lifecycle {
     pub(crate) runtime: Runtime,
     backend: SkiaBackend,
+    image_registry: jian_skia::InstanceImageRegistry,
+    // Bumped whenever the GPU surface/context is (re)attached: registered
+    // textures from a previous context must re-register (desktop-identical).
+    backend_generation: u64,
     mode: RenderMode,
     pub(crate) suspended: bool,
     pending_relayout: bool,
@@ -49,6 +53,14 @@ pub(crate) struct Lifecycle {
     cpu_surface: Option<SkiaSurface>,
     #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
     metal_surface: Option<jian_skia::surface::metal::MetalSurface>,
+    #[cfg(all(feature = "gl", target_os = "android"))]
+    egl_surface: Option<jian_skia::surface::egl_android::EglSurface>,
+    /// Debug fault seams (M4 plan Task 3 Step 1b): armed by the
+    /// `jian_test_force_*` entry points, consumed by the next attach/frame.
+    #[cfg(all(feature = "debug-hooks", debug_assertions))]
+    pub(crate) force_attach_failure: bool,
+    #[cfg(all(feature = "debug-hooks", debug_assertions))]
+    pub(crate) force_context_loss: bool,
     _storage_dir: Option<String>,
     _asset_base: Option<String>,
 }
@@ -140,6 +152,8 @@ impl Lifecycle {
         let mut lifecycle = Self {
             runtime,
             backend: SkiaBackend::new(),
+            image_registry: jian_skia::InstanceImageRegistry::default(),
+            backend_generation: 0,
             mode: RenderMode::Unselected,
             suspended: false,
             pending_relayout: false,
@@ -156,12 +170,37 @@ impl Lifecycle {
             cpu_surface: None,
             #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
             metal_surface: None,
+            #[cfg(all(feature = "gl", target_os = "android"))]
+            egl_surface: None,
+            #[cfg(all(feature = "debug-hooks", debug_assertions))]
+            force_attach_failure: false,
+            #[cfg(all(feature = "debug-hooks", debug_assertions))]
+            force_context_loss: false,
             _storage_dir: options.storage_dir,
             _asset_base: options.asset_base,
         };
         lifecycle.refresh_text_geometry();
         lifecycle.emit_runtime_diagnostics();
         Ok(lifecycle)
+    }
+
+    /// Spec §6.5: the registering engine relayouts IMMEDIATELY after a
+    /// successful `jian_register_font`; while suspended the relayout defers to
+    /// resume exactly like a suspended resize. Failure keeps the previous
+    /// layout on screen (§4.10) and is reported through the layout-error
+    /// channel. Only compiled with `textlayout`: its sole call site
+    /// (`jian_register_font`) is gated on that feature.
+    #[cfg(feature = "textlayout")]
+    pub(crate) fn note_font_registered(&mut self) {
+        if self.suspended {
+            self.runtime.set_text_geometry_ready(false);
+            self.pending_relayout = true;
+        } else if let Err(error) = self.runtime.relayout() {
+            self.runtime
+                .push_layout_error(format!("font registration relayout failed: {error}"));
+        }
+        self.runtime.mark_dirty();
+        self.notify(None);
     }
 
     pub(crate) fn pixel_size(&self) -> (u32, u32) {
@@ -353,16 +392,44 @@ impl Lifecycle {
         if self.mode != RenderMode::Unselected {
             return Err(FfiError::invalid("render mode is already selected"));
         }
+        #[cfg(all(feature = "debug-hooks", debug_assertions))]
+        if self.force_attach_failure {
+            self.force_attach_failure = false;
+            // The fault fires AFTER the acquisition point: construct, then
+            // drop every GPU object before returning, so the caller's
+            // immediate-release path is exercised for real.
+            #[cfg(all(feature = "gl", target_os = "android"))]
+            {
+                let surface = unsafe { create_egl_surface(handle) }?;
+                drop(surface);
+            }
+            return Err(FfiError::new(
+                JianStatus::GpuError,
+                "debug-hooks: forced attach failure",
+            ));
+        }
         #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
         {
             let surface = unsafe { create_metal_surface(handle) }?;
             self.metal_surface = Some(surface);
         }
-        #[cfg(not(all(feature = "metal", any(target_os = "macos", target_os = "ios"))))]
+        #[cfg(all(feature = "gl", target_os = "android"))]
+        {
+            let surface = unsafe { create_egl_surface(handle) }?;
+            self.egl_surface = Some(surface);
+        }
+        #[cfg(not(any(
+            all(feature = "metal", any(target_os = "macos", target_os = "ios")),
+            all(feature = "gl", target_os = "android")
+        )))]
         unsafe {
             create_metal_surface(handle)?;
         }
         self.mode = RenderMode::Gpu;
+        // Fresh GPU context: drop the backend (and its decoded-image cache)
+        // and bump the generation so textures re-register — desktop-identical.
+        self.backend = SkiaBackend::new();
+        self.backend_generation = self.backend_generation.wrapping_add(1);
         self.suspended = false;
         self.runtime.mark_dirty();
         self.notify(None);
@@ -376,6 +443,13 @@ impl Lifecycle {
         #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
         {
             self.metal_surface = None;
+        }
+        // Synchronous EGL teardown: `surfaceDestroyed` requires every GPU
+        // object bound to the window to be gone before this call returns so
+        // the caller may `ANativeWindow_release` immediately.
+        #[cfg(all(feature = "gl", target_os = "android"))]
+        {
+            self.egl_surface = None;
         }
         self.suspended = true;
         self.pending_relayout = true;
@@ -416,17 +490,55 @@ impl Lifecycle {
                     let metal = unsafe { create_metal_surface(handle) }?;
                     self.metal_surface = Some(metal);
                 }
-                #[cfg(not(all(feature = "metal", any(target_os = "macos", target_os = "ios"))))]
+                #[cfg(all(feature = "gl", target_os = "android"))]
+                {
+                    let surface = unsafe { create_egl_surface(handle) }?;
+                    self.egl_surface = Some(surface);
+                }
+                #[cfg(not(any(
+                    all(feature = "metal", any(target_os = "macos", target_os = "ios")),
+                    all(feature = "gl", target_os = "android")
+                )))]
                 unsafe {
                     create_metal_surface(handle)?;
                 }
+                // Debug seam: the forced failure fires AFTER acquisition on
+                // the resume path too — the constructed surface is dropped
+                // before the error returns (§6.2 error-arm ordering), so the
+                // caller's immediate window release is exercised for real.
+                #[cfg(all(feature = "debug-hooks", debug_assertions))]
+                if self.force_attach_failure {
+                    self.force_attach_failure = false;
+                    #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
+                    {
+                        self.metal_surface = None;
+                    }
+                    #[cfg(all(feature = "gl", target_os = "android"))]
+                    {
+                        self.egl_surface = None;
+                    }
+                    return Err(FfiError::new(
+                        JianStatus::GpuError,
+                        "debug-hooks: forced resume failure",
+                    ));
+                }
+                // New context on resume: fresh backend + generation bump
+                // force texture re-registration (desktop-identical).
+                self.backend = SkiaBackend::new();
+                self.backend_generation = self.backend_generation.wrapping_add(1);
             }
         }
         if self.pending_relayout {
             if let Err(error) = self.runtime.relayout() {
+                // Error-arm ordering (§6.2): drop every GPU object bound to
+                // the window BEFORE returning, so the caller can release it.
                 #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
                 if self.mode == RenderMode::Gpu {
                     self.metal_surface = None;
+                }
+                #[cfg(all(feature = "gl", target_os = "android"))]
+                if self.mode == RenderMode::Gpu {
+                    self.egl_surface = None;
                 }
                 return Err(layout_error(error));
             }
@@ -451,14 +563,26 @@ impl Lifecycle {
     #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
     fn frame_gpu_selected(&mut self, now_ms: u64) -> FfiResult<()> {
         let directive = self.runtime.pump(now_ms);
-        let commands = prepare_commands(&mut self.runtime, &mut self.backend);
+        let commands = prepare_commands(
+            &mut self.runtime,
+            &mut self.backend,
+            &mut self.image_registry,
+            self.backend_generation,
+        );
         let presented = {
             let mut surface = self
                 .metal_surface
                 .take()
                 .ok_or_else(|| FfiError::new(JianStatus::GpuError, "GPU surface is unavailable"))?;
-            let result = surface
-                .draw_frame(|frame| paint_commands(&mut self.backend, frame, commands, self.dpr));
+            let result = surface.draw_frame(|frame| {
+                paint_commands(
+                    &mut self.backend,
+                    &mut self.image_registry,
+                    frame,
+                    commands,
+                    self.dpr,
+                )
+            });
             self.metal_surface = Some(surface);
             result.map_err(|message| FfiError::new(JianStatus::GpuError, message))?
         };
@@ -469,11 +593,73 @@ impl Lifecycle {
         Ok(())
     }
 
-    #[cfg(not(all(feature = "metal", any(target_os = "macos", target_os = "ios"))))]
+    #[cfg(all(feature = "gl", target_os = "android"))]
+    fn frame_gpu_selected(&mut self, now_ms: u64) -> FfiResult<()> {
+        let mut directive = self.runtime.pump(now_ms);
+        let commands = prepare_commands(
+            &mut self.runtime,
+            &mut self.backend,
+            &mut self.image_registry,
+            self.backend_generation,
+        );
+        let mut surface = self
+            .egl_surface
+            .take()
+            .ok_or_else(|| FfiError::new(JianStatus::GpuError, "GPU surface is unavailable"))?;
+        #[allow(unused_mut)]
+        let mut result = surface.draw_frame(|frame| {
+            paint_commands(
+                &mut self.backend,
+                &mut self.image_registry,
+                frame,
+                commands,
+                self.dpr,
+            )
+        });
+        // Debug seam: the forced loss is injected as a RESULT so the
+        // production classification/teardown arms below are what handle it.
+        #[cfg(all(feature = "debug-hooks", debug_assertions))]
+        if self.force_context_loss {
+            self.force_context_loss = false;
+            result = Err(jian_skia::surface::egl_android::EglFrameError::ContextLost(
+                "debug-hooks: forced context loss".into(),
+            ));
+        }
+        match result {
+            Ok(true) => {
+                self.egl_surface = Some(surface);
+                self.runtime.frame_presented();
+            }
+            Ok(false) => {
+                // Unpaintable-but-live: dirty stays set, and the retry wake
+                // is FOLDED into this frame's single end-of-frame directive
+                // (a separate synthetic callback would be cancelled by it).
+                self.egl_surface = Some(surface);
+                let retry = now_ms.saturating_add(16);
+                directive.next_wake_ms =
+                    Some(directive.next_wake_ms.map_or(retry, |wake| wake.min(retry)));
+            }
+            Err(error) => {
+                // Defunct object (ContextLost) or fatal: the surface is
+                // dropped HERE so no EGL object outlives the caller's right
+                // to release the window; the shell recovers via
+                // suspend -> resume. The variant name rides in the text.
+                drop(surface);
+                return Err(FfiError::new(JianStatus::GpuError, error.to_string()));
+            }
+        }
+        self.notify(Some(directive));
+        Ok(())
+    }
+
+    #[cfg(not(any(
+        all(feature = "metal", any(target_os = "macos", target_os = "ios")),
+        all(feature = "gl", target_os = "android")
+    )))]
     fn frame_gpu_selected(&mut self, _now_ms: u64) -> FfiResult<()> {
         Err(FfiError::new(
             JianStatus::GpuError,
-            "Metal support is unavailable in this build",
+            "no GPU backend is available in this build",
         ))
     }
 
@@ -521,8 +707,19 @@ impl Lifecycle {
             })?,
         };
         let directive = self.runtime.pump(now_ms);
-        let commands = prepare_commands(&mut self.runtime, &mut self.backend);
-        paint_commands(&mut self.backend, &mut surface, commands, self.dpr);
+        let commands = prepare_commands(
+            &mut self.runtime,
+            &mut self.backend,
+            &mut self.image_registry,
+            self.backend_generation,
+        );
+        paint_commands(
+            &mut self.backend,
+            &mut self.image_registry,
+            &mut surface,
+            commands,
+            self.dpr,
+        );
 
         let mut pixels = Vec::new();
         pixels.try_reserve_exact(contiguous_len).map_err(|_| {
@@ -695,12 +892,23 @@ unsafe fn create_metal_surface(
         .map_err(|message| FfiError::new(JianStatus::GpuError, message))
 }
 
-#[cfg(not(all(feature = "metal", any(target_os = "macos", target_os = "ios"))))]
+#[cfg(not(any(
+    all(feature = "metal", any(target_os = "macos", target_os = "ios")),
+    all(feature = "gl", target_os = "android")
+)))]
 unsafe fn create_metal_surface(_handle: *mut std::ffi::c_void) -> FfiResult<()> {
     Err(FfiError::new(
         JianStatus::GpuError,
-        "Metal support is unavailable in this build",
+        "no GPU backend is available in this build",
     ))
+}
+
+#[cfg(all(feature = "gl", target_os = "android"))]
+unsafe fn create_egl_surface(
+    handle: *mut std::ffi::c_void,
+) -> FfiResult<jian_skia::surface::egl_android::EglSurface> {
+    unsafe { jian_skia::surface::egl_android::EglSurface::from_native_window(handle) }
+        .map_err(|message| FfiError::new(JianStatus::GpuError, message))
 }
 
 pub struct JianEngine {

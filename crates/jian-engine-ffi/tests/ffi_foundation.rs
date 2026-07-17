@@ -275,3 +275,35 @@ fn synchronous_callback_reentry_is_wrong_thread() {
     );
     assert_eq!(unsafe { destroy(engine) }, JianStatus::Ok);
 }
+
+// M3 T9 acceptance: a huge resize must fail with InvalidArg WITHOUT
+// poisoning — the engine keeps its previous viewport and keeps serving.
+#[test]
+fn huge_resize_returns_invalid_arg_without_poisoning() {
+    let engine = unsafe { create(&exact_desc(DOC, 320.0, 240.0, 1.0)).unwrap() };
+    let resize: unsafe extern "C" fn(*mut JianEngine, f32, f32, f32) -> JianStatus = jian_resize;
+    let pixel_size: unsafe extern "C" fn(*mut JianEngine, *mut u32, *mut u32) -> JianStatus =
+        jian_get_pixel_size;
+
+    // 17000 > the 16384 physical-axis cap.
+    assert_eq!(
+        unsafe { resize(engine, 17000.0, 17000.0, 1.0) },
+        JianStatus::InvalidArg
+    );
+
+    // Previous viewport retained, engine not poisoned: queries and a valid
+    // follow-up resize still succeed.
+    let (mut w, mut h) = (0u32, 0u32);
+    assert_eq!(
+        unsafe { pixel_size(engine, &mut w, &mut h) },
+        JianStatus::Ok
+    );
+    assert_eq!((w, h), (320, 240));
+    assert_eq!(unsafe { resize(engine, 300.0, 200.0, 1.0) }, JianStatus::Ok);
+    assert_eq!(
+        unsafe { pixel_size(engine, &mut w, &mut h) },
+        JianStatus::Ok
+    );
+    assert_eq!((w, h), (300, 200));
+    assert_eq!(unsafe { destroy(engine) }, JianStatus::Ok);
+}
