@@ -262,12 +262,31 @@ fn final_job_runs_after_drain_before_quit() {
             || panic!("drained"),
             Some(move || lc.lock().unwrap().push("cleanup")),
         );
+        // Admission handshake: the cleanup-job must be ENQUEUED before the
+        // close, so it drains (cleanup fires) instead of running its job.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while engine.queued_jobs() < 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the cleanup job never enqueued"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let lf = log.clone();
         let closer_engine = engine.clone();
         let closer = std::thread::spawn(move || {
             closer_engine.close(move || lf.lock().unwrap().push("final"));
         });
-        std::thread::sleep(Duration::from_millis(100));
+        // Close-landed handshake: releasing the gate before closing is
+        // observed could let the cleanup job RUN instead of drain.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !engine.post(|| {}).is_closing() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "closing never took effect"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         gate.wait();
         closer.join().unwrap();
         assert_eq!(*log.lock().unwrap(), vec!["cleanup", "final"]);
@@ -295,10 +314,28 @@ fn destroy_during_inflight_job() {
         entered.wait(); // the loop is provably INSIDE the in-flight job
         let waiter_engine = engine.clone();
         let waiter = std::thread::spawn(move || waiter_engine.call(|| 9));
-        std::thread::sleep(Duration::from_millis(80));
+        // Admission handshake: the waiter's job is ENQUEUED behind the
+        // in-flight job before the close, so its Closing is provably a drain.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while engine.queued_jobs() < 1 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the call() waiter never enqueued"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let closer_engine = engine.clone();
         let closer = std::thread::spawn(move || closer_engine.close(|| {}));
-        std::thread::sleep(Duration::from_millis(50));
+        // Close-landed handshake: the close is pending (closing observed)
+        // while the in-flight job is still held.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !engine.post(|| {}).is_closing() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "closing never took effect"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         gate.wait(); // in-flight job proceeds while close is pending
         closer.join().unwrap();
         assert!(
@@ -470,67 +507,118 @@ fn concurrent_close_loser_waits_for_active_teardown() {
     });
 }
 
-// (m) mid-life panic salvage: a panicking job unwinds the engine thread;
-// queued cleanups still run (salvage drain), the queue closes, and the
-// FIRST close() after the death runs its final job on the CALLING thread
-// (the destroy must not leak — the engine thread no longer exists). A
-// second close() drops its final job: exactly one destroy runs.
+// (m) a panicking post() job must NOT kill the engine thread: the panic is
+// caught and swallowed (fire-and-forget has no caller), and the engine keeps
+// processing — a subsequent call() returns normally, and close() still tears
+// down cleanly.
 #[test]
-fn panic_salvage_and_post_death_close() {
+fn panicking_post_job_does_not_kill_the_engine() {
     with_timeout(|| {
         let engine = Arc::new(EngineThread::spawn("t-m"));
-        let gate = Arc::new(Barrier::new(2));
-        let g = gate.clone();
-        let _ = engine.post(move || {
-            g.wait();
-        });
-        // Queued behind the held job: the panicking job, then a job whose
-        // cleanup must still fire via the salvage drain.
-        let _ = engine.post(|| panic!("boom (deliberate test panic)"));
-        let salvaged = Arc::new(AtomicBool::new(false));
-        let s = salvaged.clone();
-        let _ = engine.post_with_cleanup(
-            || panic!("job behind the panicking job must never run"),
-            Some(move || s.store(true, Ordering::SeqCst)),
+        assert_eq!(
+            engine.post(|| panic!("boom (deliberate test panic)")),
+            Dispatch::Done(())
         );
-        gate.wait(); // release → held job returns → panic job runs → unwind
+        // The engine survives: a job queued AFTER the panicking one runs.
+        assert_eq!(engine.call(|| 21 + 21), Dispatch::Done(42));
+        let final_ran = Arc::new(AtomicBool::new(false));
+        let fr = final_ran.clone();
+        engine.close(move || fr.store(true, Ordering::SeqCst));
+        assert!(
+            final_ran.load(Ordering::SeqCst),
+            "the destroy must run after a survived panic"
+        );
+    });
+}
 
-        // Salvage sets closing during the unwind; from then on dispatch is
-        // rejected.
+// (n) a panicking call() job must neither deadlock the caller nor kill the
+// engine: the panic is captured on the engine thread and RE-RAISED on the
+// calling thread (JoinHandle::join semantics), while the engine keeps
+// serving later calls.
+#[test]
+fn call_job_panic_propagates_without_deadlock() {
+    with_timeout(|| {
+        let engine = Arc::new(EngineThread::spawn("t-n"));
+        let caller_engine = engine.clone();
+        let caller = std::thread::spawn(move || {
+            caller_engine.call(|| -> i32 { panic!("boom (deliberate test panic)") })
+        });
+        // The panic surfaces on the caller (Err), NOT a park.
+        assert!(
+            caller.join().is_err(),
+            "the engine job's panic must re-raise on the caller, not park it"
+        );
+        // The engine is still alive and serving.
+        assert_eq!(engine.call(|| 7 * 6), Dispatch::Done(42));
+        engine.close(|| {});
+    });
+}
+
+// (o) a panicking cleanup on the callback-origin (deferred) drain must not
+// lose the destroy. This is the load-bearing case: in
+// `drain_then_take_deferred` the final job is a LOCAL taken out of shared
+// state before the cleanups run, so an unguarded cleanup panic would drop it
+// with no salvage able to recover it. Guarded, the remaining cleanup still
+// runs and the deferred final job still executes.
+#[test]
+fn panicking_cleanup_on_deferred_drain_keeps_the_destroy() {
+    with_timeout(|| {
+        let engine = Arc::new(EngineThread::spawn("t-o"));
+        let final_ran = Arc::new(AtomicBool::new(false));
+        let second_cleanup = Arc::new(AtomicBool::new(false));
+
+        let inner = engine.clone();
+        let fr = final_ran.clone();
+        let gate = Arc::new(Barrier::new(2));
+        let admitted_gate = Arc::new(Barrier::new(2));
+        let g = gate.clone();
+        let ag = admitted_gate.clone();
+        let driver_engine = engine.clone();
+        let driver = std::thread::spawn(move || {
+            driver_engine.call(move || {
+                g.wait();
+                // Hold the close until the drain-bound jobs are admitted.
+                ag.wait();
+                enter_callback_frame();
+                let deferred = inner.close_deferred(move || fr.store(true, Ordering::SeqCst));
+                assert_eq!(deferred, Dispatch::Done(()));
+                exit_callback_frame();
+            })
+        });
+        gate.wait();
+        // Two jobs admitted BEFORE close_deferred, so they drain through
+        // drain_then_take_deferred: the FIRST cleanup panics; the second
+        // must still run, and the deferred final must still execute.
+        assert_eq!(
+            engine.post_with_cleanup(
+                || panic!("admitted-before-close job must drain, not run"),
+                Some(|| panic!("boom (deliberate cleanup panic)")),
+            ),
+            Dispatch::Done(())
+        );
+        let sc = second_cleanup.clone();
+        assert_eq!(
+            engine.post_with_cleanup(
+                || panic!("admitted-before-close job must drain, not run"),
+                Some(move || sc.store(true, Ordering::SeqCst)),
+            ),
+            Dispatch::Done(())
+        );
+        admitted_gate.wait(); // now the outer job may close_deferred
+
+        assert_eq!(driver.join().unwrap(), Dispatch::Done(()));
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !engine.post(|| {}).is_closing() {
+        while !final_ran.load(Ordering::SeqCst) {
             assert!(
                 std::time::Instant::now() < deadline,
-                "salvage never closed the queue"
+                "the deferred destroy must survive a panicking cleanup"
             );
             std::thread::sleep(Duration::from_millis(5));
         }
-
-        // First post-death close(): its final job MUST run, on this thread.
-        let final_ran = Arc::new(AtomicBool::new(false));
-        let fr = final_ran.clone();
-        let caller = std::thread::current().id();
-        let ran_on = Arc::new(Mutex::new(None));
-        let ro = ran_on.clone();
-        engine.close(move || {
-            fr.store(true, Ordering::SeqCst);
-            *ro.lock().unwrap() = Some(std::thread::current().id());
-        });
         assert!(
-            final_ran.load(Ordering::SeqCst),
-            "the post-death close must still run its destroy"
+            second_cleanup.load(Ordering::SeqCst),
+            "the cleanup AFTER the panicking one must still run"
         );
-        assert_eq!(
-            *ran_on.lock().unwrap(),
-            Some(caller),
-            "the post-death destroy runs on the closing thread"
-        );
-        assert!(
-            salvaged.load(Ordering::SeqCst),
-            "the queued cleanup must have been salvaged during the unwind"
-        );
-        // Second close(): exactly one destroy — its final job is dropped.
-        engine.close(|| panic!("a second close must not run a second destroy"));
     });
 }
 
