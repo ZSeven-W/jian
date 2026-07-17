@@ -1,0 +1,24 @@
+[package]
+name       = "jian-jni"
+version    = "0.0.1"
+edition    = "2021"
+license    = "MIT"
+publish    = false
+description = "Android JNI marshalling layer for the jian engine (spec §6.7)"
+
+[lib]
+# cdylib for the Android Player; rlib so the host-triple queue tests link.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default    = []
+gl         = ["jian-engine-ffi/gl"]
+textlayout = ["jian-engine-ffi/textlayout"]
+debug-hooks = ["jian-engine-ffi/debug-hooks"]
+
+[dependencies]
+jian-engine-ffi = { path = "../jian-engine-ffi" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni     = "0.21"
+ndk-sys = "0.6"
