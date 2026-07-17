@@ -43,13 +43,46 @@ impl<R> Dispatch<R> {
 }
 
 /// Runs a teardown-side closure so a panic can never skip the work that
-/// follows it. The panic payload is dropped after logging: on the drain and
-/// final-job paths there is no caller to receive it, and losing one buggy
-/// cleanup's panic is strictly better than losing the destroy.
+/// follows it. On the drain and final-job paths there is no caller to
+/// receive the panic, and losing one buggy cleanup's panic is strictly
+/// better than losing the destroy.
+///
+/// The caught payload is itself dropped INSIDE a nested guard: a
+/// `panic_any` payload can carry a value whose own `Drop` panics, and that
+/// drop happening outside a guard would unwind the engine thread — the exact
+/// failure this function exists to prevent. A payload whose `Drop` panics is
+/// caught once here; a panic WHILE handling that panic is a genuine
+/// double-fault and aborts (std's defined behavior), which is correct.
 fn run_guarded(what: &str, f: impl FnOnce()) {
-    if catch_unwind(AssertUnwindSafe(f)).is_err() {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(f)) {
         eprintln!("jian-jni: {what} panicked; continuing teardown");
+        let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
     }
+}
+
+/// Drops a value inside [`run_guarded`] so a panicking `Drop` on discarded
+/// closure state (e.g. a job's unexecuted `run` body, or a completed job's
+/// now-unused `cleanup`) can never unwind the engine thread.
+fn guard_drop<T>(what: &str, value: T) {
+    run_guarded(what, move || drop(value));
+}
+
+/// Runs `job` for the NORMAL (non-closing) path: execute its body guarded,
+/// then guard-drop the now-unused cleanup.
+fn run_job(job: Job) {
+    let Job { run, cleanup } = job;
+    run_guarded("engine job", run);
+    guard_drop("spent cleanup", cleanup);
+}
+
+/// DRAINS `job` on a close path: run its cleanup guarded (waiter completion,
+/// global-ref retirement), then guard-drop the unexecuted body.
+fn drain_job(job: Job) {
+    let Job { run, cleanup } = job;
+    if let Some(cleanup) = cleanup {
+        run_guarded("drained cleanup", cleanup);
+    }
+    guard_drop("drained job body", run);
 }
 
 /// A queued unit of work. `cleanup` runs ON the engine thread when the job is
@@ -158,11 +191,7 @@ fn salvage_teardown(shared: &Shared) {
     };
     for message in drained {
         match message {
-            Message::Job(job) => {
-                if let Some(cleanup) = job.cleanup {
-                    run_guarded("salvaged cleanup", cleanup);
-                }
-            }
+            Message::Job(job) => drain_job(job),
             Message::Close(final_job) => run_guarded("salvaged final job", final_job.run),
         }
     }
@@ -497,9 +526,9 @@ fn run_loop(shared: Arc<Shared>) {
             // execution; only their cleanups (waiter completion, global-ref
             // retirement) run, on this thread.
             Message::Job(job) if closing => {
-                if let Some(cleanup) = job.cleanup {
-                    run_guarded("drained cleanup", cleanup);
-                }
+                // Drain: run the cleanup guarded and guard-drop the
+                // unexecuted body — either could carry a panicking Drop.
+                drain_job(job);
                 // A callback-origin close parked its teardown while this job
                 // was already dequeued-but-drained; honor it now.
                 if let Some(final_job) = drain_then_take_deferred(&shared) {
@@ -511,7 +540,8 @@ fn run_loop(shared: Arc<Shared>) {
                 // A user job never unwinds the engine thread: post() jobs are
                 // fire-and-forget (a panic is logged and swallowed); call()
                 // jobs capture their own panic and re-raise it on the caller.
-                run_guarded("engine job", job.run);
+                // The now-unused cleanup is guard-dropped by run_job.
+                run_job(job);
                 // A callback-origin close (close_deferred) set closing and
                 // parked the final teardown while this job ran: drain the
                 // queue cleanup-only, run it strictly last, and exit.
@@ -523,15 +553,12 @@ fn run_loop(shared: Arc<Shared>) {
             Message::Close(final_job) => {
                 // Drain WITHOUT execution, completing each waiter via its
                 // cleanup, all on this thread — each guarded so one panicking
-                // cleanup cannot drop the destroy that follows.
+                // cleanup (or a panicking Drop on a discarded body) cannot
+                // drop the destroy that follows.
                 loop {
                     let drained = shared.queue.lock().unwrap().messages.pop_front();
                     match drained {
-                        Some(Message::Job(job)) => {
-                            if let Some(cleanup) = job.cleanup {
-                                run_guarded("drained cleanup", cleanup);
-                            }
-                        }
+                        Some(Message::Job(job)) => drain_job(job),
                         Some(Message::Close(extra)) => {
                             // A second close (e.g. Drop after close) — its
                             // final job is a no-op by construction.
@@ -561,11 +588,7 @@ fn drain_then_take_deferred(shared: &Arc<Shared>) -> Option<Job> {
         drop(queue);
         for message in drained {
             match message {
-                Message::Job(job) => {
-                    if let Some(cleanup) = job.cleanup {
-                        run_guarded("drained cleanup", cleanup);
-                    }
-                }
+                Message::Job(job) => drain_job(job),
                 Message::Close(extra) => run_guarded("extra final job", extra.run),
             }
         }

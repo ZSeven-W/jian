@@ -1,5 +1,5 @@
 //! Host-triple tests for the §6.7 queue core — one test per contract clause
-//! (M4 plan Task 4 Step 2, cases (a)–(k)).
+//! (M4 plan Task 4 Step 2, cases (a)–(p)).
 
 use jian_jni::engine_thread::{enter_callback_frame, exit_callback_frame, Dispatch, EngineThread};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -619,6 +619,75 @@ fn panicking_cleanup_on_deferred_drain_keeps_the_destroy() {
             second_cleanup.load(Ordering::SeqCst),
             "the cleanup AFTER the panicking one must still run"
         );
+    });
+}
+
+// (p) a panicking Drop on discarded closure state (or a `panic_any` payload
+// with a panicking Drop) must not unwind the engine and lose the deferred
+// destroy. A drained job whose UNEXECUTED body captures a value whose Drop
+// panics, plus a cleanup that panics with such a payload, is drained on the
+// callback-origin path; the deferred final job must still run.
+#[test]
+fn panicking_drop_on_discarded_state_keeps_the_destroy() {
+    struct PanicOnDrop;
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("boom (deliberate panicking Drop)");
+        }
+    }
+
+    with_timeout(|| {
+        let engine = Arc::new(EngineThread::spawn("t-p"));
+        let final_ran = Arc::new(AtomicBool::new(false));
+
+        let inner = engine.clone();
+        let fr = final_ran.clone();
+        let gate = Arc::new(Barrier::new(2));
+        let admitted_gate = Arc::new(Barrier::new(2));
+        let g = gate.clone();
+        let ag = admitted_gate.clone();
+        let driver_engine = engine.clone();
+        let driver = std::thread::spawn(move || {
+            driver_engine.call(move || {
+                g.wait();
+                ag.wait();
+                enter_callback_frame();
+                let deferred = inner.close_deferred(move || fr.store(true, Ordering::SeqCst));
+                assert_eq!(deferred, Dispatch::Done(()));
+                exit_callback_frame();
+            })
+        });
+        gate.wait();
+        // A drained-bound job whose UNEXECUTED body captures a panicking-Drop
+        // value — the body is never called, only dropped.
+        let poison = PanicOnDrop;
+        assert_eq!(
+            engine.post(move || {
+                let _hold = poison;
+                unreachable!("drained job body must not run");
+            }),
+            Dispatch::Done(())
+        );
+        // A second drained job whose CLEANUP panics with a panic_any payload
+        // that itself has a panicking Drop.
+        assert_eq!(
+            engine.post_with_cleanup(
+                || unreachable!("drained job must not run"),
+                Some(|| std::panic::panic_any(PanicOnDrop)),
+            ),
+            Dispatch::Done(())
+        );
+        admitted_gate.wait();
+
+        assert_eq!(driver.join().unwrap(), Dispatch::Done(()));
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !final_ran.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the deferred destroy must survive a panicking Drop on discarded state"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
     });
 }
 
