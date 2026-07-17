@@ -622,17 +622,30 @@ fn panicking_cleanup_on_deferred_drain_keeps_the_destroy() {
     });
 }
 
-// (p) a panicking Drop on discarded closure state (or a `panic_any` payload
-// with a panicking Drop) must not unwind the engine and lose the deferred
-// destroy. A drained job whose UNEXECUTED body captures a value whose Drop
-// panics, plus a cleanup that panics with such a payload, is drained on the
-// callback-origin path; the deferred final job must still run.
+// (p) a panicking Drop on discarded closure state — or a `panic_any`
+// payload whose Drop itself panics with ANOTHER panicking-Drop payload
+// (arbitrarily deep) — must not unwind the engine and lose the deferred
+// destroy. A drained job whose UNEXECUTED body captures a panicking-Drop
+// value, plus a cleanup that panics with a NESTED panicking-Drop payload,
+// is drained on the callback-origin path; the deferred final job must still
+// run. The nested payload is what exercises drop_guarded's forget-on-poison
+// arm: catching the cleanup panic yields a payload whose own drop panics
+// again.
 #[test]
 fn panicking_drop_on_discarded_state_keeps_the_destroy() {
     struct PanicOnDrop;
     impl Drop for PanicOnDrop {
         fn drop(&mut self) {
             panic!("boom (deliberate panicking Drop)");
+        }
+    }
+
+    // Its own Drop panics WITH a further panicking-Drop payload — so the
+    // payload the queue catches from this one ALSO panics when dropped.
+    struct NestedPanicOnDrop;
+    impl Drop for NestedPanicOnDrop {
+        fn drop(&mut self) {
+            std::panic::panic_any(PanicOnDrop);
         }
     }
 
@@ -668,12 +681,13 @@ fn panicking_drop_on_discarded_state_keeps_the_destroy() {
             }),
             Dispatch::Done(())
         );
-        // A second drained job whose CLEANUP panics with a panic_any payload
-        // that itself has a panicking Drop.
+        // A second drained job whose CLEANUP panics with a NESTED
+        // panicking-Drop payload: catching it yields a payload whose own
+        // drop panics again — drop_guarded must forget it, never re-drop.
         assert_eq!(
             engine.post_with_cleanup(
                 || unreachable!("drained job must not run"),
-                Some(|| std::panic::panic_any(PanicOnDrop)),
+                Some(|| std::panic::panic_any(NestedPanicOnDrop)),
             ),
             Dispatch::Done(())
         );

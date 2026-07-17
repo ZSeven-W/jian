@@ -47,16 +47,28 @@ impl<R> Dispatch<R> {
 /// receive the panic, and losing one buggy cleanup's panic is strictly
 /// better than losing the destroy.
 ///
-/// The caught payload is itself dropped INSIDE a nested guard: a
-/// `panic_any` payload can carry a value whose own `Drop` panics, and that
-/// drop happening outside a guard would unwind the engine thread — the exact
-/// failure this function exists to prevent. A payload whose `Drop` panics is
-/// caught once here; a panic WHILE handling that panic is a genuine
-/// double-fault and aborts (std's defined behavior), which is correct.
+/// The caught payload is dropped through [`drop_guarded`]: a `panic_any`
+/// payload can carry a value whose own `Drop` panics — arbitrarily deep —
+/// and any such drop happening outside a guard would unwind the engine
+/// thread, the exact failure this function exists to prevent.
 fn run_guarded(what: &str, f: impl FnOnce()) {
     if let Err(payload) = catch_unwind(AssertUnwindSafe(f)) {
         eprintln!("jian-jni: {what} panicked; continuing teardown");
-        let _ = catch_unwind(AssertUnwindSafe(move || drop(payload)));
+        drop_guarded(payload);
+    }
+}
+
+/// Drops a caught panic payload without any possibility of unwinding. The
+/// common case drops it normally (no leak); if the payload's own `Drop`
+/// panics, the resulting payload is FORGOTTEN rather than dropped — its
+/// `Drop` never runs, so an arbitrarily deep panicking-`Drop` chain cannot
+/// re-enter and unwind. The cost is a small memory leak on the (already
+/// exceptional) teardown-panic path, which is strictly better than losing
+/// the destroy. `mem::forget` never runs a destructor, so this cannot
+/// recurse.
+fn drop_guarded(payload: Box<dyn Any + Send + 'static>) {
+    if let Err(poison) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
+        std::mem::forget(poison);
     }
 }
 
