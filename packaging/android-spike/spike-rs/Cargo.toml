@@ -1,0 +1,20 @@
+# Throwaway M4 Task-1 spike: prove skia-safe + EGL/GLES renders into an
+# ANativeWindow on Android. Standalone crate (detached from the jian
+# workspace) mirroring packaging/ios-spike.
+[package]
+name    = "jian-android-spike"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[lib]
+name       = "spike"
+crate-type = ["cdylib"]
+
+[dependencies]
+skia-safe   = { version = "0.97.0", features = ["gl"] }
+khronos-egl = { version = "6", features = ["static", "no-pkg-config"] }
+ndk-sys     = "0.6"
+jni         = "0.21"
+
+[workspace]
