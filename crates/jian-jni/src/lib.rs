@@ -15,6 +15,8 @@ pub mod bindings;
 #[cfg(target_os = "android")]
 pub mod callbacks;
 #[cfg(target_os = "android")]
+pub mod text;
+#[cfg(target_os = "android")]
 pub mod window;
 
 pub use engine_thread::{Dispatch, EngineThread, STATUS_CLOSING};

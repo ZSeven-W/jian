@@ -83,11 +83,11 @@ fn clone_vm(vm: &JavaVM) -> JavaVM {
 }
 
 /// Records the process `JavaVM` so engine threads can attach and callbacks
-/// can resolve a `JNIEnv`.
-///
-/// # Safety
-/// Called by the JVM at library load with a valid `vm`.
+/// can resolve a `JNIEnv`. The JVM calls this exactly once at library load
+/// with a valid `vm` (the raw pointer's validity is the JVM's contract, not
+/// something a Rust caller could violate — hence the lint allowance).
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "system" fn JNI_OnLoad(vm: *mut jni::sys::JavaVM, _reserved: *mut c_void) -> jint {
     if let Ok(vm) = unsafe { JavaVM::from_raw(vm) } {
         let _ = VM.set(vm);
