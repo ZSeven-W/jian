@@ -6,6 +6,11 @@ use std::rc::Rc;
 
 impl Runtime {
     pub fn build_layout(&mut self, available: (f32, f32)) -> CoreResult<()> {
+        // Captured BEFORE any measurement: a registration racing the build
+        // window must leave `font_generation_seen` behind the global counter
+        // so the next pump repairs the mixed-generation geometry (§6.5's
+        // at-most-one-frame staleness guarantee).
+        let font_generation_at_build = self.layout.measure.font_generation();
         let responsive = self
             .document
             .as_ref()
@@ -93,6 +98,7 @@ impl Runtime {
             self.focus.clear();
         }
         self.layout_mutation_seen = self.mutation_counter.get();
+        self.font_generation_seen = font_generation_at_build;
         self.mark_dirty();
         Ok(())
     }

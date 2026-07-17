@@ -104,6 +104,9 @@ pub struct Runtime {
     variant_source: Option<PenDocument>,
     mutation_counter: Rc<Cell<u64>>,
     layout_mutation_seen: u64,
+    /// Last process-global font generation a successful layout measured
+    /// against (spec §6.5 fanout: pump relayouts on drift).
+    font_generation_seen: u64,
     last_variant_build_count: usize,
     action_surface_inputs: Vec<crate::action_surface::ActionDefinition>,
     action_surface_generation: u64,

@@ -113,6 +113,25 @@ impl Runtime {
             self.scheduler.flush();
             self.mark_dirty();
         }
+        // Spec §6.5 font-invalidation fanout: a process-global registration
+        // (possibly by ANOTHER engine) invalidates shaped geometry everywhere.
+        // Drift re-runs measurement + layout + spatial before the next paint.
+        // On failure the previous layout stays on screen and the retry waits
+        // for the NEXT generation/viewport change (rebuild-once), because a
+        // successful relayout re-baselines `font_generation_seen` itself.
+        let font_generation = self.layout.measure.font_generation();
+        if font_generation != self.font_generation_seen {
+            if let Err(error) = self.relayout() {
+                self.push_layout_error(format!("font-generation relayout failed: {error}"));
+                // Rebuild-once: a persistently failing layout must not retry
+                // every pump; the next generation change retries.
+                self.font_generation_seen = font_generation;
+            }
+            // On success `build_layout` baselined `font_generation_seen` to
+            // the generation it measured under; a registration racing THIS
+            // relayout leaves it behind, and the next pump repairs it.
+            self.mark_dirty();
+        }
         let mutation = self.mutation_counter.get();
         if mutation != self.layout_mutation_seen && self.has_responsive_layout_bindings() {
             if let Err(error) = self.relayout() {

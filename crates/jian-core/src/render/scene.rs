@@ -966,10 +966,33 @@ fn emit_live_text_input(
     }
 
     // --- selection highlight (behind text) ---
+    // While composing, a detached (escape-hatch) selection highlights in the
+    // EFFECTIVE text; otherwise the durable highlight applies unchanged.
+    let effective_highlight = st.composition().and_then(|c| c.detached).and_then(|d| {
+        let (a, b) = if d.anchor <= d.focus {
+            (d.anchor, d.focus)
+        } else {
+            (d.focus, d.anchor)
+        };
+        (a != b).then_some((a, b))
+    });
     if focused {
-        if let Some((a, b)) = st.highlight_range() {
-            let x0 = x_at(a, live);
-            let x1 = x_at(b, live);
+        if let Some((a, b)) = effective_highlight.or_else(|| {
+            if st.composition().is_some_and(|c| c.detached.is_some()) {
+                None
+            } else {
+                st.highlight_range()
+            }
+        }) {
+            // `text` == the effective text whenever a composition exists
+            // (composing implies non-empty display).
+            let sel_text: &str = if effective_highlight.is_some() {
+                &text
+            } else {
+                live
+            };
+            let x0 = x_at(a, sel_text);
+            let x1 = x_at(b, sel_text);
             if x1 > x0 {
                 out.push(DrawOp::Rect {
                     rect: rect(x0, text_top, x1 - x0, font_size),
@@ -982,6 +1005,20 @@ fn emit_live_text_input(
             }
         }
     }
+
+    // Caret x is computed BEFORE the text run consumes `text` (the DrawOp
+    // push below keeps the caret above the glyphs in z-order).
+    let caret_x = match st.composition() {
+        Some(_) => {
+            // Paint at the EFFECTIVE caret: honors both the composing-relative
+            // cursor and a detached (escape-hatch) selection, boundary-clamped
+            // against the displayed effective text.
+            let focus = st.effective_selection().focus;
+            let pre = crate::text_input::prev_char_boundary(&text, focus.min(text.len()));
+            x_at(pre, &text)
+        }
+        None => x_at(st.caret(), live),
+    };
 
     // --- text run ---
     if !text.is_empty() {
@@ -1004,20 +1041,14 @@ fn emit_live_text_input(
     }
 
     // --- caret: focused, collapsed selection, blink-visible ---
-    if focused && st.highlight_range().is_none() && st.caret_visible(ctx.now_ms) {
-        let cx = match st.composition() {
-            Some(c) => {
-                // The host-supplied composition cursor is a byte offset
-                // that may not be UTF-8 boundary-aligned; clamp it down to
-                // the nearest boundary before slicing (else `c.text[..pre]`
-                // panics on a multi-byte preedit).
-                let pre = crate::text_input::prev_char_boundary(&c.text, c.cursor);
-                x_at(st.caret(), live) + c.text[..pre].chars().count() as f32 * char_w
-            }
-            None => x_at(st.caret(), live),
-        };
+    let caret_suppressed = if st.composition().is_some_and(|c| c.detached.is_some()) {
+        effective_highlight.is_some()
+    } else {
+        st.highlight_range().is_some()
+    };
+    if focused && !caret_suppressed && st.caret_visible(ctx.now_ms) {
         out.push(DrawOp::Rect {
-            rect: rect(cx, text_top, 1.0, font_size),
+            rect: rect(caret_x, text_top, 1.0, font_size),
             paint: Paint {
                 fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xff)),
                 stroke: None,
@@ -2016,6 +2047,96 @@ mod tests {
             point(140.0, 20.0),
             "root 'b' authors x=140,y=20 — its subtree must draw at that origin, \
              not collapse onto root 'a' at (0,0)"
+        );
+    }
+
+    // Escape-hatch rendering (M4 plan Task 3b follow-up): a detached
+    // selection must move the PAINTED caret to the detached effective
+    // offset, and a detached range must paint its highlight over the
+    // effective text.
+    #[test]
+    fn detached_selection_moves_the_painted_caret_and_highlight() {
+        let mut rt = doc_with(
+            r##"{ "version":"1.1", "formatVersion":"1.1", "id":"x",
+                 "app": { "name":"x", "version":"1", "id":"x" },
+                 "children": [
+                   { "type":"text_input", "id":"e", "width":200, "height":40,
+                     "fill":[{ "type":"solid", "color":"#ffffff" }] }
+                 ]}"##,
+        );
+        rt.focus_next().unwrap();
+        rt.dispatch_text_input("hello ").unwrap();
+
+        let key = rt.document.as_ref().unwrap().tree.get("e").unwrap();
+        let node = rt.document.as_ref().unwrap().tree.nodes[key].schema.clone();
+        let theme = crate::render::widget_style::WidgetTheme::default();
+
+        fn mutate(
+            rt: &mut Runtime,
+            node: &jian_ops_schema::node::PenNode,
+            f: impl FnOnce(&mut crate::text_input::TextInputState),
+        ) {
+            let state = rt.widget_states.get_or_init(node, &rt.state).unwrap();
+            let crate::widget_state::WidgetState::TextInput(text) = state else {
+                panic!("missing text input state");
+            };
+            f(text);
+        }
+        fn caret_x(rt: &Runtime, theme: &crate::render::widget_style::WidgetTheme) -> f32 {
+            let ctx = WidgetRenderCtx {
+                states: &rt.widget_states,
+                theme,
+                focused_id: Some("e"),
+                now_ms: 0,
+            };
+            let ops = collect_draws_with_widgets(
+                rt.document.as_ref().unwrap(),
+                &rt.layout,
+                &rt.state,
+                &ctx,
+            );
+            ops.iter()
+                .find_map(|op| match op {
+                    DrawOp::Rect { rect, .. } if (rect.size.width - 1.0).abs() < 0.01 => {
+                        Some(rect.origin.x)
+                    }
+                    _ => None,
+                })
+                .expect("caret rect present")
+        }
+
+        // Compose "wo" with the caret at its end (attached).
+        mutate(&mut rt, &node, |text| {
+            text.set_composing_text("wo", 2, 2, 1)
+        });
+        let attached_x = caret_x(&rt, &theme);
+
+        // Detach the caret to the document start (outside the preedit).
+        mutate(&mut rt, &node, |text| text.set_effective_selection(0, 0, 2));
+        let detached_x = caret_x(&rt, &theme);
+        assert!(
+            detached_x < attached_x - 1.0,
+            "detached caret must paint at the detached offset \
+             (detached {detached_x} vs attached {attached_x})"
+        );
+
+        // A detached RANGE paints a highlight over the effective text.
+        mutate(&mut rt, &node, |text| text.set_effective_selection(0, 5, 3));
+        let ctx = WidgetRenderCtx {
+            states: &rt.widget_states,
+            theme: &theme,
+            focused_id: Some("e"),
+            now_ms: 0,
+        };
+        let ops_range =
+            collect_draws_with_widgets(rt.document.as_ref().unwrap(), &rt.layout, &rt.state, &ctx);
+        let has_highlight = ops_range.iter().any(|op| {
+            matches!(op, DrawOp::Rect { rect, .. }
+                if rect.size.width > 2.0 && rect.size.width < 100.0 && rect.size.height > 10.0)
+        });
+        assert!(
+            has_highlight,
+            "detached range must paint a selection highlight"
         );
     }
 }

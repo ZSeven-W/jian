@@ -48,6 +48,12 @@ pub struct Composition {
     /// Selection inside `text`, expressed as UTF-8 byte offsets.
     pub selection: Selection,
     pub region: Option<(usize, usize)>,
+    /// Explicit selection placed OUTSIDE the preedit while composing (the
+    /// `jian.h` escape hatch / Android far-cursor semantics): absolute byte
+    /// offsets in the EFFECTIVE text. Cleared whenever the platform re-places
+    /// the composing selection; carried into the durable selection on a local
+    /// commit; discarded by cancel and by the explicit-commit caret formula.
+    pub detached: Option<Selection>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -128,6 +134,9 @@ impl TextInputState {
         let Some(composition) = self.composition.as_ref() else {
             return self.selection;
         };
+        if let Some(detached) = composition.detached {
+            return detached;
+        }
         let start = composition
             .region
             .map(|region| region.0)
@@ -319,6 +328,7 @@ impl TextInputState {
                 focus: end,
             },
             region: Some(region),
+            detached: None,
         });
         self.touch(now_ms);
     }
@@ -360,6 +370,7 @@ impl TextInputState {
         let end = next_char_boundary(&self.text, raw_end);
         if let Some(composition) = &mut self.composition {
             composition.region = Some((start, end));
+            composition.detached = None;
         } else {
             let text = self.text[start..end].to_owned();
             self.composition = Some(Composition {
@@ -367,6 +378,7 @@ impl TextInputState {
                 selection: Selection::caret(text.len()),
                 text,
                 region: Some((start, end)),
+                detached: None,
             });
         }
         self.selection = Selection::caret(start);
@@ -384,10 +396,18 @@ impl TextInputState {
 
     pub fn commit_composition(&mut self, now_ms: u64) {
         if let Some(c) = self.composition.take() {
+            let detached = c.detached;
             if let Some((start, end)) = c.region {
                 self.replace_range(start, end, &c.text, now_ms);
             } else {
                 self.insert_str(&c.text, now_ms);
+            }
+            // Effective coordinates ARE the post-splice durable coordinates,
+            // so a detached selection carries over unchanged.
+            if let Some(selection) = detached {
+                let anchor = prev_char_boundary(&self.text, selection.anchor.min(self.text.len()));
+                let focus = prev_char_boundary(&self.text, selection.focus.min(self.text.len()));
+                self.selection = Selection { anchor, focus };
             }
         }
     }
@@ -408,13 +428,18 @@ impl TextInputState {
     }
 
     /// Set a selection expressed in the effective text. A range inside the
-    /// active preedit remains a composing-relative selection; moving outside
-    /// commits the current preedit first.
+    /// active preedit remains a composing-relative selection; a range outside
+    /// DETACHES the selection while keeping the preedit alive (the `jian.h`
+    /// escape hatch — Android far-cursor `setComposingText` semantics).
     pub fn set_effective_selection(&mut self, start: usize, end: usize, now_ms: u64) {
-        if let Some(composition) = self.composition.as_mut() {
-            let base = composition.region.map(|region| region.0).unwrap_or(0);
-            let limit = base.saturating_add(composition.text.len());
+        if self.composition.is_some() {
+            let (base, limit) = {
+                let composition = self.composition.as_ref().expect("checked above");
+                let base = composition.region.map(|region| region.0).unwrap_or(0);
+                (base, base.saturating_add(composition.text.len()))
+            };
             if start >= base && end >= base && start <= limit && end <= limit {
+                let composition = self.composition.as_mut().expect("checked above");
                 let start = prev_char_boundary(&composition.text, start - base);
                 let end = prev_char_boundary(&composition.text, end - base);
                 composition.selection = Selection {
@@ -422,10 +447,19 @@ impl TextInputState {
                     focus: end,
                 };
                 composition.cursor = end;
+                // Returning inside the preedit re-attaches the selection.
+                composition.detached = None;
                 self.touch(now_ms);
                 return;
             }
-            self.commit_composition(now_ms);
+            let effective = self.effective_text();
+            let anchor = prev_char_boundary(&effective, start.min(end).min(effective.len()));
+            let focus = prev_char_boundary(&effective, start.max(end).min(effective.len()));
+            let composition = self.composition.as_mut().expect("checked above");
+            composition.detached = Some(Selection { anchor, focus });
+            self.select_all = false;
+            self.touch(now_ms);
+            return;
         }
         let start = prev_char_boundary(&self.text, start);
         let end = prev_char_boundary(&self.text, end);
@@ -597,4 +631,112 @@ fn composing_region_swaps_reversed_offsets_and_forward_snaps_end() {
     assert_eq!(state.composition().unwrap().region, Some((1, 7)));
     state.commit_composition(1);
     assert_eq!(state.text(), "aXz");
+}
+
+#[cfg(test)]
+mod detached_selection_tests {
+    use super::*;
+
+    // ---- Detached-selection matrix (jian.h escape hatch, M4 plan Task 3b) ----
+
+    fn composing_state() -> TextInputState {
+        let mut s = TextInputState::with_text("hello ");
+        // Compose "wo" at the end: region (6, 6), preedit "wo".
+        s.set_composing_text("wo", 2, 2, 1);
+        s
+    }
+
+    #[test]
+    fn outside_selection_detaches_without_committing() {
+        let mut s = composing_state();
+        s.set_effective_selection(0, 0, 2);
+        let c = s.composition().unwrap();
+        assert_eq!(c.text, "wo");
+        assert_eq!(
+            c.detached,
+            Some(Selection {
+                anchor: 0,
+                focus: 0
+            })
+        );
+        assert_eq!(
+            s.effective_selection(),
+            Selection {
+                anchor: 0,
+                focus: 0
+            }
+        );
+        assert_eq!(s.effective_text(), "hello wo");
+    }
+
+    #[test]
+    fn returning_inside_reattaches_the_composing_selection() {
+        let mut s = composing_state();
+        s.set_effective_selection(0, 0, 2);
+        s.set_effective_selection(7, 7, 3); // back inside the preedit
+        let c = s.composition().unwrap();
+        assert_eq!(c.detached, None);
+        assert_eq!(
+            c.selection,
+            Selection {
+                anchor: 1,
+                focus: 1
+            }
+        );
+        assert_eq!(
+            s.effective_selection(),
+            Selection {
+                anchor: 7,
+                focus: 7
+            }
+        );
+    }
+
+    #[test]
+    fn composing_update_while_detached_reattaches() {
+        let mut s = composing_state();
+        s.set_effective_selection(0, 0, 2);
+        // The platform re-places the cursor with the new composing text.
+        s.set_composing_text("wor", 3, 3, 3);
+        let c = s.composition().unwrap();
+        assert_eq!(c.detached, None);
+        assert_eq!(
+            s.effective_selection(),
+            Selection {
+                anchor: 9,
+                focus: 9
+            }
+        );
+        assert_eq!(s.effective_text(), "hello wor");
+    }
+
+    #[test]
+    fn local_commit_while_detached_preserves_the_selection() {
+        let mut s = composing_state();
+        s.set_effective_selection(2, 4, 2);
+        // The old behavior committed here — this assert is what makes the
+        // test red against it.
+        assert!(s.composition().is_some());
+        s.commit_composition(3);
+        assert_eq!(s.text(), "hello wo");
+        assert_eq!(
+            s.selection(),
+            Selection {
+                anchor: 2,
+                focus: 4
+            }
+        );
+        assert!(s.composition().is_none());
+    }
+
+    #[test]
+    fn cancel_while_detached_removes_the_preedit_with_caret_at_start() {
+        let mut s = composing_state();
+        s.set_effective_selection(0, 0, 2);
+        assert!(s.cancel_composition(3));
+        assert_eq!(s.text(), "hello ");
+        // ABI local-cancel rule: caret at the composition start.
+        assert_eq!(s.caret(), 6);
+        assert!(s.composition().is_none());
+    }
 }

@@ -389,8 +389,7 @@ impl Runtime {
                 // would only churn observable state (focus cleared, caret
                 // reset) for a document that is already mounted — drop the
                 // park instead and just lift the freeze.
-                if self.active_variant_page_id.as_deref() == Some(parked.target_page_id.as_str())
-                {
+                if self.active_variant_page_id.as_deref() == Some(parked.target_page_id.as_str()) {
                     return;
                 }
                 if let Err(error) = self.commit_parked(*parked) {
