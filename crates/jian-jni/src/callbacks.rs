@@ -16,6 +16,7 @@
 
 use std::cell::Cell;
 use std::ffi::c_void;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::slice;
 
 use jni::objects::{GlobalRef, JObject, JValue};
@@ -123,16 +124,16 @@ fn upcall(ctx: &EngineCtx, capacity: i32, body: impl FnOnce(&mut JNIEnv, &JObjec
         return;
     };
     let receiver = ctx.receiver.clone();
-    let framed = env.with_local_frame(capacity, |env| -> Result<(), jni::errors::Error> {
-        body(env, receiver.as_obj());
+    let _framed = env.with_local_frame(capacity, |env| -> Result<(), jni::errors::Error> {
+        // Catch INSIDE the frame so a panic in marshalling or a JNI wrapper
+        // can never unwind across the C callback ABI (which would abort) and
+        // so `with_local_frame` still runs `PopLocalFrame`.
+        let _ = catch_unwind(AssertUnwindSafe(|| body(env, receiver.as_obj())));
         Ok(())
     });
-    if framed.is_err() {
-        // PushLocalFrame failed (OOM) — nothing to clean up beyond the
-        // exception clear below.
-    }
     // Clear any exception the Java callback left pending; describe it first
-    // for the log. Both are best-effort.
+    // for the log. Both are best-effort. (A PushLocalFrame OOM above leaves
+    // nothing to clean up beyond this.)
     if let Ok(true) = env.exception_check() {
         let _ = env.exception_describe();
         let _ = env.exception_clear();

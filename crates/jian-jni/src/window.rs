@@ -29,11 +29,17 @@ thread_local! {
 /// window first. Called on the engine thread right after a successful
 /// acquire (attach/resume).
 ///
+/// The previous window is released UNCONDITIONALLY, even if it shares
+/// `window`'s address: every `ANativeWindow_fromSurface` adds a reference,
+/// so a matching pointer still represents a distinct owned reference that
+/// must be balanced. (In practice suspend clears the previous window first,
+/// so there is usually none.)
+///
 /// # Safety
 /// `window` must be a window from [`acquire`] not yet released, or null.
 pub unsafe fn set_current_window(window: *mut ANativeWindow) {
     let previous = CURRENT_WINDOW.with(|w| w.replace(window));
-    if !previous.is_null() && previous != window {
+    if !previous.is_null() {
         unsafe { release(previous) };
     }
 }

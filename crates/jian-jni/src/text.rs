@@ -465,14 +465,16 @@ fn deliver_capability(
                 error_len,
             },
         },
-        // OpenUrl (and any unknown kind) — the {ok, error} shape.
-        _ => JianCapabilityResultData {
+        marshal::KIND_OPEN_URL => JianCapabilityResultData {
             open_url: JianOpenUrlResult {
                 ok,
                 error_ptr,
                 error_len,
             },
         },
+        // An unknown kind never reaches the engine: rejecting here avoids
+        // relying on callee discriminant validation to keep the union sound.
+        _ => return JianStatus::InvalidArg,
     };
     call_result(engine, request_id, kind, data)
 }

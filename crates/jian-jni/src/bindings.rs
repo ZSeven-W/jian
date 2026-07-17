@@ -10,8 +10,9 @@
 #![cfg(target_os = "android")]
 
 use std::ffi::c_void;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
 use jni::sys::{jfloat, jint, jlong};
@@ -38,13 +39,12 @@ fn registry() -> &'static Registry<EngineRecord> {
 }
 
 /// A raw engine pointer. Dereferenced ONLY on the owning engine thread; the
-/// `Send`/`Sync` impls carry it across the dispatch barrier and the registry.
+/// `Send` impl carries it across the dispatch barrier and the registry.
 #[derive(Clone, Copy)]
 struct EnginePtr(*mut JianEngine);
 // SAFETY: the pointer is only ever used on the engine thread; the wrapper
 // exists solely to move it through the queue and registry.
 unsafe impl Send for EnginePtr {}
-unsafe impl Sync for EnginePtr {}
 
 impl EnginePtr {
     /// Returns the raw pointer. Taking `self` by value makes a closure
@@ -60,7 +60,6 @@ impl EnginePtr {
 struct CtxPtr(*mut EngineCtx);
 // SAFETY: freed exactly once on the engine thread after jian_destroy.
 unsafe impl Send for CtxPtr {}
-unsafe impl Sync for CtxPtr {}
 
 impl CtxPtr {
     fn get(self) -> *mut EngineCtx {
@@ -68,9 +67,12 @@ impl CtxPtr {
     }
 }
 
-/// Per-engine record held in the registry.
+/// Per-engine record held in the registry. The thread is behind an `Arc` so
+/// a native can clone the dispatch handle out from under the registry lock
+/// and release the lock BEFORE the blocking `call()` — otherwise a callback
+/// re-entering a native would deadlock against the held registry mutex.
 struct EngineRecord {
-    thread: EngineThread,
+    thread: Arc<EngineThread>,
     engine: EnginePtr,
     ctx: CtxPtr,
 }
@@ -139,40 +141,55 @@ pub extern "system" fn Java_dev_jian_player_JianNative_nativeCreate<'local>(
     // EngineCtx is Send (JavaVM + GlobalRef); the !Send JianCallbacks table
     // is built INSIDE the job so nothing !Send crosses the barrier.
     let ctx = Box::new(EngineCtx::new(clone_vm(vm), receiver));
-    let thread = EngineThread::spawn("jian-engine");
+    let thread = Arc::new(EngineThread::spawn("jian-engine"));
     let attach_vm = clone_vm(vm);
     // Create the engine ON the engine thread: attach the thread to the VM
     // (permanent — detaches when the thread exits) BEFORE jian_create so its
     // initial callbacks have a JNIEnv.
-    let created = thread.call(move || {
-        let _ = attach_vm.attach_current_thread_permanently();
-        let (callbacks, ctx_ptr) = build_callbacks(ctx);
-        let mut engine: *mut JianEngine = ptr::null_mut();
-        let desc = JianCreateDesc {
-            size: std::mem::size_of::<JianCreateDesc>(),
-            doc_ptr: doc_bytes.as_ptr(),
-            doc_len: doc_bytes.len(),
-            width: w,
-            height: h,
-            dpr,
-            storage_dir_ptr: storage.as_ptr(),
-            storage_dir_len: storage.len(),
-            callbacks: &callbacks,
-            asset_base_ptr: asset.as_ref().map_or(ptr::null(), |a| a.as_ptr()),
-            asset_base_len: asset.as_ref().map_or(0, |a| a.len()),
-        };
-        let status = unsafe { jian_create(&desc, &mut engine) };
-        // `callbacks`/`doc_bytes`/`storage`/`asset` stay alive until here.
-        (status as i32, engine as usize, ctx_ptr as usize)
-    });
+    let created = catch_unwind(AssertUnwindSafe(|| {
+        thread.call(move || {
+            // Attachment failure is a create failure: without a JNIEnv the
+            // engine's callbacks and surface ops could never run. Return
+            // before build_callbacks so the ctx Box drops here (no leak).
+            if attach_vm.attach_current_thread_permanently().is_err() {
+                return (JianStatus::InvalidArg as i32, 0usize, 0usize);
+            }
+            let (callbacks, ctx_ptr) = build_callbacks(ctx);
+            let mut engine: *mut JianEngine = ptr::null_mut();
+            let desc = JianCreateDesc {
+                size: std::mem::size_of::<JianCreateDesc>(),
+                doc_ptr: doc_bytes.as_ptr(),
+                doc_len: doc_bytes.len(),
+                width: w,
+                height: h,
+                dpr,
+                storage_dir_ptr: storage.as_ptr(),
+                storage_dir_len: storage.len(),
+                callbacks: &callbacks,
+                asset_base_ptr: asset.as_ref().map_or(ptr::null(), |a| a.as_ptr()),
+                asset_base_len: asset.as_ref().map_or(0, |a| a.len()),
+            };
+            let status = unsafe { jian_create(&desc, &mut engine) };
+            // `callbacks`/`doc_bytes`/`storage`/`asset` stay alive until here.
+            (status as i32, engine as usize, ctx_ptr as usize)
+        })
+    }));
 
     let (status, engine_raw, ctx_raw) = match created {
-        crate::Dispatch::Done(v) => v,
-        crate::Dispatch::Closing => {
+        Ok(crate::Dispatch::Done(v)) => v,
+        Ok(crate::Dispatch::Closing) => {
             // The thread rejected the job before it ran (never happens for a
             // fresh engine): the `ctx` Box was dropped with the closure — no
             // context was leaked, nothing to free.
+            thread.close(|| {});
             registry().set_create_error("engine thread closed during create");
+            return HANDLE_FAILURE;
+        }
+        Err(_) => {
+            // jian_create panicked: the queue already caught it (the engine
+            // thread survives); tear the thread down and report.
+            thread.close(|| {});
+            registry().set_create_error("jian_create panicked");
             return HANDLE_FAILURE;
         }
     };
@@ -239,13 +256,18 @@ pub(crate) fn with_engine<R: Send + 'static>(
     handle: jlong,
     f: impl FnOnce(*mut JianEngine) -> R + Send + 'static,
 ) -> Option<R> {
-    let dispatched = registry().with(handle, |rec| {
-        let engine = rec.engine;
-        rec.thread.call(move || f(engine.get()))
-    })?;
+    // Clone the dispatch handle + engine pointer under the lock, then RELEASE
+    // it before the blocking call — the engine thread must never contend for
+    // the registry mutex while a native waits on it (callback re-entry).
+    let (thread, engine) = registry().with(handle, |rec| (rec.thread.clone(), rec.engine))?;
+    // A panicking engine job is re-raised on THIS (caller) thread by call();
+    // catch it at the dispatch boundary so it never crosses the non-unwinding
+    // JNI ABI and aborts the process. A panicked call maps to `None` (→
+    // STATUS_CLOSING / null), like a closed queue.
+    let dispatched = catch_unwind(AssertUnwindSafe(|| thread.call(move || f(engine.get()))));
     match dispatched {
-        crate::Dispatch::Done(r) => Some(r),
-        crate::Dispatch::Closing => None,
+        Ok(crate::Dispatch::Done(r)) => Some(r),
+        Ok(crate::Dispatch::Closing) | Err(_) => None,
     }
 }
 
@@ -309,9 +331,6 @@ fn attach_or_resume(env: &mut JNIEnv, engine: jlong, surface: JObject, resume: b
         if window.is_null() {
             return JianStatus::InvalidArg as jint;
         }
-        // SAFETY: window is freshly acquired; install as current (releasing
-        // any previous), then hand it to the engine.
-        unsafe { crate::window::set_current_window(window) };
         let desc = JianSurfaceDesc {
             size: std::mem::size_of::<JianSurfaceDesc>(),
             handle: window.cast::<c_void>(),
@@ -321,10 +340,15 @@ fn attach_or_resume(env: &mut JNIEnv, engine: jlong, surface: JObject, resume: b
         } else {
             unsafe { jian_attach_surface(e, &desc) }
         };
-        if status as i32 != 0 {
-            // Task 3 guarantees no EGL object survives a failed attach/resume:
-            // release the window immediately.
-            crate::window::take_current_window();
+        if status as i32 == 0 {
+            // Success: the engine now owns an EGL surface on this window;
+            // commit it as current, releasing any PREVIOUS owned window.
+            unsafe { crate::window::set_current_window(window) };
+        } else {
+            // Failure: Task 3 guarantees no EGL object survives, so the old
+            // surface (if any) still owns CURRENT_WINDOW — leave it untouched
+            // and release ONLY the fresh acquisition.
+            unsafe { crate::window::release(window) };
         }
         status as jint
     })
@@ -339,8 +363,13 @@ pub extern "system" fn Java_dev_jian_player_JianNative_nativeSuspend<'local>(
 ) -> jint {
     with_engine(engine, move |e| {
         let status = unsafe { jian_suspend(e) };
-        // The window is released AFTER suspend returns (§6.7).
-        crate::window::take_current_window();
+        // Release the window ONLY after a status that guarantees the engine
+        // tore its EGL surface down synchronously (Ok). On a non-Ok status
+        // (e.g. WrongThread re-entry) the surface may still borrow the
+        // window, so it is kept until destroy/next-suspend releases it.
+        if status as i32 == 0 {
+            crate::window::take_current_window();
+        }
         status as jint
     })
     .unwrap_or(STATUS_CLOSING)
