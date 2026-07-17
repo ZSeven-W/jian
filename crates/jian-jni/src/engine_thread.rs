@@ -27,6 +27,17 @@ use std::thread::{self, JoinHandle, ThreadId};
 /// Shell-side dispatch-rejected status (never produced by the C ABI).
 pub const STATUS_CLOSING: i32 = -1;
 
+/// Best-effort stderr log that CANNOT panic. `eprintln!` panics on a failed
+/// stderr write, and every use here is on a teardown path where an
+/// unwinding panic would drop a live payload unguarded or lose the destroy;
+/// `write_fmt` returning `Err` is ignored instead.
+macro_rules! log_teardown {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 /// Result of dispatching onto the engine thread.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Dispatch<R> {
@@ -53,22 +64,34 @@ impl<R> Dispatch<R> {
 /// thread, the exact failure this function exists to prevent.
 fn run_guarded(what: &str, f: impl FnOnce()) {
     if let Err(payload) = catch_unwind(AssertUnwindSafe(f)) {
-        eprintln!("jian-jni: {what} panicked; continuing teardown");
+        log_teardown!("jian-jni: {what} panicked; continuing teardown");
         drop_guarded(payload);
     }
 }
 
 /// Drops a caught panic payload without any possibility of unwinding. The
-/// common case drops it normally (no leak); if the payload's own `Drop`
-/// panics, the resulting payload is FORGOTTEN rather than dropped — its
+/// common case drops it normally (no leak); ONLY if the payload's own `Drop`
+/// panics is the resulting payload FORGOTTEN rather than dropped — its
 /// `Drop` never runs, so an arbitrarily deep panicking-`Drop` chain cannot
-/// re-enter and unwind. The cost is a small memory leak on the (already
-/// exceptional) teardown-panic path, which is strictly better than losing
-/// the destroy. `mem::forget` never runs a destructor, so this cannot
-/// recurse.
+/// re-enter and unwind. `mem::forget` runs no destructor, so this is the
+/// absorbing terminal state and cannot recurse. The leak is bounded to that
+/// pathological case (a caught payload whose destructor panics); the
+/// forgotten value may own arbitrary resources, but never losing the destroy
+/// is worth that trade on a teardown path that should never be hit.
 fn drop_guarded(payload: Box<dyn Any + Send + 'static>) {
     if let Err(poison) = catch_unwind(AssertUnwindSafe(move || drop(payload))) {
         std::mem::forget(poison);
+    }
+}
+
+/// Joins the engine thread, routing any panic payload through
+/// [`drop_guarded`] so a panicking payload `Drop` cannot unwind the joiner
+/// (a closer, the reaper, or `Drop`). The engine thread does not panic in
+/// normal operation — every closure is guarded and all teardown logging is
+/// non-panicking — so this only matters for an abort-class unwind.
+fn join_guarded(handle: JoinHandle<()>) {
+    if let Err(payload) = handle.join() {
+        drop_guarded(payload);
     }
 }
 
@@ -183,7 +206,7 @@ struct FinishGuard {
 impl Drop for FinishGuard {
     fn drop(&mut self) {
         if thread::panicking() {
-            eprintln!("jian-jni: engine thread unwinding unexpectedly; salvaging teardown");
+            log_teardown!("jian-jni: engine thread unwinding unexpectedly; salvaging teardown");
             salvage_teardown(&self.shared);
         }
         self.sync.mark_finished();
@@ -460,9 +483,7 @@ impl EngineThread {
             if let Some(handle) = handle {
                 if let Err(error) = thread::Builder::new()
                     .name("jian-engine-reaper".into())
-                    .spawn(move || {
-                        let _ = handle.join();
-                    })
+                    .spawn(move || join_guarded(handle))
                 {
                     // Never unwind the engine job: detaching leaks one joinable
                     // handle under resource exhaustion, which is strictly
@@ -471,15 +492,19 @@ impl EngineThread {
                     // itself sets it when the drain + final job complete, so
                     // a parked concurrent closer still wakes at the right
                     // time.
-                    eprintln!("jian-jni: reaper spawn failed ({error}); detaching engine thread");
+                    log_teardown!(
+                        "jian-jni: reaper spawn failed ({error}); detaching engine thread"
+                    );
                 }
             }
         } else if let Some(handle) = handle {
-            if handle.join().is_err() {
+            if let Err(payload) = handle.join() {
                 // An unexpected unwind: the FinishGuard has already salvaged
-                // the drain + final job; surface the panic instead of hiding
-                // it.
-                eprintln!("jian-jni: engine thread panicked during teardown");
+                // the drain + final job; surface the panic (non-panicking
+                // log) and route the payload through the guard so a panicking
+                // payload Drop cannot unwind this closer.
+                log_teardown!("jian-jni: engine thread panicked during teardown");
+                drop_guarded(payload);
             }
         } else {
             // Losing close(): another closer already owns the join (or a
@@ -508,13 +533,11 @@ impl Drop for EngineThread {
             }
             self.shared.ready.notify_one();
             if thread::current().id() != self.thread_id {
-                let _ = handle.join();
+                join_guarded(handle);
             } else {
                 thread::Builder::new()
                     .name("jian-engine-reaper".into())
-                    .spawn(move || {
-                        let _ = handle.join();
-                    })
+                    .spawn(move || join_guarded(handle))
                     .ok();
             }
         }
