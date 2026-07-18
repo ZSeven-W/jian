@@ -1938,6 +1938,16 @@
                 "null"
               ]
             },
+            "fillRule": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PathFillRule"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "width": {
               "anyOf": [
                 {
@@ -7425,6 +7435,13 @@
         "corner",
         "mirrored",
         "independent"
+      ]
+    },
+    "PathFillRule": {
+      "type": "string",
+      "enum": [
+        "nonzero",
+        "evenodd"
       ]
     },
     "TextContent": {

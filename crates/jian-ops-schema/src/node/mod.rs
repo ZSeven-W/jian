@@ -34,7 +34,7 @@ pub use image::{ImageFitMode, ImageNode};
 pub use image_src::ImageSrc;
 pub use line::LineNode;
 pub use number_input::NumberInputNode;
-pub use path::{PathNode, PenPathAnchor, PenPathHandle, PenPathPointType};
+pub use path::{PathFillRule, PathNode, PenPathAnchor, PenPathHandle, PenPathPointType};
 pub use polygon::PolygonNode;
 pub use progress::ProgressNode;
 pub use radio_group::RadioGroupNode;

@@ -21,6 +21,15 @@ pub enum PenPathPointType {
     Independent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
+#[serde(rename_all = "lowercase")]
+pub enum PathFillRule {
+    Nonzero,
+    Evenodd,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
@@ -49,6 +58,8 @@ pub struct PathNode {
     pub anchors: Option<Vec<PenPathAnchor>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "fillRule")]
+    pub fill_rule: Option<PathFillRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,4 +84,20 @@ pub struct PathNode {
     pub gestures: Option<crate::gestures::GestureOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::navigation::NavigationRoute>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PathNode;
+
+    #[test]
+    fn fill_rule_round_trips_and_stays_absent_by_default() {
+        let with_rule = r#"{"id":"ring","fillRule":"evenodd"}"#;
+        let path: PathNode = serde_json::from_str(with_rule).expect("parse even-odd path");
+        assert_eq!(serde_json::to_string(&path).unwrap(), with_rule);
+
+        let absent = r#"{"id":"plain"}"#;
+        let path: PathNode = serde_json::from_str(absent).expect("parse path without fill rule");
+        assert_eq!(serde_json::to_string(&path).unwrap(), absent);
+    }
 }

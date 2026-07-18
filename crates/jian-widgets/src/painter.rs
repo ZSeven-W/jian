@@ -126,6 +126,18 @@ pub trait Painter {
     fn stroke_line(&mut self, from: Point2D, to: Point2D, color: Color, width: f32);
     fn fill_round_rect(&mut self, rect: Rect, radius: f32, color: Color);
     fn stroke_round_rect(&mut self, rect: Rect, radius: f32, color: Color, width: f32);
+    fn fill_round_rect_per_corner(&mut self, rect: Rect, radii: [f32; 4], color: Color) {
+        self.fill_round_rect(rect, radii[0], color);
+    }
+    fn stroke_round_rect_per_corner(
+        &mut self,
+        rect: Rect,
+        radii: [f32; 4],
+        color: Color,
+        width: f32,
+    ) {
+        self.stroke_round_rect(rect, radii[0], color, width);
+    }
     fn stroke_svg_path(&mut self, d: &str, top_left: Point2D, size: f32, color: Color, width: f32);
 
     fn fill_svg_path(
@@ -138,8 +150,33 @@ pub trait Painter {
     ) {
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn fill_svg_path_with_fill_rule(
+        &mut self,
+        d: &str,
+        top_left: Point2D,
+        size: f32,
+        viewbox: f32,
+        color: Color,
+        even_odd: bool,
+    ) {
+        let _ = even_odd;
+        self.fill_svg_path(d, top_left, size, viewbox, color);
+    }
+
     fn fill_svg_path_in_rect(&mut self, d: &str, rect: Rect, color: Color) {
         self.fill_svg_path(d, rect.origin, rect.size.x.max(rect.size.y), 1.0, color);
+    }
+
+    fn fill_svg_path_in_rect_with_fill_rule(
+        &mut self,
+        d: &str,
+        rect: Rect,
+        color: Color,
+        even_odd: bool,
+    ) {
+        let _ = even_odd;
+        self.fill_svg_path_in_rect(d, rect, color);
     }
 
     fn stroke_svg_path_in_rect(&mut self, d: &str, rect: Rect, color: Color, width: f32) {
@@ -160,6 +197,20 @@ pub trait Painter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn fill_svg_path_in_rect_linear_gradient_with_fill_rule(
+        &mut self,
+        d: &str,
+        rect: Rect,
+        stops: &[(f32, Color)],
+        angle_deg: f32,
+        opacity: f32,
+        even_odd: bool,
+    ) {
+        let _ = even_odd;
+        self.fill_svg_path_in_rect_linear_gradient(d, rect, stops, angle_deg, opacity);
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn fill_inner_shadow_svg_path(
         &mut self,
         _d: &str,
@@ -169,6 +220,21 @@ pub trait Painter {
         _blur: f32,
         _color: Color,
     ) {
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_inner_shadow_svg_path_with_fill_rule(
+        &mut self,
+        d: &str,
+        rect: Rect,
+        offset_x: f32,
+        offset_y: f32,
+        blur: f32,
+        color: Color,
+        even_odd: bool,
+    ) {
+        let _ = even_odd;
+        self.fill_inner_shadow_svg_path(d, rect, offset_x, offset_y, blur, color);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -187,6 +253,30 @@ pub trait Painter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn fill_svg_path_in_rect_radial_gradient_with_fill_rule(
+        &mut self,
+        d: &str,
+        rect: Rect,
+        stops: &[(f32, Color)],
+        cx_frac: f32,
+        cy_frac: f32,
+        radius_frac: f32,
+        opacity: f32,
+        even_odd: bool,
+    ) {
+        let _ = even_odd;
+        self.fill_svg_path_in_rect_radial_gradient(
+            d,
+            rect,
+            stops,
+            cx_frac,
+            cy_frac,
+            radius_frac,
+            opacity,
+        );
+    }
+
     fn fill_drop_shadow(&mut self, rect: Rect, radius: f32, blur: f32, color: Color) {
         let _ = blur;
         self.fill_round_rect(rect, radius, color);
@@ -198,6 +288,14 @@ pub trait Painter {
     /// [`Painter::save`]. Backends without layer-filter support fall
     /// back to `save` (no blur) so callers stay balanced.
     fn push_blur_layer(&mut self, sigma: f32) {
+        let _ = sigma;
+        self.save();
+    }
+
+    /// Begin a save-layer initialized from a blurred copy of the
+    /// already-painted backdrop. The caller owns the silhouette clip
+    /// and balances this layer with [`Painter::restore`].
+    fn push_backdrop_blur_layer(&mut self, sigma: f32) {
         let _ = sigma;
         self.save();
     }
@@ -421,5 +519,15 @@ mod tests {
                 && *viewbox == 1.0
                 && *color == Color::RED
         ));
+    }
+
+    #[test]
+    fn fill_rule_variant_defaults_to_existing_path_fill() {
+        let mut p = CapturePainter::default();
+        let rect = Rect::xywh(2.0, 3.0, 12.0, 18.0);
+
+        p.fill_svg_path_in_rect_with_fill_rule("M0 0h1v1z", rect, Color::RED, true);
+
+        assert!(matches!(p.ops.as_slice(), [PaintOp::FillSvgPath { .. }]));
     }
 }

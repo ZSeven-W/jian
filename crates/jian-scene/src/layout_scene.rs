@@ -195,6 +195,10 @@ pub enum Effect {
     DropShadow(DropShadow),
     /// Blur the node's own content (Figma "Layer blur").
     Blur(BlurEffect),
+    /// Blur the already-painted backdrop within the node silhouette.
+    BackgroundBlur {
+        radius: f32,
+    },
 }
 
 /// A paint-only, layout-resolved render scene.
@@ -500,6 +504,9 @@ pub struct SceneNode {
     pub flip_y: bool,
     /// Corner radius in doc-px — honoured by Rect / Frame paint.
     pub corner_radius: f32,
+    /// Per-corner radii in top-left, top-right, bottom-right,
+    /// bottom-left order. `None` uses `corner_radius` uniformly.
+    pub corner_radii: Option<[f32; 4]>,
     /// Whether this container clips its children to its bounds
     /// (rounded by `corner_radius`, clamped to half the height — TS
     /// flattener rule). The scene builder also sets this for root
@@ -570,6 +577,8 @@ pub struct SceneNode {
     pub path_anchors: Vec<SceneAnchor>,
     /// Whether a `Path` node is closed (last anchor links to first).
     pub path_closed: bool,
+    /// Whether SVG path fills use the even-odd winding rule.
+    pub even_odd_fill: bool,
     /// Preserved SVG path data for imported Path nodes. Coordinates
     /// are local doc-px relative to `bounds.origin`.
     pub svg_path: Option<String>,
@@ -761,6 +770,7 @@ impl SceneNode {
             flip_x: false,
             flip_y: false,
             corner_radius: 0.0,
+            corner_radii: None,
             clip_content: false,
             fill: None,
             fill_type: SceneFillType::Solid,
@@ -783,6 +793,7 @@ impl SceneNode {
             points: Vec::new(),
             path_anchors: Vec::new(),
             path_closed: false,
+            even_odd_fill: false,
             svg_path: None,
             arc_start_angle: None,
             arc_sweep_angle: None,
