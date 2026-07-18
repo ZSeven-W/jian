@@ -10,8 +10,7 @@
 
 #![cfg(target_os = "android")]
 
-use std::cell::Cell;
-use std::ptr;
+use std::cell::{Cell, RefCell};
 
 use jni::objects::JObject;
 use jni::JNIEnv;
@@ -19,37 +18,69 @@ use jni::JNIEnv;
 use ndk_sys::{ANativeWindow, ANativeWindow_fromSurface, ANativeWindow_release};
 
 thread_local! {
-    /// The window currently attached on THIS engine thread. Each engine owns
-    /// its thread exclusively, so an engine-thread-local is per-engine state:
-    /// `attach`/`resume` install it, `suspend`/`destroy` release it.
-    static CURRENT_WINDOW: Cell<*mut ANativeWindow> = const { Cell::new(ptr::null_mut()) };
+    /// Every `ANativeWindow` this engine currently owns a reference to. Each
+    /// engine owns its thread exclusively, so an engine-thread-local is
+    /// per-engine state. On a clean (`Ok`) surface transition the engine has
+    /// dropped its old EGL surface, so all-but-the-new window are released;
+    /// on a Poisoned transition NONE are released (the engine may still
+    /// borrow one), so they accumulate until a confirmed-`Ok` teardown.
+    static OWNED_WINDOWS: RefCell<Vec<*mut ANativeWindow>> = const { RefCell::new(Vec::new()) };
+
+    /// Set once any lifecycle call returns `Poisoned`: the engine is dead and
+    /// may still borrow an owned window, so further surface operations are
+    /// REFUSED (they must not acquire or release anything) until destroy.
+    static POISONED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Installs `window` as the current one, releasing any previously attached
-/// window first. Called on the engine thread right after a successful
-/// acquire (attach/resume).
-///
-/// The previous window is released UNCONDITIONALLY, even if it shares
-/// `window`'s address: every `ANativeWindow_fromSurface` adds a reference,
-/// so a matching pointer still represents a distinct owned reference that
-/// must be balanced. (In practice suspend clears the previous window first,
-/// so there is usually none.)
+/// Whether this engine has been poisoned (surface ops must be refused).
+pub fn is_poisoned() -> bool {
+    POISONED.with(|p| p.get())
+}
+
+/// Latches the poisoned state (any lifecycle call returned `Poisoned`).
+pub fn mark_poisoned() {
+    POISONED.with(|p| p.set(true));
+}
+
+/// Records `window` as owned WITHOUT releasing anything — used on a Poisoned
+/// attach/resume where the engine may already borrow it.
 ///
 /// # Safety
-/// `window` must be a window from [`acquire`] not yet released, or null.
-pub unsafe fn set_current_window(window: *mut ANativeWindow) {
-    let previous = CURRENT_WINDOW.with(|w| w.replace(window));
-    if !previous.is_null() {
-        unsafe { release(previous) };
-    }
+/// `window` must be a non-null window from [`acquire`] not yet released.
+pub unsafe fn track_window(window: *mut ANativeWindow) {
+    OWNED_WINDOWS.with(|v| v.borrow_mut().push(window));
 }
 
-/// Releases and clears the current window (suspend/destroy). No-op when none
-/// is attached.
-pub fn take_current_window() {
-    let window = CURRENT_WINDOW.with(|w| w.replace(ptr::null_mut()));
-    // SAFETY: any stored window came from `acquire` and is released once here.
-    unsafe { release(window) };
+/// Commits `window` as the sole owned window after a clean `Ok` transition:
+/// every OTHER owned window is no longer borrowed (the engine dropped its old
+/// surface) and is released.
+///
+/// # Safety
+/// `window` must be a non-null window from [`acquire`] not yet released.
+pub unsafe fn commit_window(window: *mut ANativeWindow) {
+    OWNED_WINDOWS.with(|v| {
+        let mut owned = v.borrow_mut();
+        owned.retain(|&w| {
+            if w == window {
+                false // drop the old entry; re-added below as the sole owner
+            } else {
+                unsafe { release(w) };
+                false
+            }
+        });
+        owned.push(window);
+    });
+}
+
+/// Releases and forgets EVERY owned window (a confirmed-`Ok` suspend or
+/// destroy). No-op when none are owned.
+pub fn release_all_windows() {
+    OWNED_WINDOWS.with(|v| {
+        for window in v.borrow_mut().drain(..) {
+            // SAFETY: each came from `acquire` and is released exactly once.
+            unsafe { release(window) };
+        }
+    });
 }
 
 /// Acquires the `ANativeWindow` backing a `Surface`, incrementing its

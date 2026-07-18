@@ -14,7 +14,7 @@
 //! the modules that own the raw engine pointer and JNI global refs.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// Reserved handle: `nativeCreate` returns `0` for failure, and the
 /// create-failure error text is read back through this id.
@@ -59,9 +59,19 @@ impl<T> Registry<T> {
         }
     }
 
+    /// Locks the state, RECOVERING from poison. No user code ever runs under
+    /// this lock, so it cannot actually be poisoned by a panic — but
+    /// recovering guarantees a registry access invoked from a JNI native can
+    /// never itself panic and cross the non-unwinding boundary.
+    fn locked(&self) -> MutexGuard<'_, RegistryState<T>> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+    }
+
     /// Registers a live engine, returning its handle (always `>= 1`).
     pub fn insert(&self, payload: T) -> i64 {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.locked();
         let id = state.next_id;
         state.next_id += 1;
         state.slots.insert(
@@ -77,7 +87,7 @@ impl<T> Registry<T> {
     /// Runs `f` against the live payload, or returns `None` when the handle
     /// is unknown or tombstoned — the caller maps `None` to `STATUS_CLOSING`.
     pub fn with<R>(&self, handle: i64, f: impl FnOnce(&T) -> R) -> Option<R> {
-        let state = self.state.lock().unwrap();
+        let state = self.locked();
         let payload = state.slots.get(&handle)?.payload.as_ref()?;
         Some(f(payload))
     }
@@ -85,7 +95,7 @@ impl<T> Registry<T> {
     /// Records the last error text for a live handle (no-op for an
     /// unknown/tombstoned handle — a tombstone keeps the error it died with).
     pub fn set_error(&self, handle: i64, message: impl Into<String>) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.locked();
         if let Some(slot) = state.slots.get_mut(&handle) {
             slot.error = message.into();
         }
@@ -93,14 +103,14 @@ impl<T> Registry<T> {
 
     /// Records the create-failure error text (read back via `HANDLE_FAILURE`).
     pub fn set_create_error(&self, message: impl Into<String>) {
-        self.state.lock().unwrap().create_error = message.into();
+        self.locked().create_error = message.into();
     }
 
     /// The last error text for a handle. `HANDLE_FAILURE` returns the
     /// create-failure text; a live or tombstoned handle returns its slot's
     /// text; an unknown handle returns the empty string.
     pub fn last_error(&self, handle: i64) -> String {
-        let state = self.state.lock().unwrap();
+        let state = self.locked();
         if handle == HANDLE_FAILURE {
             return state.create_error.clone();
         }
@@ -116,13 +126,13 @@ impl<T> Registry<T> {
     /// deletion). A second close, or an unknown handle, returns `None`. The
     /// slot and its error text are retained for `nativeLastError`.
     pub fn take_for_close(&self, handle: i64) -> Option<T> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.locked();
         state.slots.get_mut(&handle)?.payload.take()
     }
 
     /// Whether the handle currently names a live engine.
     pub fn is_live(&self, handle: i64) -> bool {
-        let state = self.state.lock().unwrap();
+        let state = self.locked();
         state
             .slots
             .get(&handle)

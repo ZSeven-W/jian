@@ -250,11 +250,13 @@ pub extern "system" fn Java_dev_jian_player_JianNative_nativeLastError<'local>(
     _class: JClass<'local>,
     engine: jlong,
 ) -> jni::sys::jstring {
-    let message = registry().last_error(engine);
-    match env.new_string(message) {
-        Ok(s) => s.into_raw(),
-        Err(_) => ptr::null_mut(),
-    }
+    guard_jstring(|| {
+        let message = registry().last_error(engine);
+        match env.new_string(message) {
+            Ok(s) => s.into_raw(),
+            Err(_) => ptr::null_mut(),
+        }
+    })
 }
 
 /// `JianNative.nativeDestroy` — §6.7 teardown. Tombstones the handle, then
@@ -269,6 +271,10 @@ pub extern "system" fn Java_dev_jian_player_JianNative_nativeDestroy<'local>(
     _class: JClass<'local>,
     engine: jlong,
 ) {
+    guard_unit(|| destroy_impl(engine));
+}
+
+fn destroy_impl(engine: jlong) {
     let Some(record) = registry().take_for_close(engine) else {
         return; // unknown or already destroyed
     };
@@ -279,13 +285,14 @@ pub extern "system" fn Java_dev_jian_player_JianNative_nativeDestroy<'local>(
     } = record;
     let final_job = move || {
         // A Poisoned destroy means an internal panic left the engine (and any
-        // EGL surface borrowing the window) live: releasing the window would
-        // dangle, so it is released ONLY after an Ok destroy that guarantees
-        // teardown. The context is freed regardless — the thread is exiting,
-        // so no further callback can read it.
+        // EGL surface borrowing an owned window) live: releasing would dangle,
+        // so the owned windows are released ONLY after an Ok destroy that
+        // guarantees teardown (otherwise they leak — better than a UAF). The
+        // context is freed regardless — the thread is exiting, so no further
+        // callback can read it.
         let status = unsafe { jian_destroy(engine_ptr.get()) };
         if matches!(status, JianStatus::Ok) {
-            crate::window::take_current_window();
+            crate::window::release_all_windows();
         }
         unsafe { drop_ctx(ctx.get()) };
     };
@@ -338,6 +345,26 @@ fn jstring_to_string(env: &mut JNIEnv, s: &JString) -> Option<String> {
     env.get_string(s).ok().map(|s| s.into())
 }
 
+/// Runs a `()`-returning native body under an unwind guard so no panic
+/// crosses the non-unwinding `extern "system"` boundary.
+fn guard_unit(f: impl FnOnce()) {
+    if let Err(payload) = catch_unwind(AssertUnwindSafe(f)) {
+        crate::engine_thread::drop_guarded(payload);
+    }
+}
+
+/// Runs a `jstring`-returning native body under an unwind guard (panic →
+/// null).
+fn guard_jstring(f: impl FnOnce() -> jni::sys::jstring) -> jni::sys::jstring {
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(s) => s,
+        Err(payload) => {
+            crate::engine_thread::drop_guarded(payload);
+            ptr::null_mut()
+        }
+    }
+}
+
 // ---- Lifecycle natives ---------------------------------------------------
 
 #[no_mangle]
@@ -373,6 +400,12 @@ fn attach_or_resume(env: &mut JNIEnv, engine: jlong, surface: JObject, resume: b
         return STATUS_CLOSING;
     };
     with_engine(engine, move |e| {
+        // Once poisoned, `call_engine` returns Poisoned WITHOUT running the
+        // lifecycle body — so acquiring a new window here and releasing the
+        // old one would dangle a window EGL still borrows. Refuse outright.
+        if crate::window::is_poisoned() {
+            return JianStatus::Poisoned as jint;
+        }
         let Some(vm) = VM.get() else {
             return JianStatus::InvalidArg as jint;
         };
@@ -393,18 +426,24 @@ fn attach_or_resume(env: &mut JNIEnv, engine: jlong, surface: JObject, resume: b
         } else {
             unsafe { jian_attach_surface(e, &desc) }
         };
-        if matches!(status, JianStatus::Ok | JianStatus::Poisoned) {
-            // Ok: the engine owns an EGL surface on this window. Poisoned: an
-            // internal panic returned AFTER partial mutation, so the engine
-            // MAY have installed the surface (borrowing this window) before
-            // unwinding — never release a possibly-borrowed window. Both
-            // retain it (releasing any previous), and destroy releases it.
-            unsafe { crate::window::set_current_window(window) };
-        } else {
-            // A clean failure: Task 3's error-arm ordering guarantees no EGL
-            // object survives, so the old surface (if any) still owns
-            // CURRENT_WINDOW — leave it and release ONLY the fresh window.
-            unsafe { crate::window::release(window) };
+        match status {
+            JianStatus::Ok => {
+                // Clean transition: the engine dropped its old surface, so all
+                // previously-owned windows are released and this becomes the
+                // sole owned window.
+                unsafe { crate::window::commit_window(window) };
+            }
+            JianStatus::Poisoned => {
+                // Partial mutation may have installed this window before the
+                // panic — retain it (release NOTHING) and refuse future ops.
+                crate::window::mark_poisoned();
+                unsafe { crate::window::track_window(window) };
+            }
+            _ => {
+                // Clean failure: Task 3 guarantees no EGL object survives, so
+                // release ONLY the fresh acquisition; owned windows untouched.
+                unsafe { crate::window::release(window) };
+            }
         }
         status as jint
     })
@@ -419,12 +458,14 @@ pub extern "system" fn Java_dev_jian_player_JianNative_nativeSuspend<'local>(
 ) -> jint {
     with_engine(engine, move |e| {
         let status = unsafe { jian_suspend(e) };
-        // Release the window ONLY after a status that guarantees the engine
-        // tore its EGL surface down synchronously (Ok). On a non-Ok status
-        // (e.g. WrongThread re-entry) the surface may still borrow the
-        // window, so it is kept until destroy/next-suspend releases it.
-        if status as i32 == 0 {
-            crate::window::take_current_window();
+        // Release the owned windows ONLY after an Ok suspend that guarantees
+        // the engine tore its EGL surface down synchronously. On Poisoned the
+        // surface may still borrow a window (latch + retain); any other non-Ok
+        // also keeps them (kept until destroy).
+        match status {
+            JianStatus::Ok => crate::window::release_all_windows(),
+            JianStatus::Poisoned => crate::window::mark_poisoned(),
+            _ => {}
         }
         status as jint
     })

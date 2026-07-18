@@ -167,74 +167,91 @@ impl Drop for CallbackFrame {
     }
 }
 
+/// Runs a callback trampoline body under an unwind guard covering the WHOLE
+/// trampoline — the context lookup, the C-pointer marshalling, the JNI local
+/// frame, and exception cleanup — so a panic anywhere (e.g. an allocation
+/// failure while copying a string) can never cross the non-unwinding C
+/// callback ABI. The caught payload is disposed through the guarded dropper
+/// (a panicking-Drop payload cannot re-panic). A null/absent context is a
+/// no-op.
+fn run_trampoline(user_data: *mut c_void, body: impl FnOnce(&EngineCtx)) {
+    let guarded = catch_unwind(AssertUnwindSafe(|| {
+        // SAFETY: `user_data` is a live `*const EngineCtx` while any callback
+        // can fire (freed only after jian_destroy on the engine thread).
+        if let Some(ctx) = unsafe { ctx(user_data) } {
+            body(ctx);
+        }
+    }));
+    if let Err(payload) = guarded {
+        crate::engine_thread::drop_guarded(payload);
+    }
+}
+
 extern "C" fn needs_redraw(user_data: *mut c_void, has_next_wake: bool, next_wake_ms: u64) {
-    let Some(ctx) = (unsafe { ctx(user_data) }) else {
-        return;
-    };
-    let from_frame = from_frame();
-    upcall(ctx, 2, |env, receiver| {
-        let _ = env.call_method(
-            receiver,
-            "onNeedsRedraw",
-            "(ZZJ)V",
-            &[
-                JValue::Bool(from_frame as u8),
-                JValue::Bool(has_next_wake as u8),
-                JValue::Long(next_wake_ms as i64),
-            ],
-        );
+    run_trampoline(user_data, |ctx| {
+        let from_frame = from_frame();
+        upcall(ctx, 2, |env, receiver| {
+            let _ = env.call_method(
+                receiver,
+                "onNeedsRedraw",
+                "(ZZJ)V",
+                &[
+                    JValue::Bool(from_frame as u8),
+                    JValue::Bool(has_next_wake as u8),
+                    JValue::Long(next_wake_ms as i64),
+                ],
+            );
+        });
     });
 }
 
 extern "C" fn runtime_error(user_data: *mut c_void, error: *const JianRuntimeError) {
-    let Some(ctx) = (unsafe { ctx(user_data) }) else {
-        return;
-    };
-    let Some(error) = (unsafe { error.as_ref() }) else {
-        return;
-    };
-    let message = unsafe { borrowed_str(error.message_ptr, error.message_len) };
-    let source = if error.source_ptr.is_null() {
-        None
-    } else {
-        Some(unsafe { borrowed_str(error.source_ptr, error.source_len) })
-    };
-    let kind = error.kind as i32;
-    upcall(ctx, 4, |env, receiver| {
-        let Ok(jmessage) = env.new_string(&message) else {
+    run_trampoline(user_data, |ctx| {
+        let Some(error) = (unsafe { error.as_ref() }) else {
             return;
         };
-        let jsource = match &source {
-            Some(s) => match env.new_string(s) {
-                Ok(js) => js.into(),
-                Err(_) => return,
-            },
-            None => JObject::null(),
+        let message = unsafe { borrowed_str(error.message_ptr, error.message_len) };
+        let source = if error.source_ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { borrowed_str(error.source_ptr, error.source_len) })
         };
-        let _ = env.call_method(
-            receiver,
-            "onRuntimeError",
-            "(ILjava/lang/String;Ljava/lang/String;)V",
-            &[
-                JValue::Int(kind),
-                JValue::Object(&jmessage.into()),
-                JValue::Object(&jsource),
-            ],
-        );
+        let kind = error.kind as i32;
+        upcall(ctx, 4, |env, receiver| {
+            let Ok(jmessage) = env.new_string(&message) else {
+                return;
+            };
+            let jsource = match &source {
+                Some(s) => match env.new_string(s) {
+                    Ok(js) => js.into(),
+                    Err(_) => return,
+                },
+                None => JObject::null(),
+            };
+            let _ = env.call_method(
+                receiver,
+                "onRuntimeError",
+                "(ILjava/lang/String;Ljava/lang/String;)V",
+                &[
+                    JValue::Int(kind),
+                    JValue::Object(&jmessage.into()),
+                    JValue::Object(&jsource),
+                ],
+            );
+        });
     });
 }
 
 extern "C" fn ime_control(user_data: *mut c_void, op: i32, request_id: u64) {
-    let Some(ctx) = (unsafe { ctx(user_data) }) else {
-        return;
-    };
-    upcall(ctx, 2, |env, receiver| {
-        let _ = env.call_method(
-            receiver,
-            "onImeControl",
-            "(IJ)V",
-            &[JValue::Int(op), JValue::Long(request_id as i64)],
-        );
+    run_trampoline(user_data, |ctx| {
+        upcall(ctx, 2, |env, receiver| {
+            let _ = env.call_method(
+                receiver,
+                "onImeControl",
+                "(IJ)V",
+                &[JValue::Int(op), JValue::Long(request_id as i64)],
+            );
+        });
     });
 }
 
@@ -243,33 +260,31 @@ extern "C" fn input_focus_changed(
     focused: bool,
     info: *const JianFieldInfo,
 ) {
-    let Some(ctx) = (unsafe { ctx(user_data) }) else {
-        return;
-    };
-    let (input_kind, return_key_hint) = match unsafe { info.as_ref() } {
-        Some(info) => (info.input_kind as i32, info.return_key_hint as i32),
-        None => (0, 0),
-    };
-    upcall(ctx, 2, |env, receiver| {
-        let _ = env.call_method(
-            receiver,
-            "onInputFocusChanged",
-            "(ZII)V",
-            &[
-                JValue::Bool(focused as u8),
-                JValue::Int(input_kind),
-                JValue::Int(return_key_hint),
-            ],
-        );
+    run_trampoline(user_data, |ctx| {
+        let (input_kind, return_key_hint) = match unsafe { info.as_ref() } {
+            Some(info) => (info.input_kind as i32, info.return_key_hint as i32),
+            None => (0, 0),
+        };
+        upcall(ctx, 2, |env, receiver| {
+            let _ = env.call_method(
+                receiver,
+                "onInputFocusChanged",
+                "(ZII)V",
+                &[
+                    JValue::Bool(focused as u8),
+                    JValue::Int(input_kind),
+                    JValue::Int(return_key_hint),
+                ],
+            );
+        });
     });
 }
 
 extern "C" fn text_state_changed(user_data: *mut c_void) {
-    let Some(ctx) = (unsafe { ctx(user_data) }) else {
-        return;
-    };
-    upcall(ctx, 1, |env, receiver| {
-        let _ = env.call_method(receiver, "onTextStateChanged", "()V", &[]);
+    run_trampoline(user_data, |ctx| {
+        upcall(ctx, 1, |env, receiver| {
+            let _ = env.call_method(receiver, "onTextStateChanged", "()V", &[]);
+        });
     });
 }
 
@@ -278,54 +293,53 @@ extern "C" fn capability_request(
     request_id: u64,
     request: *const JianCapabilityRequest,
 ) {
-    let Some(ctx) = (unsafe { ctx(user_data) }) else {
-        return;
-    };
-    let Some(request) = (unsafe { request.as_ref() }) else {
-        return;
-    };
-    // The per-kind payload is marshalled to a JSON string plus optional raw
-    // body bytes (HTTP fetch) — all owned, so no C pointer outlives the call.
-    let Some((payload_json, body)) = (unsafe { marshal::capability_request_to_json(request) })
-    else {
-        return;
-    };
-    upcall(ctx, 4, |env, receiver| {
-        let Ok(jpayload) = env.new_string(&payload_json) else {
+    run_trampoline(user_data, |ctx| {
+        let Some(request) = (unsafe { request.as_ref() }) else {
             return;
         };
-        let jbody = match &body {
-            Some(bytes) => match env.byte_array_from_slice(bytes) {
-                Ok(arr) => arr.into(),
-                Err(_) => return,
-            },
-            None => JObject::null(),
+        // The per-kind payload is marshalled to a JSON string plus optional
+        // raw body bytes (HTTP fetch) — all owned, so no C pointer outlives
+        // the call.
+        let Some((payload_json, body)) = (unsafe { marshal::capability_request_to_json(request) })
+        else {
+            return;
         };
-        let _ = env.call_method(
-            receiver,
-            "onCapabilityRequest",
-            "(JILjava/lang/String;[B)V",
-            &[
-                JValue::Long(request_id as i64),
-                JValue::Int(request.kind as i32),
-                JValue::Object(&jpayload.into()),
-                JValue::Object(&jbody),
-            ],
-        );
+        upcall(ctx, 4, |env, receiver| {
+            let Ok(jpayload) = env.new_string(&payload_json) else {
+                return;
+            };
+            let jbody = match &body {
+                Some(bytes) => match env.byte_array_from_slice(bytes) {
+                    Ok(arr) => arr.into(),
+                    Err(_) => return,
+                },
+                None => JObject::null(),
+            };
+            let _ = env.call_method(
+                receiver,
+                "onCapabilityRequest",
+                "(JILjava/lang/String;[B)V",
+                &[
+                    JValue::Long(request_id as i64),
+                    JValue::Int(request.kind as i32),
+                    JValue::Object(&jpayload.into()),
+                    JValue::Object(&jbody),
+                ],
+            );
+        });
     });
 }
 
 extern "C" fn capability_cancelled(user_data: *mut c_void, request_id: u64) {
-    let Some(ctx) = (unsafe { ctx(user_data) }) else {
-        return;
-    };
-    upcall(ctx, 1, |env, receiver| {
-        let _ = env.call_method(
-            receiver,
-            "onCapabilityCancelled",
-            "(J)V",
-            &[JValue::Long(request_id as i64)],
-        );
+    run_trampoline(user_data, |ctx| {
+        upcall(ctx, 1, |env, receiver| {
+            let _ = env.call_method(
+                receiver,
+                "onCapabilityCancelled",
+                "(J)V",
+                &[JValue::Long(request_id as i64)],
+            );
+        });
     });
 }
 
