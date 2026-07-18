@@ -33,22 +33,48 @@ class JianCallbacksImpl(private val view: JianSurfaceView) : JianCallbacks {
     }
 
     override fun onImeControl(op: Int, requestId: Long) {
-        Log.d(TAG, "imeControl op=$op req=$requestId (Phase B)")
+        // Mirror iOS answerImeControl: exactly one completion per request id,
+        // never routed through the connection's request-id-0 methods.
+        view.post {
+            val engine = view.engine
+            if (engine == 0L) return@post
+            when (op) {
+                1 -> JianNative.nativeImeCancel(engine, requestId) // Cancel
+                else -> { // Commit (0) / Dismiss (2)
+                    val text = view.platformComposingText ?: engineComposingText(engine) ?: ""
+                    JianNative.nativeImeCommit(engine, text, 1, requestId)
+                    view.platformComposingText = null
+                    if (op == 2) view.hideKeyboard() // Dismiss
+                }
+            }
+            view.restartInput()
+            view.requestFrame()
+        }
     }
 
     override fun onInputFocusChanged(focused: Boolean, inputKind: Int, returnKeyHint: Int) {
-        Log.d(TAG, "inputFocusChanged focused=$focused kind=$inputKind (Phase B)")
+        view.post { view.applyFocus(focused, inputKind, returnKeyHint) }
     }
 
     override fun onTextStateChanged() {
-        Log.d(TAG, "textStateChanged (Phase B)")
+        view.post {
+            view.updateSelectionFromEngine()
+            view.pushCursorAnchorIfMonitoring()
+            view.pushExtractedTextIfMonitoring()
+        }
     }
 
     override fun onCapabilityRequest(requestId: Long, kind: Int, payloadJson: String, bodyBytes: ByteArray?) {
-        Log.d(TAG, "capabilityRequest id=$requestId kind=$kind payload=$payloadJson (Phase B)")
+        Log.d(TAG, "capabilityRequest id=$requestId kind=$kind payload=$payloadJson (Phase B — capabilities)")
     }
 
     override fun onCapabilityCancelled(requestId: Long) {
-        Log.d(TAG, "capabilityCancelled id=$requestId (Phase B)")
+        Log.d(TAG, "capabilityCancelled id=$requestId (Phase B — capabilities)")
+    }
+
+    private fun engineComposingText(engine: Long): String? {
+        val s = JianTextState()
+        if (JianNative.nativeTextGetState(engine, s) != 0 || !s.hasComposing) return null
+        return JianNative.nativeTextGetRange(engine, s.composingStart, s.composingEnd)
     }
 }

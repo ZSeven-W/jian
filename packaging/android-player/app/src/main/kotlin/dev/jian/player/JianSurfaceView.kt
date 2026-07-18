@@ -1,12 +1,19 @@
 package dev.jian.player
 
 import android.content.Context
+import android.graphics.Matrix
+import android.text.InputType
 import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.inputmethod.CursorAnchorInfo
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedText
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 
 private const val TAG = "JianPlayer"
 
@@ -42,8 +49,122 @@ class JianSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Ca
 
     private val callbacks = JianCallbacksImpl(this)
 
+    private val imm: InputMethodManager
+        get() = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+
+    // ---- VIEW-owned IME state (survives restartInput; §6.4) ---------------
+    /** The owned composing snapshot, cleared/updated only after an Ok native. */
+    var platformComposingText: String? = null
+    /** GET_EXTRACTED_TEXT_MONITOR request token, or null. */
+    var extractedTextToken: Int? = null
+    /** CURSOR_UPDATE_MONITOR flag. */
+    var cursorMonitor = false
+
+    private var editable = false
+    private var inputKind = 0
+    private var returnKeyHint = 0
+
     init {
         holder.addCallback(this)
+        isFocusable = true
+        isFocusableInTouchMode = true
+    }
+
+    override fun onCheckIsTextEditor(): Boolean = editable
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        if (!editable || engine == 0L) return null
+        outAttrs.inputType = when (inputKind) {
+            1 -> InputType.TYPE_CLASS_NUMBER
+            2 -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            else -> InputType.TYPE_CLASS_TEXT
+        }
+        // JianReturnKeyHint: 1 Done, 2 Go, 3 Next, 4 Search, 5 Send.
+        outAttrs.imeOptions = when (returnKeyHint) {
+            1 -> EditorInfo.IME_ACTION_DONE
+            2 -> EditorInfo.IME_ACTION_GO
+            3 -> EditorInfo.IME_ACTION_NEXT
+            4 -> EditorInfo.IME_ACTION_SEARCH
+            5 -> EditorInfo.IME_ACTION_SEND
+            else -> EditorInfo.IME_ACTION_UNSPECIFIED
+        }
+        val s = JianTextState()
+        JianNative.nativeTextGetState(engine, s)
+        outAttrs.initialSelStart = s.selectionStart
+        outAttrs.initialSelEnd = s.selectionEnd
+        return JianInputConnection(this)
+    }
+
+    /** Focus/editable transition from the engine (called on the main thread). */
+    fun applyFocus(focused: Boolean, kind: Int, returnKey: Int) {
+        editable = focused
+        inputKind = kind
+        returnKeyHint = returnKey
+        if (focused) {
+            requestFocus()
+            imm.restartInput(this)
+            imm.showSoftInput(this, 0)
+        } else {
+            platformComposingText = null // never commit a stale snapshot elsewhere
+            imm.restartInput(this)
+            imm.hideSoftInputFromWindow(windowToken, 0)
+        }
+    }
+
+    fun restartInput() = imm.restartInput(this)
+
+    fun updateSelectionFromEngine() {
+        if (engine == 0L) return
+        val s = JianTextState()
+        if (JianNative.nativeTextGetState(engine, s) != 0) return
+        imm.updateSelection(
+            this,
+            s.selectionStart,
+            s.selectionEnd,
+            if (s.hasComposing) s.composingStart else -1,
+            if (s.hasComposing) s.composingEnd else -1,
+        )
+    }
+
+    fun hideKeyboard() = imm.hideSoftInputFromWindow(windowToken, 0)
+
+    /** Sends a CursorAnchorInfo now (logical → view px, on-screen matrix). */
+    fun pushCursorAnchor() {
+        if (engine == 0L) return
+        val rect = FloatArray(4)
+        if (JianNative.nativeTextCaretRect(engine, rect) != 0) return
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        val matrix = Matrix().apply { setTranslate(loc[0].toFloat(), loc[1].toFloat()) }
+        val x = rect[0] * density
+        val top = rect[1] * density
+        val bottom = (rect[1] + rect[3]) * density
+        val info = CursorAnchorInfo.Builder()
+            .setMatrix(matrix)
+            .setInsertionMarkerLocation(x, top, bottom, bottom, CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION)
+            .build()
+        imm.updateCursorAnchorInfo(this, info)
+    }
+
+    fun pushCursorAnchorIfMonitoring() {
+        if (cursorMonitor) pushCursorAnchor()
+    }
+
+    fun pushExtractedTextIfMonitoring() {
+        val token = extractedTextToken ?: return
+        if (engine == 0L) return
+        val full = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
+        val s = JianTextState()
+        JianNative.nativeTextGetState(engine, s)
+        val et = ExtractedText().apply {
+            text = full
+            startOffset = 0
+            selectionStart = s.selectionStart
+            selectionEnd = s.selectionEnd
+            partialStartOffset = -1
+            partialEndOffset = -1
+        }
+        imm.updateExtractedText(this, token, et)
     }
 
     fun configure(doc: ByteArray, assetBaseDir: String?, font: ByteArray?) {
