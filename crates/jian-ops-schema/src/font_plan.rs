@@ -89,6 +89,15 @@ impl FontPlan {
         for node in &doc.children {
             scan_node(node, None, &mut plan);
         }
+        // Multi-page documents may carry only `pages` (no top-level
+        // `children`) — fold every page's roots in as well.
+        if let Some(pages) = &doc.pages {
+            for page in pages {
+                for node in &page.children {
+                    scan_node(node, None, &mut plan);
+                }
+            }
+        }
         plan
     }
 
@@ -328,6 +337,24 @@ mod tests {
         assert_eq!(usage.codepoints.len(), 2);
         assert!(usage.codepoints.contains(&('H' as u32)));
         assert!(usage.codepoints.contains(&('i' as u32)));
+    }
+
+    /// Multi-page documents ship text under `pages[].children` with no
+    /// top-level `children` — scan must see those families too.
+    #[test]
+    fn scan_covers_page_children() {
+        let doc = doc_from(json!({
+            "version": "1.0.0",
+            "pages": [{
+                "id": "page-1",
+                "name": "Page 1",
+                "children": [
+                    { "type": "text", "id": "t", "content": "hi", "fontFamily": "Katibeh" }
+                ]
+            }]
+        }));
+        let plan = FontPlan::scan(&doc);
+        assert!(plan.for_family("Katibeh").is_some(), "page text scanned");
     }
 
     #[test]
