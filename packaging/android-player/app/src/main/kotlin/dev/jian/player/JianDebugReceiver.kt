@@ -29,6 +29,10 @@ class JianDebugReceiver(private val view: JianSurfaceView) : BroadcastReceiver()
             addAction("dev.jian.player.FAIL_NEXT_ATTACH")
             addAction("dev.jian.player.LOSE_CONTEXT")
             addAction("dev.jian.player.LOAD_DOC")
+            addAction("dev.jian.player.IME_DELETE_TEST")
+            addAction("dev.jian.player.IME_FINISH_TEST")
+            addAction("dev.jian.player.IME_QUERY_TEST")
+            addAction("dev.jian.player.BATCH_RESTART_TEST")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(this, filter, Context.RECEIVER_EXPORTED)
@@ -73,6 +77,15 @@ class JianDebugReceiver(private val view: JianSurfaceView) : BroadcastReceiver()
                 Log.i(TAG, "debug LOAD_DOC $name")
                 view.debugLoadDoc(name)
             }
+            // Deterministic IME acceptance harnesses (assert via nativeTextGetState).
+            "dev.jian.player.IME_DELETE_TEST" ->
+                view.post { JianImeTests.deleteTest(view, intent.getBooleanExtra("codepoints", false)) }
+            "dev.jian.player.IME_FINISH_TEST" ->
+                view.post { JianImeTests.finishTest(view, intent.getBooleanExtra("outside", false)) }
+            "dev.jian.player.IME_QUERY_TEST" ->
+                view.post { JianImeTests.queryTest(view) }
+            "dev.jian.player.BATCH_RESTART_TEST" ->
+                view.post { JianImeTests.batchRestartTest(view) }
         }
     }
 }
