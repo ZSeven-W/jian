@@ -586,8 +586,12 @@ pub struct SceneNode {
     /// Carries the canonical schema's `src` field verbatim — usually
     /// a `data:image/...;base64,...` URL produced by the host's file
     /// picker, or a plain file path / remote URL on documents that
-    /// reference external media. `None` for non-image nodes.
-    pub image_src: Option<String>,
+    /// reference external media. `None` for non-image nodes. Shared
+    /// (`Arc`) — an image-heavy document holds multi-MB payloads
+    /// referenced by many nodes, and the scene is rebuilt on every
+    /// document change; owning a `String` here made each rebuild
+    /// memcpy the entire image set.
+    pub image_src: Option<std::sync::Arc<str>>,
     /// Stable content hash for `image_src`. The canvas painter uses it
     /// as a per-frame cache key without hashing large data URLs again.
     pub image_src_id: u64,
