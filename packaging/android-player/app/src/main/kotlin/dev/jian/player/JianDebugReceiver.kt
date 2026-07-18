@@ -33,6 +33,8 @@ class JianDebugReceiver(private val view: JianSurfaceView) : BroadcastReceiver()
             addAction("dev.jian.player.IME_FINISH_TEST")
             addAction("dev.jian.player.IME_QUERY_TEST")
             addAction("dev.jian.player.BATCH_RESTART_TEST")
+            addAction("dev.jian.player.TEXT_DUMP")
+            addAction("dev.jian.player.IME_KEY_TEST")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(this, filter, Context.RECEIVER_EXPORTED)
@@ -86,6 +88,11 @@ class JianDebugReceiver(private val view: JianSurfaceView) : BroadcastReceiver()
                 view.post { JianImeTests.queryTest(view) }
             "dev.jian.player.BATCH_RESTART_TEST" ->
                 view.post { JianImeTests.batchRestartTest(view) }
+            // Reads what the ENGINE holds around the caret, which is the only
+            // way to see a real IME's commit when the caret is scrolled out of
+            // view (a long field shows its head, not its insertion point).
+            "dev.jian.player.TEXT_DUMP" -> view.post { JianImeTests.dumpAroundCaret(view) }
+            "dev.jian.player.IME_KEY_TEST" -> view.post { JianImeTests.keyEventTest(view) }
         }
     }
 }

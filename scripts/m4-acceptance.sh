@@ -132,6 +132,7 @@ bcast IME_DELETE_TEST --ez codepoints true
 bcast IME_FINISH_TEST
 bcast IME_FINISH_TEST --ez outside true
 bcast BATCH_RESTART_TEST
+bcast IME_KEY_TEST                      # backspace as a KEY EVENT (real-IME path)
 sleep 2
 while read -r line; do
   case "$line" in

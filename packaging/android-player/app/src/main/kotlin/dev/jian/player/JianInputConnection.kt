@@ -1,5 +1,6 @@
 package dev.jian.player
 
+import android.view.KeyEvent
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.ExtractedText
 import android.view.inputmethod.ExtractedTextRequest
@@ -144,6 +145,46 @@ class JianInputConnection(
         if (!valid || engine == 0L) return false
         deleteSurrounding(beforeLength.toLong().coerceAtLeast(0), afterLength.toLong().coerceAtLeast(0))
         return true
+    }
+
+    /**
+     * Editing keys arrive as KEY EVENTS from real IMEs — Sogou sends
+     * KEYCODE_DEL for backspace rather than calling `deleteSurroundingText`,
+     * and Gboard does the same on an empty composition. `BaseInputConnection`
+     * would route them to the view's key dispatcher, which this view does not
+     * implement, so without this override Backspace and Enter are silently
+     * inert under a real IME even though every direct editing call works.
+     */
+    override fun sendKeyEvent(event: KeyEvent): Boolean {
+        if (!valid || engine == 0L) return false
+        // Consume the UP half so the platform does not re-dispatch it.
+        if (event.action != KeyEvent.ACTION_DOWN) return true
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_DEL -> deleteOneUnit(before = true)
+            KeyEvent.KEYCODE_FORWARD_DEL -> deleteOneUnit(before = false)
+            KeyEvent.KEYCODE_ENTER -> commitText("\n", 1)
+            else -> {
+                val point = event.unicodeChar
+                if (point != 0) commitText(String(Character.toChars(point)), 1)
+            }
+        }
+        return true
+    }
+
+    /**
+     * A non-collapsed selection is dropped whole (the platform's backspace
+     * contract); otherwise one CODE POINT goes, so a surrogate pair never
+     * splits into an unpaired half.
+     */
+    private fun deleteOneUnit(before: Boolean) {
+        val s = state()
+        if (s.selectionEnd > s.selectionStart) {
+            if (ok(JianNative.nativeTextReplaceRange(engine, s.selectionStart, s.selectionEnd, ""))) {
+                wake()
+            }
+            return
+        }
+        if (before) deleteSurroundingTextInCodePoints(1, 0) else deleteSurroundingTextInCodePoints(0, 1)
     }
 
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {

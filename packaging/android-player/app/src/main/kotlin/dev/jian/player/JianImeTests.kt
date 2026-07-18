@@ -1,6 +1,7 @@
 package dev.jian.player
 
 import android.util.Log
+import android.view.KeyEvent
 
 private const val TAG = "JianPlayer"
 
@@ -37,6 +38,71 @@ object JianImeTests {
         val full = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: return false
         if (JianNative.nativeTextReplaceRange(engine, 0, full.length, text) != 0) return false
         return true
+    }
+
+    /**
+     * Backspace as a KEY EVENT, which is how real IMEs (Sogou; Gboard on an
+     * empty composition) send it. Regression: `sendKeyEvent` was not
+     * overridden, so `BaseInputConnection` routed the key to the view's key
+     * dispatcher -- which this view does not implement -- and backspace was
+     * silently inert under a real IME while every direct editing call worked.
+     * The other harnesses call deleteSurroundingText directly and so all
+     * passed straight through the gap.
+     */
+    fun keyEventTest(view: JianSurfaceView) {
+        val name = "IME_KEY_TEST"
+        val engine = view.engine
+        if (engine == 0L || state(engine) == null) return skip(name)
+
+        // CJK on purpose: one BMP char is 1 UTF-16 unit but 3 UTF-8 bytes, so
+        // a byte/unit mix-up in the delete path shows up here and not on ASCII.
+        if (!resetText(engine, "AB\u4F60\u597D")) return fail(name, "reset failed")
+        JianNative.nativeTextSetSelection(engine, 4, 4)
+
+        val ic = JianInputConnection(view)
+        val down = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL)
+        ic.sendKeyEvent(down)
+        val afterOne = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
+        ic.sendKeyEvent(down)
+        val afterTwo = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
+
+        // A non-collapsed selection must go whole, not one unit of it.
+        if (!resetText(engine, "ABCDEF")) return fail(name, "reset failed (2)")
+        JianNative.nativeTextSetSelection(engine, 1, 4)
+        ic.sendKeyEvent(down)
+        val afterSelection = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
+
+        val oneOk = afterOne == "AB\u4F60"
+        val twoOk = afterTwo == "AB"
+        val selOk = afterSelection == "AEF"
+        if (oneOk && twoOk && selOk) {
+            pass(name, "KEYCODE_DEL deleted '$afterOne' then '$afterTwo'; selection collapsed to '$afterSelection'")
+        } else {
+            fail(
+                name,
+                "afterOne='$afterOne' (want AB\u4F60 ok=$oneOk) afterTwo='$afterTwo' (want AB ok=$twoOk) " +
+                    "afterSelection='$afterSelection' (want AEF ok=$selOk)",
+            )
+        }
+    }
+
+    /** Logs the engine's text around the caret: `TEXT_DUMP caret=.. before=.. after=..`. */
+    fun dumpAroundCaret(view: JianSurfaceView) {
+        val engine = view.engine
+        val s = if (engine == 0L) null else state(engine)
+        if (s == null) {
+            Log.w(TAG, "TEXT_DUMP SKIP (no focused field)")
+            return
+        }
+        val full = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
+        val caret = s.selectionStart.coerceIn(0, full.length)
+        val before = full.substring((caret - 12).coerceAtLeast(0), caret)
+        val after = full.substring(caret, (caret + 12).coerceAtMost(full.length))
+        Log.i(
+            TAG,
+            "TEXT_DUMP caret=$caret len=${full.length} composing=${s.hasComposing} " +
+                "before='$before' after='$after'",
+        )
     }
 
     /**
