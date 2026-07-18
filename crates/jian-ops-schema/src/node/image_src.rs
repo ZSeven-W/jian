@@ -119,9 +119,93 @@ impl<'de> serde::Deserialize<'de> for ImageSrc {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         // Read a plain JSON string (no serde `rc` feature needed) then
         // wrap it in an `Arc`. Old `.op` files store `src` as a string,
-        // so they deserialize unchanged.
+        // so they deserialize unchanged. Inside a document-load scope
+        // (see [`intern`]) `op-image:` refs resolve to the load's
+        // shared table payloads and duplicate data URLs collapse to
+        // one allocation — 2000 fills sharing 700 images must not
+        // inflate into 2000 independent copies.
         let s = String::deserialize(deserializer)?;
-        Ok(ImageSrc(Arc::from(s)))
+        Ok(intern::resolve_or_intern(s))
+    }
+}
+
+/// Scoped, thread-local sharing context for document loads.
+///
+/// A `.op` file saved with the deduplicated image table stores each
+/// payload once and references it as `op-image:<id>`. The loader
+/// installs the table here for the duration of the typed parse:
+/// every `ImageSrc` that deserializes to a known ref receives an
+/// `Arc` CLONE of the table payload (no per-reference allocation),
+/// and — as a bonus for legacy inline files — duplicate large
+/// `data:` strings intern to a single shared allocation. Outside a
+/// scope, deserialization is byte-for-byte the historical behaviour.
+pub mod intern {
+    use super::ImageSrc;
+    use std::cell::RefCell;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    /// Ref prefix — must match `image_table::REF_PREFIX`.
+    const REF_PREFIX: &str = "op-image:";
+    /// Only intern `data:` payloads at least this large (matches the
+    /// externalize threshold; hashing tiny strings buys nothing).
+    const INTERN_MIN_LEN: usize = 4096;
+
+    struct LoadScope {
+        /// `op-image:<id>` → shared payload, from the file's table.
+        table: HashMap<String, Arc<str>>,
+        /// Content-interned large `data:` strings (legacy inline files).
+        seen: HashSet<Arc<str>>,
+    }
+
+    thread_local! {
+        static SCOPE: RefCell<Option<LoadScope>> = const { RefCell::new(None) };
+    }
+
+    /// Run `f` with a document-load sharing scope installed. `table`
+    /// maps table ids (WITHOUT the `op-image:` prefix) to their
+    /// payloads. Scopes don't nest — the guard restores the previous
+    /// scope on drop (including on unwind).
+    pub fn with_load_scope<R>(table: HashMap<String, Arc<str>>, f: impl FnOnce() -> R) -> R {
+        struct Guard(Option<LoadScope>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                SCOPE.with(|s| *s.borrow_mut() = self.0.take());
+            }
+        }
+        let prev = SCOPE.with(|s| {
+            s.borrow_mut().replace(LoadScope {
+                table,
+                seen: HashSet::new(),
+            })
+        });
+        let _guard = Guard(prev);
+        f()
+    }
+
+    /// Resolve `s` against the active load scope (ref lookup, then
+    /// content interning); plain `Arc::from` outside a scope.
+    pub(super) fn resolve_or_intern(s: String) -> ImageSrc {
+        SCOPE.with(|scope| {
+            let mut scope = scope.borrow_mut();
+            let Some(scope) = scope.as_mut() else {
+                return ImageSrc(Arc::from(s));
+            };
+            if let Some(id) = s.strip_prefix(REF_PREFIX) {
+                if let Some(payload) = scope.table.get(id) {
+                    return ImageSrc(Arc::clone(payload));
+                }
+            }
+            if s.len() >= INTERN_MIN_LEN && s.starts_with("data:") {
+                if let Some(existing) = scope.seen.get(s.as_str()) {
+                    return ImageSrc(Arc::clone(existing));
+                }
+                let arc: Arc<str> = Arc::from(s);
+                scope.seen.insert(Arc::clone(&arc));
+                return ImageSrc(arc);
+            }
+            ImageSrc(Arc::from(s))
+        })
     }
 }
 

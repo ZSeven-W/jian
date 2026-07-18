@@ -10,6 +10,7 @@ pub mod events;
 pub mod expression;
 pub mod font_plan;
 pub mod gestures;
+pub mod image_table;
 pub mod lifecycle;
 pub mod logic_module;
 pub mod navigation;

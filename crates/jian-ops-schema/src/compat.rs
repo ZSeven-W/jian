@@ -26,7 +26,7 @@ pub fn load_str(src: &str) -> OpsResult<LoadResult<PenDocument>> {
 
 /// Like [`load_str`], but with explicit [`LoadOptions`].
 pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDocument>> {
-    let raw: serde_json::Value = serde_json::from_str(src)?;
+    let mut raw: serde_json::Value = serde_json::from_str(src)?;
 
     let format_version = raw.get("formatVersion").and_then(|v| v.as_str());
     let legacy_version = raw.get("version").and_then(|v| v.as_str());
@@ -71,7 +71,17 @@ pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDo
         });
     }
 
-    let mut doc: PenDocument = serde_json::from_str(src)?;
+    // Documents saved with a deduplicated image table carry
+    // `op-image:<id>` refs. Take the table out and resolve the refs
+    // DURING the typed parse (`ImageSrc::deserialize` +
+    // `image_src::intern`): every reference receives a clone of one
+    // shared `Arc` per unique payload, so a thousand fills sharing an
+    // image cost one allocation instead of a thousand copies. The same
+    // scope content-interns duplicate large inline data URLs, so
+    // legacy (pre-table) files stop inflating too.
+    let table = crate::image_table::take_image_table(&mut raw);
+    let mut doc: PenDocument =
+        crate::node::image_src::intern::with_load_scope(table, || serde_json::from_value(raw))?;
 
     if opts.promote_legacy_widgets {
         for n in crate::promote::promote_document(&mut doc) {
@@ -108,6 +118,9 @@ const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
     // warned "UnknownField: designMd" on open.
     "designMd",
     "conversion",
+    // Save-side deduplicated image table (`image_table.rs`) — resolved
+    // back to inline data URLs before the typed parse.
+    "images",
 ];
 
 #[cfg(test)]
@@ -120,6 +133,71 @@ mod tests {
         let r = load_str(s).unwrap();
         assert!(r.value.format_version.is_none());
         assert_eq!(r.warnings.len(), 0);
+    }
+
+    /// A document saved with the deduplicated image table must parse
+    /// with every `op-image:` ref resolved back to the inline data
+    /// URL — and without an UnknownField warning for `images`.
+    #[test]
+    fn load_resolves_image_table_refs() {
+        let payload = format!("data:image/png;base64,{}", "A".repeat(4096));
+        let s = format!(
+            r#"{{"version":"0.8.0","images":{{"abc":"{payload}"}},"children":[{{"type":"image","id":"i1","name":"img","x":0,"y":0,"width":10,"height":10,"src":"op-image:abc"}}]}}"#
+        );
+        let r = load_str(&s).unwrap();
+        assert_eq!(r.warnings.len(), 0, "images is a known field");
+        let crate::node::PenNode::Image(img) = &r.value.children[0] else {
+            panic!("image node expected");
+        };
+        assert_eq!(&img.src, payload.as_str(), "ref resolved to inline URL");
+    }
+
+    /// Two nodes referencing the same table entry must share ONE
+    /// `Arc` allocation after load — resolving refs into independent
+    /// copies would re-inflate exactly the duplication the table
+    /// removed from the file.
+    #[test]
+    fn image_table_refs_share_one_allocation() {
+        let payload = format!("data:image/png;base64,{}", "B".repeat(4096));
+        let s = format!(
+            r#"{{"version":"0.8.0","images":{{"abc":"{payload}"}},"children":[
+                {{"type":"image","id":"i1","name":"a","x":0,"y":0,"width":1,"height":1,"src":"op-image:abc"}},
+                {{"type":"image","id":"i2","name":"b","x":0,"y":0,"width":1,"height":1,"src":"op-image:abc"}}]}}"#
+        );
+        let r = load_str(&s).unwrap();
+        let (crate::node::PenNode::Image(a), crate::node::PenNode::Image(b)) =
+            (&r.value.children[0], &r.value.children[1])
+        else {
+            panic!("image nodes expected");
+        };
+        assert_eq!(&a.src, payload.as_str());
+        assert!(
+            std::ptr::eq(a.src.as_ref(), b.src.as_ref()),
+            "both refs share the same Arc allocation"
+        );
+    }
+
+    /// Legacy files with the payload inlined per node (pre-table
+    /// saves) intern duplicate large data URLs on load, so opening an
+    /// old bloated file doesn't cost one allocation per reference.
+    #[test]
+    fn legacy_inline_duplicates_intern_on_load() {
+        let payload = format!("data:image/png;base64,{}", "C".repeat(4096));
+        let s = format!(
+            r#"{{"version":"0.8.0","children":[
+                {{"type":"image","id":"i1","name":"a","x":0,"y":0,"width":1,"height":1,"src":"{payload}"}},
+                {{"type":"image","id":"i2","name":"b","x":0,"y":0,"width":1,"height":1,"src":"{payload}"}}]}}"#
+        );
+        let r = load_str(&s).unwrap();
+        let (crate::node::PenNode::Image(a), crate::node::PenNode::Image(b)) =
+            (&r.value.children[0], &r.value.children[1])
+        else {
+            panic!("image nodes expected");
+        };
+        assert!(
+            std::ptr::eq(a.src.as_ref(), b.src.as_ref()),
+            "duplicate inline payloads intern to one allocation"
+        );
     }
 
     #[test]
