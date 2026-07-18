@@ -5,3 +5,4 @@ app/src/main/jniLibs/
 .idea/
 *.iml
 .cxx/
+.kotlin/
