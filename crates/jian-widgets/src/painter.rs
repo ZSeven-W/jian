@@ -123,6 +123,10 @@ pub trait Painter {
         self.clip_rect(rect);
     }
 
+    fn clip_round_rect_per_corner(&mut self, rect: Rect, radii: [f32; 4]) {
+        self.clip_round_rect(rect, radii[0]);
+    }
+
     fn stroke_line(&mut self, from: Point2D, to: Point2D, color: Color, width: f32);
     fn fill_round_rect(&mut self, rect: Rect, radius: f32, color: Color);
     fn stroke_round_rect(&mut self, rect: Rect, radius: f32, color: Color, width: f32);
@@ -377,6 +381,20 @@ pub trait Painter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn fill_round_rect_linear_gradient_per_corner(
+        &mut self,
+        rect: Rect,
+        radii: [f32; 4],
+        stops: &[(f32, Color)],
+        _angle_deg: f32,
+        opacity: f32,
+    ) {
+        if let Some((_, c)) = stops.first() {
+            self.fill_round_rect_per_corner(rect, radii, fold_alpha(*c, opacity));
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn fill_round_rect_radial_gradient(
         &mut self,
         rect: Rect,
@@ -389,6 +407,22 @@ pub trait Painter {
     ) {
         if let Some((_, c)) = stops.first() {
             self.fill_round_rect(rect, radius, fold_alpha(*c, opacity));
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_round_rect_radial_gradient_per_corner(
+        &mut self,
+        rect: Rect,
+        radii: [f32; 4],
+        stops: &[(f32, Color)],
+        _cx_frac: f32,
+        _cy_frac: f32,
+        _radius_frac: f32,
+        opacity: f32,
+    ) {
+        if let Some((_, c)) = stops.first() {
+            self.fill_round_rect_per_corner(rect, radii, fold_alpha(*c, opacity));
         }
     }
 
@@ -412,6 +446,21 @@ pub trait Painter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn fill_round_rect_mesh_gradient_per_corner(
+        &mut self,
+        rect: Rect,
+        radii: [f32; 4],
+        _rows: u32,
+        _cols: u32,
+        colors: &[Color],
+        opacity: f32,
+    ) {
+        if let Some(c) = colors.first() {
+            self.fill_round_rect_per_corner(rect, radii, fold_alpha(*c, opacity));
+        }
+    }
+
     /// Paint a native SkSL shader fill. `sksl` is the RAW (untrusted)
     /// source (entrypoint `half4 main(float2 fragCoord)`); `uniforms`
     /// carries `(name, values)` bindings (length 1 = float, 2/3/4 =
@@ -430,6 +479,19 @@ pub trait Painter {
         fallback: Color,
     ) {
         self.fill_round_rect(rect, radius, fold_alpha(fallback, opacity));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn fill_round_rect_shader_per_corner(
+        &mut self,
+        rect: Rect,
+        radii: [f32; 4],
+        _sksl: &str,
+        _uniforms: &[(&str, &[f32])],
+        opacity: f32,
+        fallback: Color,
+    ) {
+        self.fill_round_rect_per_corner(rect, radii, fold_alpha(fallback, opacity));
     }
 
     fn save(&mut self);
