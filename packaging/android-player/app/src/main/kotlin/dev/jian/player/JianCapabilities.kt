@@ -48,6 +48,7 @@ class JianCapabilities(private val view: JianSurfaceView) {
     private val pending = ConcurrentHashMap<Long, Pending>()
 
     fun onRequest(requestId: Long, kind: Int, payloadJson: String, bodyBytes: ByteArray?) {
+        Log.i(TAG, "capability request $requestId kind=$kind payload=$payloadJson")
         val payload = runCatching { JSONObject(payloadJson) }.getOrDefault(JSONObject())
         when (kind) {
             KIND_HTTP_FETCH, KIND_IMAGE_FETCH -> startFetch(requestId, kind, payload, bodyBytes)
@@ -230,6 +231,7 @@ class JianCapabilities(private val view: JianSurfaceView) {
         JianNative.nativeCapabilityResult(
             engine, requestId, KIND_HTTP_FETCH, ok, status, headersJson, bytes, false, null,
         )
+        view.requestFrame() // mutation-wake: the engine consumed a result
     }
 
     private fun deliverConfirm(requestId: Long, value: Boolean) {
@@ -238,6 +240,7 @@ class JianCapabilities(private val view: JianSurfaceView) {
         JianNative.nativeCapabilityResult(
             engine, requestId, KIND_CONFIRM, true, 0, null, null, value, null,
         )
+        view.requestFrame()
     }
 
     private fun deliver(
@@ -248,8 +251,10 @@ class JianCapabilities(private val view: JianSurfaceView) {
         error: String? = null,
     ) {
         if (engine == 0L) return
-        JianNative.nativeCapabilityResult(
+        val status = JianNative.nativeCapabilityResult(
             engine, requestId, kind, ok, 0, null, bytes, false, error,
         )
+        Log.i(TAG, "result $requestId kind=$kind ok=$ok bytes=${bytes?.size ?: 0} -> status=$status")
+        view.requestFrame()
     }
 }
