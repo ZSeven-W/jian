@@ -23,6 +23,9 @@ private const val PHASE_MOVE = 1
 private const val PHASE_UP = 2
 private const val PHASE_CANCEL = 3
 
+/** JianStatus::GpuError discriminant. */
+private const val GPU_ERROR = 4
+
 /**
  * Hosts the engine's rendering surface and drives the frame pump. The engine
  * is created ONCE on the first `surfaceCreated`; the shell owns the
@@ -43,11 +46,18 @@ class JianSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Ca
     private val choreographer = Choreographer.getInstance()
     private var frameScheduled = false
 
+    /** Increments ONLY on platform surfaceCreated; the GpuError recovery
+     *  budget is one attempt per generation (never refilled by a successful
+     *  frame or a recovery-driven resume). */
+    private var surfaceGeneration = 0
+    private var lastRecoveredGeneration = -1
+
     /** Latest insets (logical px), replayed after create/attach and resize. */
     private var safeArea = floatArrayOf(0f, 0f, 0f, 0f) // t, r, b, l
     private var keyboardHeight = 0f
 
     private val callbacks = JianCallbacksImpl(this)
+    val capabilities = JianCapabilities(this)
 
     private val imm: InputMethodManager
         get() = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
@@ -176,6 +186,7 @@ class JianSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Ca
     // ---- SurfaceHolder.Callback ------------------------------------------
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        surfaceGeneration++ // a new surface generation refreshes the recovery budget
         val wLogical = width / density
         val hLogical = height / density
         if (engine == 0L) {
@@ -264,7 +275,29 @@ class JianSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Ca
     private val frameCallback = Choreographer.FrameCallback { frameTimeNanos ->
         frameScheduled = false
         if (engine == 0L) return@FrameCallback
-        JianNative.nativeFrame(engine, frameTimeNanos / 1_000_000)
+        val status = JianNative.nativeFrame(engine, frameTimeNanos / 1_000_000)
+        if (status == GPU_ERROR) recoverGpu()
+    }
+
+    /**
+     * One suspend → resume recovery per surface generation on a GpuError
+     * (§6.2/Task 6 Step 1). A surfaceDestroyed that raced in wins (the surface
+     * is invalid → drop the recovery); a spent budget stops the pump and lets
+     * the engine's onRuntimeError report it.
+     */
+    private fun recoverGpu() {
+        val gen = surfaceGeneration
+        val surface = holder.surface
+        if (gen == lastRecoveredGeneration) {
+            Log.w(TAG, "GpuError with recovery budget spent (generation $gen) — pump stopped")
+            return
+        }
+        if (surface == null || !surface.isValid) return // raced surfaceDestroyed wins
+        lastRecoveredGeneration = gen
+        Log.i(TAG, "GpuError → suspend/resume recovery (generation $gen)")
+        JianNative.nativeSuspend(engine)
+        if (surface.isValid) JianNative.nativeResume(engine, surface)
+        requestFrame()
     }
 
     /** Schedules a frame `delayMs` from now (the engine's next animation wake). */
@@ -315,9 +348,71 @@ class JianSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Ca
     }
 
     fun destroy() {
+        capabilities.teardown()
         if (engine != 0L) {
             JianNative.nativeDestroy(engine)
             engine = 0L
         }
+    }
+
+    // ---- Debug fault/edge hooks (JianDebugReceiver, debug builds) --------
+
+    fun debugResize(wLogical: Float, hLogical: Float) {
+        if (engine != 0L) JianNative.nativeResize(engine, wLogical, hLogical, density)
+        requestFrame()
+    }
+
+    fun debugTextInsert(text: String) {
+        if (engine == 0L) return
+        val status = JianNative.nativeTextInsert(engine, text)
+        Log.i(TAG, "debug textInsert status=$status")
+        requestFrame()
+    }
+
+    fun debugThrowNextUpcall() {
+        callbacks.throwNextUpcall = true
+    }
+
+    fun debugFailNextAttach() {
+        if (engine == 0L) return
+        JianNative.nativeDebugFailNextAttach(engine)
+        // Cycle suspend → resume so the armed attach/resume fails AFTER the
+        // window acquisition, proving the caller releases it (paired log).
+        JianNative.nativeSuspend(engine)
+        holder.surface?.let { if (it.isValid) JianNative.nativeResume(engine, it) }
+        requestFrame()
+    }
+
+    fun debugLoseContext() {
+        if (engine == 0L) return
+        JianNative.nativeDebugLoseContext(engine)
+        requestFrame() // an idle engine consumes the armed context loss deterministically
+    }
+
+    /** Full engine recreate in the fixed teardown order (LOAD_DOC). */
+    fun debugLoadDoc(name: String) {
+        val newDoc = (context as? MainActivity)?.readDocPublic(name) ?: return
+        capabilities.teardown()
+        restartInput()
+        if (engine != 0L) {
+            JianNative.nativeDestroy(engine)
+            engine = 0L
+        }
+        take_reset()
+        docBytes = newDoc
+        // Re-create + attach against the current surface.
+        holder.surface?.let { s ->
+            if (s.isValid) {
+                surfaceCreated(holder)
+            }
+        }
+        restartInput()
+    }
+
+    private fun take_reset() {
+        attachedOnce = false
+        platformComposingText = null
+        extractedTextToken = null
+        cursorMonitor = false
     }
 }

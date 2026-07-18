@@ -37,6 +37,10 @@ android {
         jvmTarget = "17"
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     // jniLibs are populated out-of-band by `cargo ndk -o .../jniLibs build`.
     sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
 

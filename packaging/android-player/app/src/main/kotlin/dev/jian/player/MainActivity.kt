@@ -19,6 +19,7 @@ private const val TAG = "JianPlayer"
 class MainActivity : Activity() {
 
     private lateinit var surfaceView: JianSurfaceView
+    private var debugReceiver: JianDebugReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,10 +59,15 @@ class MainActivity : Activity() {
         }
         surfaceView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
             View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+
+        if (BuildConfig.DEBUG) {
+            debugReceiver = JianDebugReceiver(surfaceView).also { it.register(this) }
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        debugReceiver?.unregister(this)
         // §6.7 teardown, unconditionally (rotation never reaches here thanks
         // to configChanges).
         surfaceView.destroy()
@@ -102,6 +108,9 @@ class MainActivity : Activity() {
     }
 
     private fun readDoc(name: String): ByteArray = readAsset("$name.op") ?: ByteArray(0)
+
+    /** Exposed for JianDebugReceiver's LOAD_DOC recreate. */
+    fun readDocPublic(name: String): ByteArray = readDoc(name)
 
     private fun readAsset(path: String): ByteArray? = try {
         assets.open(path).use { it.readBytes() }

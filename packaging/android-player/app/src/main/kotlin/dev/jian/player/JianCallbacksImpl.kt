@@ -15,7 +15,19 @@ private const val TAG = "JianPlayer"
  */
 class JianCallbacksImpl(private val view: JianSurfaceView) : JianCallbacks {
 
+    /** THROW_UPCALL debug hook: the next upcall throws once (proves the JNI
+     *  exception check/describe/clear in the trampoline). */
+    @Volatile var throwNextUpcall = false
+
+    private fun maybeThrow() {
+        if (throwNextUpcall) {
+            throwNextUpcall = false
+            throw RuntimeException("deliberate THROW_UPCALL debug exception")
+        }
+    }
+
     override fun onNeedsRedraw(fromFrame: Boolean, hasNextWake: Boolean, nextWakeMs: Long) {
+        maybeThrow()
         if (!fromFrame) {
             // A mutation outside a frame woke the engine — draw promptly.
             view.requestFrame()
@@ -65,11 +77,11 @@ class JianCallbacksImpl(private val view: JianSurfaceView) : JianCallbacks {
     }
 
     override fun onCapabilityRequest(requestId: Long, kind: Int, payloadJson: String, bodyBytes: ByteArray?) {
-        Log.d(TAG, "capabilityRequest id=$requestId kind=$kind payload=$payloadJson (Phase B — capabilities)")
+        view.capabilities.onRequest(requestId, kind, payloadJson, bodyBytes)
     }
 
     override fun onCapabilityCancelled(requestId: Long) {
-        Log.d(TAG, "capabilityCancelled id=$requestId (Phase B — capabilities)")
+        view.capabilities.onCancelled(requestId)
     }
 
     private fun engineComposingText(engine: Long): String? {
