@@ -45,7 +45,7 @@ export type AppLifecycleHooks = { onLaunch: Array<Action> | null, onResume: Arra
 
 export type BlendMode = "normal" | "darken" | "multiply" | "screen" | "overlay" | "lighten" | "difference" | "hue" | "saturation" | "color" | "luminosity";
 
-export type BlurBody = { radius: number, };
+export type BlurBody = { radius: number, visible: boolean | null, };
 
 /**
  * Boolean that may also be an expression.
@@ -457,7 +457,7 @@ uniforms: { [key in string]?: ShaderUniformValue } | null, explain: string | nul
  */
 export type ShaderUniformValue = number | Array<number> | string;
 
-export type ShadowBody = { inner: boolean | null, offsetX: number, offsetY: number, blur: number, spread: number, color: string, };
+export type ShadowBody = { inner: boolean | null, visible: boolean | null, offsetX: number, offsetY: number, blur: number, spread: number, color: string, };
 
 export type SidedThickness = { top: number | null, right: number | null, bottom: number | null, left: number | null, };
 

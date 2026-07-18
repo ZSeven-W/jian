@@ -7297,6 +7297,12 @@
             "radius": {
               "type": "number",
               "format": "float"
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
             }
           }
         },
@@ -7316,6 +7322,12 @@
             "radius": {
               "type": "number",
               "format": "float"
+            },
+            "visible": {
+              "type": [
+                "boolean",
+                "null"
+              ]
             }
           }
         },
@@ -7337,6 +7349,12 @@
               ]
             },
             "inner": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "visible": {
               "type": [
                 "boolean",
                 "null"

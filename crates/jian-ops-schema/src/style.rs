@@ -340,6 +340,8 @@ pub enum PenEffect {
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 pub struct BlurBody {
     pub radius: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -349,11 +351,34 @@ pub struct BlurBody {
 pub struct ShadowBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inner: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible: Option<bool>,
     pub offset_x: f32,
     pub offset_y: f32,
     pub blur: f32,
     pub spread: f32,
     pub color: String,
+}
+
+#[cfg(test)]
+mod effect_visibility_tests {
+    use super::{BlurBody, ShadowBody};
+
+    #[test]
+    fn effect_visibility_is_optional_and_round_trips() {
+        let blur: BlurBody = serde_json::from_str(r#"{"radius":10}"#).unwrap();
+        assert_eq!(blur.visible, None);
+        assert_eq!(serde_json::to_string(&blur).unwrap(), r#"{"radius":10.0}"#);
+
+        let shadow: ShadowBody = serde_json::from_str(
+            r##"{"inner":false,"visible":false,"offsetX":0,"offsetY":4,"blur":8,"spread":0,"color":"#00000040"}"##,
+        )
+        .unwrap();
+        assert_eq!(shadow.visible, Some(false));
+        assert!(serde_json::to_string(&shadow)
+            .unwrap()
+            .contains(r#""visible":false"#));
+    }
 }
 
 // --- Styled text segment ---
