@@ -59,10 +59,12 @@ impl<T> Registry<T> {
         }
     }
 
-    /// Locks the state, RECOVERING from poison. No user code ever runs under
-    /// this lock, so it cannot actually be poisoned by a panic — but
-    /// recovering guarantees a registry access invoked from a JNI native can
-    /// never itself panic and cross the non-unwinding boundary.
+    /// Locks the state, RECOVERING from poison. `with`'s closure and the
+    /// `Into<String>` conversions in `set_error`/`set_create_error` DO run
+    /// under this guard, so a panic there could poison it; recovering
+    /// guarantees a later registry access invoked from a JNI native never
+    /// itself panics and crosses the non-unwinding boundary (the recovered
+    /// state is structurally intact — the panicking op simply had no effect).
     fn locked(&self) -> MutexGuard<'_, RegistryState<T>> {
         self.state
             .lock()
@@ -200,5 +202,27 @@ mod tests {
         let reg: Registry<u32> = Registry::new();
         reg.set_error(1234, "nope");
         assert_eq!(reg.last_error(1234), "");
+    }
+
+    #[test]
+    fn access_recovers_after_a_closure_panics_under_the_lock() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::sync::Arc;
+
+        let reg: Arc<Registry<u32>> = Arc::new(Registry::new());
+        let h = reg.insert(5);
+        // A `with` closure panics WHILE holding the guard, poisoning it.
+        let poisoned = {
+            let reg = reg.clone();
+            catch_unwind(AssertUnwindSafe(|| {
+                reg.with(h, |_| panic!("boom under the lock"));
+            }))
+        };
+        assert!(poisoned.is_err(), "the closure panic propagated");
+        // A subsequent access RECOVERS (no panic on the poisoned lock) and
+        // the state is intact — the panicking op simply had no effect.
+        assert_eq!(reg.with(h, |v| *v), Some(5), "state intact after recovery");
+        reg.set_error(h, "ok");
+        assert_eq!(reg.last_error(h), "ok");
     }
 }

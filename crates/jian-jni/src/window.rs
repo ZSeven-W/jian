@@ -52,22 +52,22 @@ pub unsafe fn track_window(window: *mut ANativeWindow) {
 }
 
 /// Commits `window` as the sole owned window after a clean `Ok` transition:
-/// every OTHER owned window is no longer borrowed (the engine dropped its old
-/// surface) and is released.
+/// every PREVIOUSLY-owned window is no longer borrowed (the engine dropped
+/// its old surface) and is released — including one sharing `window`'s
+/// address, since `window` is a fresh acquisition not yet in the list and
+/// every prior entry is a distinct reference.
 ///
 /// # Safety
-/// `window` must be a non-null window from [`acquire`] not yet released.
+/// `window` must be a non-null window from [`acquire`] not yet released and
+/// NOT already present in `OWNED_WINDOWS` (attach/resume acquire it fresh and
+/// commit without tracking first).
 pub unsafe fn commit_window(window: *mut ANativeWindow) {
     OWNED_WINDOWS.with(|v| {
         let mut owned = v.borrow_mut();
-        owned.retain(|&w| {
-            if w == window {
-                false // drop the old entry; re-added below as the sole owner
-            } else {
-                unsafe { release(w) };
-                false
-            }
-        });
+        for previous in owned.drain(..) {
+            // SAFETY: each came from `acquire`; released exactly once here.
+            unsafe { release(previous) };
+        }
         owned.push(window);
     });
 }
