@@ -123,7 +123,23 @@ remote_rgb=$(python3 scripts/m4-pixel.py /tmp/m4-frame.png 555 160 2>/dev/null)
   && ok "fetched remote image PAINTED without further input (RGB $remote_rgb)" \
   || bad "remote image not on screen (RGB ${remote_rgb:-unreadable}, want 30,102,200)"
 
+step "D2. Idle delivery — bytes arrive long after the engine went quiet"
+# The realistic network case, and the one the pump-ordering bug broke: the
+# response lands when no frame is pending, so the host's single post-delivery
+# frame is the ONLY frame the image gets. NO input is sent here on purpose.
+launch m4_remote_slow
+wait_log "result [0-9]+ kind=4 ok=true .* status=0" 40 || true
+sleep 2
+"$ADB" exec-out screencap -p > /tmp/m4-slow.png 2>/dev/null
+slow_rgb=$(python3 scripts/m4-pixel.py /tmp/m4-slow.png 400 400 2>/dev/null)
+[ "$slow_rgb" = "30,102,200" ] \
+  && ok "late-arriving image painted with no input at all (RGB $slow_rgb)" \
+  || bad "late image not on screen (RGB ${slow_rgb:-unreadable}, want 30,102,200)"
+
 step "E. Deterministic IME harnesses (assert via nativeTextGetState)"
+# Re-load the media document: these harnesses need its long text field, and
+# section D2 left a text-free document mounted.
+launch m4_media
 "$ADB" shell input tap 200 260 >/dev/null 2>&1; sleep 2   # focus the long field
 clear_logs
 bcast IME_QUERY_TEST                    # first: needs the untouched long field

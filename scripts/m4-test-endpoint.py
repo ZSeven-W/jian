@@ -27,7 +27,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         p = self.path.split("?")[0]
-        if p == "/ok.png":
+        if p == "/slow.png":
+            # Answers LATE, so the bytes land when the engine has already gone
+            # idle: the host's one post-delivery frame is then the ONLY frame,
+            # which is exactly the real-network case.
+            time.sleep(6)
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(OK_PNG)))
+            self.end_headers()
+            self.wfile.write(OK_PNG)
+        elif p == "/ok.png":
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
             self.send_header("Content-Length", str(len(OK_PNG)))

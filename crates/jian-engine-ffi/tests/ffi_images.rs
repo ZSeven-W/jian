@@ -231,3 +231,112 @@ fn resolved_remote_image_renders_through_the_cpu_frame() {
 
     unsafe { jian_destroy(engine) };
 }
+
+/// The multi-node acceptance document differs from the isolated one in a way
+/// worth pinning: a SECOND remote image whose request never completes. If a
+/// still-pending sibling can stall the resolved one, an app would show a
+/// permanent placeholder next to a hung download.
+#[test]
+fn a_pending_sibling_does_not_stall_the_resolved_image() {
+    const DOCUMENT: &[u8] = br#"{
+      "version":"1.2","formatVersion":"1.2","responsive":true,
+      "app":{"name":"ffi images","version":"1.0.0","id":"dev.jian.test.images2",
+             "capabilities":["network"]},
+      "children":[{"type":"frame","id":"root","width":32,"height":32,
+        "children":[{"type":"image","id":"hero","x":0,"y":0,"width":32,"height":32,
+                     "src":"https://images.test/hero.png"},
+                    {"type":"image","id":"hang","x":0,"y":0,"width":1,"height":1,
+                     "src":"https://images.test/never.png"}]}]
+    }"#;
+
+    IMAGE_REQUESTS.lock().unwrap().clear();
+    let callbacks = JianCallbacks {
+        size: size_of::<JianCallbacks>(),
+        user_data: ptr::null_mut(),
+        needs_redraw: None,
+        runtime_error: None,
+        ime_control: None,
+        input_focus_changed: None,
+        text_state_changed: None,
+        capability_request: Some(record_image_request),
+        capability_cancelled: None,
+    };
+    let desc = JianCreateDesc {
+        size: size_of::<JianCreateDesc>(),
+        doc_ptr: DOCUMENT.as_ptr(),
+        doc_len: DOCUMENT.len(),
+        width: WIDTH as f32,
+        height: HEIGHT as f32,
+        dpr: 1.0,
+        storage_dir_ptr: ptr::null(),
+        storage_dir_len: 0,
+        callbacks: &callbacks,
+        asset_base_ptr: ptr::null(),
+        asset_base_len: 0,
+    };
+    let create: unsafe extern "C" fn(*const JianCreateDesc, *mut *mut JianEngine) -> JianStatus =
+        jian_create;
+    let mut engine = ptr::null_mut();
+    assert_eq!(unsafe { create(&desc, &mut engine) }, JianStatus::Ok);
+
+    let frame: unsafe extern "C" fn(*mut JianEngine, u64, *mut u8, usize, usize) -> JianStatus =
+        jian_frame_cpu;
+    let stride = WIDTH * 4;
+    let mut buffer = vec![0u8; stride * HEIGHT];
+    let mut tick = 0u64;
+
+    // Both requests go out; only `hero` is ever answered.
+    for _ in 0..5 {
+        tick += 1;
+        assert_eq!(
+            unsafe { frame(engine, tick * 16, buffer.as_mut_ptr(), buffer.len(), stride) },
+            JianStatus::Ok
+        );
+        if IMAGE_REQUESTS.lock().unwrap().len() >= 2 {
+            break;
+        }
+    }
+    let requests = IMAGE_REQUESTS.lock().unwrap().clone();
+    assert!(
+        requests.len() >= 2,
+        "both remote sources must be requested, got {requests:?}"
+    );
+    let hero = requests[0];
+
+    let result = JianCapabilityResult {
+        size: size_of::<JianCapabilityResult>(),
+        kind: JianCapabilityKind::ImageFetch as i32,
+        data: JianCapabilityResultData {
+            image_fetch: JianImageFetchResult {
+                ok: true,
+                bytes_ptr: RED_PNG.as_ptr(),
+                bytes_len: RED_PNG.len(),
+                error_ptr: ptr::null(),
+                error_len: 0,
+            },
+        },
+    };
+    let deliver: unsafe extern "C" fn(
+        *mut JianEngine,
+        u64,
+        *const JianCapabilityResult,
+    ) -> JianStatus = jian_capability_result;
+    assert_eq!(unsafe { deliver(engine, hero, &result) }, JianStatus::Ok);
+
+    tick += 1;
+    assert_eq!(
+        unsafe { frame(engine, tick * 16, buffer.as_mut_ptr(), buffer.len(), stride) },
+        JianStatus::Ok
+    );
+    let offset = (HEIGHT / 2) * stride + (WIDTH / 2) * 4;
+    let mut center = [0u8; 4];
+    center.copy_from_slice(&buffer[offset..offset + 4]);
+
+    assert!(
+        center[0] > 200 && center[1] < 60 && center[2] < 60,
+        "the answered image must paint even while a sibling request is still \
+         in flight, got RGBA {center:?}"
+    );
+
+    unsafe { jian_destroy(engine) };
+}

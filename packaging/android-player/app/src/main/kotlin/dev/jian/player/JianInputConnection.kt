@@ -1,5 +1,6 @@
 package dev.jian.player
 
+import android.icu.text.BreakIterator
 import android.view.KeyEvent
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.ExtractedText
@@ -173,8 +174,15 @@ class JianInputConnection(
 
     /**
      * A non-collapsed selection is dropped whole (the platform's backspace
-     * contract); otherwise one CODE POINT goes, so a surrogate pair never
-     * splits into an unpaired half.
+     * contract); otherwise one GRAPHEME CLUSTER goes.
+     *
+     * Cluster, not code point: a flag or a ZWJ family emoji is several code
+     * points that render as one character, and deleting them one at a time
+     * leaves visible debris. This matches the iOS host, which uses
+     * `rangeOfComposedCharacterSequence` — keeping backspace identical across
+     * the two platforms. The length is handed to `deleteSurroundingText` in
+     * UTF-16 units so the composing-region and selection transforms there
+     * still apply.
      */
     private fun deleteOneUnit(before: Boolean) {
         val s = state()
@@ -184,7 +192,21 @@ class JianInputConnection(
             }
             return
         }
-        if (before) deleteSurroundingTextInCodePoints(1, 0) else deleteSurroundingTextInCodePoints(0, 1)
+        val text = fullText()
+        val caret = s.selectionStart.coerceIn(0, text.length)
+        val breaks = BreakIterator.getCharacterInstance()
+        breaks.setText(text)
+        val boundary = if (before) {
+            if (caret <= 0) return
+            breaks.preceding(caret)
+        } else {
+            if (caret >= text.length) return
+            breaks.following(caret)
+        }
+        if (boundary == BreakIterator.DONE) return
+        val length = if (before) caret - boundary else boundary - caret
+        if (length <= 0) return
+        if (before) deleteSurroundingText(length, 0) else deleteSurroundingText(0, length)
     }
 
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {

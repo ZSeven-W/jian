@@ -66,22 +66,36 @@ object JianImeTests {
         ic.sendKeyEvent(down)
         val afterTwo = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
 
+        // A ZWJ family emoji is 8 UTF-16 units across 5 code points but ONE
+        // grapheme cluster: backspace must take all of it, matching iOS.
+        val family = "\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67"
+        if (!resetText(engine, "X$family")) return fail(name, "reset failed (emoji)")
+        JianNative.nativeTextSetSelection(engine, 1 + family.length, 1 + family.length)
+        ic.sendKeyEvent(down)
+        val afterEmoji = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
+
         // A non-collapsed selection must go whole, not one unit of it.
         if (!resetText(engine, "ABCDEF")) return fail(name, "reset failed (2)")
         JianNative.nativeTextSetSelection(engine, 1, 4)
         ic.sendKeyEvent(down)
         val afterSelection = JianNative.nativeTextGetRange(engine, 0, Int.MAX_VALUE) ?: ""
 
+        val emojiOk = afterEmoji == "X"
         val oneOk = afterOne == "AB\u4F60"
         val twoOk = afterTwo == "AB"
         val selOk = afterSelection == "AEF"
-        if (oneOk && twoOk && selOk) {
-            pass(name, "KEYCODE_DEL deleted '$afterOne' then '$afterTwo'; selection collapsed to '$afterSelection'")
+        if (oneOk && twoOk && selOk && emojiOk) {
+            pass(
+                name,
+                "KEYCODE_DEL deleted '$afterOne' then '$afterTwo'; ZWJ cluster left '$afterEmoji'; " +
+                    "selection collapsed to '$afterSelection'",
+            )
         } else {
             fail(
                 name,
                 "afterOne='$afterOne' (want AB\u4F60 ok=$oneOk) afterTwo='$afterTwo' (want AB ok=$twoOk) " +
-                    "afterSelection='$afterSelection' (want AEF ok=$selOk)",
+                    "afterSelection='$afterSelection' (want AEF ok=$selOk) " +
+                        "afterEmoji='$afterEmoji' (want X ok=$emojiOk)",
             )
         }
     }
