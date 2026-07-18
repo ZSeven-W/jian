@@ -36,33 +36,6 @@ impl Runtime {
         self.note_time(now_ms);
         self.task_clock.advance_to(self.now_ms);
         self.dispatch_image_requests();
-        let completions = std::mem::take(&mut *self.image_completions.borrow_mut());
-        for completion in completions {
-            let current = self
-                .image_requests
-                .get(&completion.key)
-                .is_some_and(|request| {
-                    completion.owner_generation.get() == self.document_generation
-                        && Rc::ptr_eq(&request.owner_generation, &completion.owner_generation)
-                });
-            if !current {
-                continue;
-            }
-            let key = completion.key;
-            self.image_requests.remove(&key);
-            match completion.result {
-                Ok(bytes) => {
-                    if let Err(error) = self.image_store.resolve(&key, bytes) {
-                        self.load_warnings.push(format!("image `{key}`: {error}"));
-                    }
-                }
-                Err(error) => {
-                    self.image_store.fail(&key, &error);
-                    self.load_warnings.push(format!("image `{key}`: {error}"));
-                }
-            }
-            self.mark_dirty();
-        }
         for (key, generation) in self.state.storage_cache.take_requests() {
             if !self.capabilities.check(
                 crate::action::Capability::Storage,
@@ -111,6 +84,39 @@ impl Runtime {
         }
         if self.collect_task_outcomes() {
             self.scheduler.flush();
+            self.mark_dirty();
+        }
+        // AFTER the poll above, which is what resumes a resolver future and
+        // pushes its completion. Draining earlier would leave the bytes for
+        // the NEXT pump, and nothing asks for one: `FrameDirective.needs_paint`
+        // is not carried to hosts that only schedule on `next_wake_ms`, so a
+        // resolved image would sit invisible until unrelated input woke a
+        // frame. Draining here puts the bytes on screen in this same frame.
+        let completions = std::mem::take(&mut *self.image_completions.borrow_mut());
+        for completion in completions {
+            let current = self
+                .image_requests
+                .get(&completion.key)
+                .is_some_and(|request| {
+                    completion.owner_generation.get() == self.document_generation
+                        && Rc::ptr_eq(&request.owner_generation, &completion.owner_generation)
+                });
+            if !current {
+                continue;
+            }
+            let key = completion.key;
+            self.image_requests.remove(&key);
+            match completion.result {
+                Ok(bytes) => {
+                    if let Err(error) = self.image_store.resolve(&key, bytes) {
+                        self.load_warnings.push(format!("image `{key}`: {error}"));
+                    }
+                }
+                Err(error) => {
+                    self.image_store.fail(&key, &error);
+                    self.load_warnings.push(format!("image `{key}`: {error}"));
+                }
+            }
             self.mark_dirty();
         }
         // Spec §6.5 font-invalidation fanout: a process-global registration

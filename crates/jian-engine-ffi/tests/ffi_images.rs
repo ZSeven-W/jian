@@ -8,10 +8,14 @@
 //! composition.
 
 use jian_engine_ffi::{
-    jian_create, jian_destroy, jian_frame_cpu, JianCreateDesc, JianEngine, JianStatus,
+    jian_capability_result, jian_create, jian_destroy, jian_frame_cpu, JianCallbacks,
+    JianCapabilityKind, JianCapabilityRequest, JianCapabilityResult, JianCapabilityResultData,
+    JianCreateDesc, JianEngine, JianImageFetchResult, JianStatus,
 };
+use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr;
+use std::sync::Mutex;
 
 /// 1x1 solid-red PNG.
 const RED_PNG: [u8; 69] = [
@@ -94,4 +98,136 @@ fn resolved_local_image_renders_through_the_cpu_frame() {
 
     unsafe { jian_destroy(engine) };
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Requests captured from the ImageFetch capability callback.
+static IMAGE_REQUESTS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+unsafe extern "C" fn record_image_request(
+    _user_data: *mut c_void,
+    request_id: u64,
+    request: *const JianCapabilityRequest,
+) {
+    if unsafe { &*request }.kind == JianCapabilityKind::ImageFetch {
+        IMAGE_REQUESTS.lock().unwrap().push(request_id);
+    }
+}
+
+/// A REMOTE image resolved through the capability round-trip must reach the
+/// screen exactly like the local one above.
+///
+/// Regression (found on the M4 Android player): the host delivers the fetched
+/// bytes, `jian_capability_result` returns `Ok`, and no warning is raised —
+/// but the node keeps painting its placeholder, because the resolved bytes
+/// never reach a painted frame on their own.
+#[test]
+fn resolved_remote_image_renders_through_the_cpu_frame() {
+    const DOCUMENT: &[u8] = br#"{
+      "version":"1.2","formatVersion":"1.2","responsive":true,
+      "app":{"name":"ffi images","version":"1.0.0","id":"dev.jian.test.images",
+             "capabilities":["network"]},
+      "children":[{"type":"frame","id":"root","width":32,"height":32,
+        "children":[{"type":"image","id":"hero","x":0,"y":0,"width":32,"height":32,
+                     "src":"https://images.test/hero.png"}]}]
+    }"#;
+
+    IMAGE_REQUESTS.lock().unwrap().clear();
+    let callbacks = JianCallbacks {
+        size: size_of::<JianCallbacks>(),
+        user_data: ptr::null_mut(),
+        needs_redraw: None,
+        runtime_error: None,
+        ime_control: None,
+        input_focus_changed: None,
+        text_state_changed: None,
+        capability_request: Some(record_image_request),
+        capability_cancelled: None,
+    };
+    let desc = JianCreateDesc {
+        size: size_of::<JianCreateDesc>(),
+        doc_ptr: DOCUMENT.as_ptr(),
+        doc_len: DOCUMENT.len(),
+        width: WIDTH as f32,
+        height: HEIGHT as f32,
+        dpr: 1.0,
+        storage_dir_ptr: ptr::null(),
+        storage_dir_len: 0,
+        callbacks: &callbacks,
+        asset_base_ptr: ptr::null(),
+        asset_base_len: 0,
+    };
+    let create: unsafe extern "C" fn(*const JianCreateDesc, *mut *mut JianEngine) -> JianStatus =
+        jian_create;
+    let mut engine = ptr::null_mut();
+    assert_eq!(unsafe { create(&desc, &mut engine) }, JianStatus::Ok);
+
+    let frame: unsafe extern "C" fn(*mut JianEngine, u64, *mut u8, usize, usize) -> JianStatus =
+        jian_frame_cpu;
+    let stride = WIDTH * 4;
+    let mut buffer = vec![0u8; stride * HEIGHT];
+    let mut tick = 0u64;
+    let paint = |engine, tick: u64, buffer: &mut Vec<u8>| {
+        assert_eq!(
+            unsafe { frame(engine, tick * 16, buffer.as_mut_ptr(), buffer.len(), stride) },
+            JianStatus::Ok
+        );
+    };
+
+    // Frames until the engine asks the host to fetch the remote source.
+    for _ in 0..5 {
+        tick += 1;
+        paint(engine, tick, &mut buffer);
+        if !IMAGE_REQUESTS.lock().unwrap().is_empty() {
+            break;
+        }
+    }
+    let request_id = *IMAGE_REQUESTS
+        .lock()
+        .unwrap()
+        .first()
+        .expect("the engine must emit an ImageFetch request for a remote src");
+
+    // The host answers exactly as the Android player does.
+    let result = JianCapabilityResult {
+        size: size_of::<JianCapabilityResult>(),
+        kind: JianCapabilityKind::ImageFetch as i32,
+        data: JianCapabilityResultData {
+            image_fetch: JianImageFetchResult {
+                ok: true,
+                bytes_ptr: RED_PNG.as_ptr(),
+                bytes_len: RED_PNG.len(),
+                error_ptr: ptr::null(),
+                error_len: 0,
+            },
+        },
+    };
+    let deliver: unsafe extern "C" fn(
+        *mut JianEngine,
+        u64,
+        *const JianCapabilityResult,
+    ) -> JianStatus = jian_capability_result;
+    assert_eq!(
+        unsafe { deliver(engine, request_id, &result) },
+        JianStatus::Ok,
+        "the engine must accept the fetched bytes"
+    );
+
+    // Exactly ONE frame — all a host owes after delivering a result. The
+    // engine polls the resolver future and consumes the completion in the same
+    // pump, so the bytes must be on screen when this frame returns. Needing a
+    // second frame is the bug: nothing asks for one, so the image would stay a
+    // placeholder until unrelated input happened to wake the host.
+    tick += 1;
+    paint(engine, tick, &mut buffer);
+    let offset = (HEIGHT / 2) * stride + (WIDTH / 2) * 4;
+    let mut center = [0u8; 4];
+    center.copy_from_slice(&buffer[offset..offset + 4]);
+
+    assert!(
+        center[0] > 200 && center[1] < 60 && center[2] < 60,
+        "the fetched remote PNG must paint red in the FIRST frame after delivery, \
+         got RGBA {center:?}"
+    );
+
+    unsafe { jian_destroy(engine) };
 }

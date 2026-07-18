@@ -1,0 +1,25 @@
+{
+  "formatVersion": "1.2",
+  "version": "1.2",
+  "responsive": true,
+  "app": {
+    "name": "JianPlayer M4 Remote Only",
+    "version": "1.0.0",
+    "id": "dev.jian.player.m4remote",
+    "capabilities": ["network"]
+  },
+  "children": [
+    {
+      "type": "frame", "id": "home-mobile", "screen": "/home",
+      "breakpoint": { "minWidth": 0, "maxWidth": 9999 },
+      "width": 320, "height": 720,
+      "children": [
+        {
+          "type": "image", "id": "img-remote-solo",
+          "x": 20, "y": 60, "width": 280, "height": 200,
+          "src": "http://localhost:8477/ok.png"
+        }
+      ]
+    }
+  ]
+}

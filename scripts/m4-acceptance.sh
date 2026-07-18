@@ -27,10 +27,22 @@ launch() { # launch <doc>
   "$ADB" shell am force-stop "$PKG" >/dev/null 2>&1
   clear_logs
   "$ADB" shell am start -n "$PKG/.MainActivity" --es doc "$1" >/dev/null 2>&1
-  sleep 5
+  wait_log "engine created" 40 || true
 }
 bcast() { "$ADB" shell am broadcast -a "dev.jian.player.$1" "${@:2}" >/dev/null 2>&1; sleep 2; }
 alive() { [ -n "$("$ADB" shell pidof "$PKG" 2>/dev/null | tr -d '\r')" ]; }
+# wait_log <extended-regex> [seconds]: poll logcat instead of sleeping a fixed
+# amount. A loaded host makes engine startup and the fetch round-trip take
+# several seconds longer than any blind sleep worth writing, and a too-short
+# sleep turns into a phantom failure of an assertion that would have passed.
+wait_log() {
+  local pattern="$1" limit="${2:-30}" waited=0
+  while [ "$waited" -lt "$limit" ]; do
+    logs | grep -qE "$pattern" && return 0
+    sleep 1; waited=$((waited+1))
+  done
+  return 1
+}
 
 step "Preflight"
 "$ADB" get-state >/dev/null 2>&1 || { echo "no device/emulator"; exit 1; }
@@ -64,10 +76,12 @@ alive && ok "process alive" || bad "process died"
 step "B. §6.7 lifecycle — suspend releases the window, resume re-acquires, engine survives"
 pid_before=$("$ADB" shell pidof "$PKG" | tr -d '\r')
 clear_logs
-"$ADB" shell input keyevent KEYCODE_HOME >/dev/null 2>&1; sleep 3
+"$ADB" shell input keyevent KEYCODE_HOME >/dev/null 2>&1
+wait_log "window released" 30 || true
 logs | grep -q "window released" && ok "surfaceDestroyed → suspend released the window" || bad "no window release on suspend"
 clear_logs
-"$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1; sleep 4
+"$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1
+wait_log "window acquired" 40 || true
 logs | grep -q "window acquired" && ok "resume re-acquired the window" || bad "no re-acquire on resume"
 pid_after=$("$ADB" shell pidof "$PKG" | tr -d '\r')
 [ "$pid_before" = "$pid_after" ] && ok "engine survived (same pid $pid_after)" || bad "process restarted ($pid_before → $pid_after)"
@@ -82,7 +96,8 @@ clear_logs; bcast LOSE_CONTEXT; sleep 2
 logs | grep -q "GpuError → suspend/resume recovery" && ok "LOSE_CONTEXT: GpuError → suspend/resume recovery" || bad "no GpuError recovery"
 alive && ok "process alive after context loss" || bad "process died after context loss"
 # Re-launch for a fresh surface generation, then the destructive seam.
-"$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1; sleep 3
+"$ADB" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1
+wait_log "window acquired" 40 || true
 clear_logs; bcast FAIL_NEXT_ATTACH
 acq=$(logs | grep -c "window acquired"); rel=$(logs | grep -c "window released")
 [ "$acq" -ge 1 ] && [ "$rel" -ge 1 ] && ok "FAIL_NEXT_ATTACH: post-acquisition failure released the window (acq=$acq rel=$rel)" \
@@ -91,11 +106,22 @@ alive && ok "process alive after failed attach" || bad "process died after faile
 
 step "D. m4_media — asset base, capability gate, image fetch, timeout guard"
 launch m4_media
+wait_log "result [0-9]+ kind=4 .* status=0" 40 || true
 logs | grep -q "media/absent.png\`: No such file" && ok "absent image resolved against the extracted asset base" || bad "absent-image resolution"
 logs | grep -q "network capability denied" && bad "capability gate denied (is app.capabilities missing?)" || ok "declared network capability opened the gate"
 logs | grep -qE "capability request [0-9]+ kind=4" && ok "image-fetch capability requests marshalled" || bad "no image-fetch requests"
 logs | grep -qE "result [0-9]+ kind=4 ok=true .* status=0" && ok "fetch result delivered and accepted (status=0)" || bad "fetch result not accepted"
 logs | grep -q "no authored timeout, using 30000ms guard" && ok "un-authored timeout → 30s guard (cross-host rule)" || bad "30s guard not applied"
+# Accepted bytes are not a painted image: the engine used to consume the
+# resolver completion one pump AFTER the frame the host had been asked for, so
+# a delivered image stayed a placeholder until unrelated input woke a frame.
+# `img-remote-ok` is 64x48 at (180,20) logical, dpr 2.625, served solid
+# #1E66C8 by the test endpoint.
+"$ADB" exec-out screencap -p > /tmp/m4-frame.png 2>/dev/null
+remote_rgb=$(python3 scripts/m4-pixel.py /tmp/m4-frame.png 555 160 2>/dev/null)
+[ "$remote_rgb" = "30,102,200" ] \
+  && ok "fetched remote image PAINTED without further input (RGB $remote_rgb)" \
+  || bad "remote image not on screen (RGB ${remote_rgb:-unreadable}, want 30,102,200)"
 
 step "E. Deterministic IME harnesses (assert via nativeTextGetState)"
 "$ADB" shell input tap 200 260 >/dev/null 2>&1; sleep 2   # focus the long field
