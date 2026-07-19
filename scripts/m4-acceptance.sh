@@ -67,6 +67,34 @@ sleep 2
 "$ADB" reverse "tcp:$ENDPOINT_PORT" "tcp:$ENDPOINT_PORT" >/dev/null 2>&1 \
   && ok "reverse forwarded" || bad "adb reverse"
 
+step "Chinese IME (optional: IME_APK=<path>)"
+# Plan Task 1 Step 6: the artifact is PINNED by hash and verified before it is
+# installed, so an acceptance run can never quietly test a different build.
+IME_SHA256=f899b4a2104392c91403c9a3ff3d2d1dcbe9bb20018155cc1a693b9cb07d3c68
+IME_COMPONENT=com.sohu.inputmethod.sogou/.SogouIME
+if [ -n "${IME_APK:-}" ]; then
+  if [ ! -f "$IME_APK" ]; then
+    bad "IME_APK not found: $IME_APK"
+  else
+    actual=$(shasum -a 256 "$IME_APK" | cut -d' ' -f1)
+    if [ "$actual" != "$IME_SHA256" ]; then
+      bad "IME_APK hash mismatch (got $actual, pinned $IME_SHA256) — refusing to install"
+    else
+      ok "IME_APK hash matches the pinned artifact"
+      "$ADB" install -r -g "$IME_APK" >/dev/null 2>&1 \
+        && ok "Chinese IME installed" || bad "Chinese IME install"
+      "$ADB" shell ime enable "$IME_COMPONENT" >/dev/null 2>&1
+      "$ADB" shell ime set "$IME_COMPONENT" >/dev/null 2>&1
+      current=$("$ADB" shell settings get secure default_input_method | tr -d '\r')
+      [ "$current" = "$IME_COMPONENT" ] \
+        && ok "Chinese IME selected ($current)" || bad "Chinese IME not selected (got $current)"
+    fi
+  fi
+else
+  echo "  SKIP  no IME_APK set — the IME harnesses below are IME-independent;"
+  echo "        pass IME_APK=<apk> to also exercise a real Chinese keyboard."
+fi
+
 step "A. First frame — responsive variant + viewport width (m1_acceptance)"
 launch m1_acceptance
 logs | grep -q "engine created" && ok "engine created" || bad "engine created"
