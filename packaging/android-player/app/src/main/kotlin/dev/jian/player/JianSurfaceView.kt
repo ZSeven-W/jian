@@ -117,7 +117,7 @@ class JianSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Ca
     private fun routeKey(event: KeyEvent): Boolean {
         if (!editable || engine == 0L) return false
         val connection = keyConnection ?: JianInputConnection(this).also { keyConnection = it }
-        return connection.applyKey(event)
+        return connection.applyKey(event, fromView = true)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =

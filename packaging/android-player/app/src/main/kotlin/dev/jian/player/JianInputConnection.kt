@@ -169,7 +169,7 @@ class JianInputConnection(
      * `InputConnection`), and it may only consume what this handled. Claiming
      * every key would swallow Back and the volume keys.
      */
-    internal fun applyKey(event: KeyEvent): Boolean {
+    internal fun applyKey(event: KeyEvent, fromView: Boolean = false): Boolean {
         if (!valid || engine == 0L) return false
         // Text the platform cannot express as key codes arrives whole here.
         if (event.action == KeyEvent.ACTION_MULTIPLE && event.keyCode == KeyEvent.KEYCODE_UNKNOWN) {
@@ -185,6 +185,11 @@ class JianInputConnection(
         if (!handled) return false
         // Consume the UP half of a key we own so nothing re-dispatches it.
         if (event.action != KeyEvent.ACTION_DOWN) return true
+        // A commit REPLACES the composing region. An attached IME may have set
+        // one around what was just typed (Gboard does this for hardware keys),
+        // so a view-originated insert has to close it first or each keystroke
+        // eats the previous one — five characters landed as three.
+        if (fromView && state().hasComposing) finishComposingText()
         when (event.keyCode) {
             KeyEvent.KEYCODE_DEL -> deleteOneUnit(before = true)
             KeyEvent.KEYCODE_FORWARD_DEL -> deleteOneUnit(before = false)
