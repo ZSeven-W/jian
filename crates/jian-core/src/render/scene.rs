@@ -137,6 +137,10 @@ pub struct WidgetRenderCtx<'a> {
     pub theme: &'a crate::render::widget_style::WidgetTheme,
     pub focused_id: Option<&'a str>,
     pub now_ms: u64,
+    /// Measured caret x for the focused field, in scene coordinates. `None`
+    /// falls back to a per-character estimate, which is fine for static
+    /// previews but drifts from the glyphs as text grows.
+    pub caret_x: Option<f32>,
 }
 
 /// Like [`collect_draws_with_state`] but also paints live widget runtime
@@ -1019,6 +1023,11 @@ pub(crate) fn emit_live_text_input(
         }
         None => x_at(st.caret(), live),
     };
+    // Measured geometry wins whenever the host supplied it.
+    let caret_x = match (focused, ctx.caret_x) {
+        (true, Some(measured)) => measured,
+        _ => caret_x,
+    };
 
     // --- text run ---
     if !text.is_empty() {
@@ -1843,6 +1852,7 @@ mod tests {
             theme: &theme,
             focused_id: Some("e"),
             now_ms: 0,
+            caret_x: None,
         };
         let ops =
             collect_draws_with_widgets(rt.document.as_ref().unwrap(), &rt.layout, &rt.state, &ctx);
@@ -1997,6 +2007,7 @@ mod tests {
             theme: &theme,
             focused_id: Some("ta"),
             now_ms: 0,
+            caret_x: None,
         };
         let ops =
             collect_draws_with_widgets(rt.document.as_ref().unwrap(), &rt.layout, &rt.state, &ctx);
@@ -2088,6 +2099,7 @@ mod tests {
                 theme,
                 focused_id: Some("e"),
                 now_ms: 0,
+                caret_x: None,
             };
             let ops = collect_draws_with_widgets(
                 rt.document.as_ref().unwrap(),
@@ -2127,6 +2139,7 @@ mod tests {
             theme: &theme,
             focused_id: Some("e"),
             now_ms: 0,
+            caret_x: None,
         };
         let ops_range =
             collect_draws_with_widgets(rt.document.as_ref().unwrap(), &rt.layout, &rt.state, &ctx);

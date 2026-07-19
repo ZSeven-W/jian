@@ -53,6 +53,37 @@ impl Runtime {
         }
     }
 
+    /// Measured caret rect of the focused field, or `None` when nothing is
+    /// focused or no measuring service is installed. Painters must prefer this
+    /// over any per-character estimate: an estimate drifts further from the
+    /// glyphs the more text there is.
+    pub fn focused_caret_rect(&self) -> Option<Rect> {
+        let field = self.focused_field().ok()?;
+        if field.rotated_aabb.is_some() {
+            // A rotated field reports an AABB, not a caret position.
+            return None;
+        }
+        let service = self.text_geometry.as_ref()?;
+        let caret_byte = self
+            .widget_states
+            .get(field.key.as_str())
+            .and_then(|state| {
+                match state {
+                    crate::widget_state::WidgetState::TextInput(input) => {
+                        Some(match input.composition() {
+                            // Mirror the painter: the EFFECTIVE caret honours both
+                            // the composing-relative cursor and a detached one.
+                            Some(_) => input.effective_selection().focus,
+                            None => input.caret(),
+                        })
+                    }
+                    _ => None,
+                }
+            })?;
+        let offset = crate::render::byte_to_utf16_offset(&field.text, caret_byte);
+        service.caret_rect(&field.key, normalize_utf16_offset(&field.text, offset))
+    }
+
     pub fn text_rects_for_range(
         &self,
         start_utf16: u32,

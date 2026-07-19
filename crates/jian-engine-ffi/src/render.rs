@@ -30,6 +30,9 @@ pub(crate) fn prepare_commands(
         theme: &theme,
         focused_id: focused.as_deref(),
         now_ms: runtime.last_now_ms(),
+        // Measured, not estimated: the per-character estimate drifts further
+        // right the more is typed, leaving the caret visibly off the glyphs.
+        caret_x: runtime.focused_caret_rect().map(|r| r.min_x()),
     };
     runtime
         .document
