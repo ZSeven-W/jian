@@ -367,6 +367,35 @@ pub trait Painter {
         self.draw_image_with_mode(rect, image_id, encoded, mode);
     }
 
+    /// Draw an image with an optional Figma affine fill transform.
+    ///
+    /// `transform` maps the destination node's normalized unit square into
+    /// normalized image UV coordinates. Backends that have not implemented
+    /// affine image sampling retain the existing placement-mode behaviour.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_image_with_options_and_transform(
+        &mut self,
+        rect: Rect,
+        image_id: u64,
+        encoded: &[u8],
+        mode: ImageDrawMode,
+        adjustments: ImageAdjustments,
+        opacity: f32,
+        corner_radius: f32,
+        transform: Option<[f32; 6]>,
+    ) {
+        let _ = transform;
+        self.draw_image_with_options(
+            rect,
+            image_id,
+            encoded,
+            mode,
+            adjustments,
+            opacity,
+            corner_radius,
+        );
+    }
+
     fn fill_round_rect_linear_gradient(
         &mut self,
         rect: Rect,
@@ -517,6 +546,18 @@ pub trait Painter {
             };
         }
         w
+    }
+
+    /// Distance from a text run's top edge to its alphabetic baseline.
+    /// Backends without font metrics preserve the historical approximation.
+    fn text_ascent(&mut self, font_size: f32, _weight: u16) -> f32 {
+        font_size * 0.8
+    }
+
+    /// Family-aware ascent for canvas text. The default keeps compatibility
+    /// with backends that only implement [`Painter::text_ascent`].
+    fn text_ascent_family(&mut self, font_size: f32, _family: &str, weight: u16) -> f32 {
+        self.text_ascent(font_size, weight)
     }
 
     fn measure_text_styled(

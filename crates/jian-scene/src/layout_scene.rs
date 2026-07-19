@@ -606,6 +606,11 @@ pub struct SceneNode {
     pub image_src_id: u64,
     /// How `image_src` is placed into `bounds`.
     pub image_fit: SceneImageFit,
+    /// Figma image-fill affine transform in normalized UV coordinates.
+    /// `[m00, m01, m02, m10, m11, m12]` maps a node-local unit point
+    /// `(x, y)` to image UV as `(m00*x + m01*y + m02,
+    /// m10*x + m11*y + m12)`. `None` keeps the placement-mode default.
+    pub image_transform: Option<[f32; 6]>,
     /// Per-image colour adjustments from the image-fill editor.
     pub image_adjustments: ImageAdjustments,
     /// Drop-shadow / effects painted behind the node's fill.
@@ -802,6 +807,7 @@ impl SceneNode {
             image_src: None,
             image_src_id: 0,
             image_fit: SceneImageFit::Fill,
+            image_transform: None,
             image_adjustments: ImageAdjustments::default(),
             effects: Vec::new(),
             hidden: false,
