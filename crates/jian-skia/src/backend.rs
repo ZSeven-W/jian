@@ -404,7 +404,6 @@ fn draw_text_paragraph(canvas: &skia_safe::Canvas, run: &jian_core::render::Text
     use jian_core::render::TextAlign;
     use skia_safe::textlayout::{
         FontCollection, ParagraphBuilder, ParagraphStyle, TextAlign as SkTextAlign, TextStyle,
-        TypefaceFontProvider,
     };
     use skia_safe::FontMgr;
 
@@ -412,8 +411,7 @@ fn draw_text_paragraph(canvas: &skia_safe::Canvas, run: &jian_core::render::Text
     // (if any), so a family the system lacks still resolves here instead
     // of silently falling back to the platform default. Rebuilt fresh
     // per call, so a runtime font import is picked up immediately.
-    let font_provider =
-        crate::bundled_fonts::asset_provider().unwrap_or_else(TypefaceFontProvider::new);
+    let font_provider = crate::bundled_fonts::asset_provider().unwrap_or_default();
     let mut collection = FontCollection::new();
     collection.set_default_font_manager(FontMgr::new(), None);
     collection.set_asset_font_manager(Some(font_provider.clone().into()));
