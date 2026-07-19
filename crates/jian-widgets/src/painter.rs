@@ -339,6 +339,14 @@ pub trait Painter {
         }
     }
 
+    /// True when drawing this image would not synchronously decode it.
+    /// Backends without an asynchronous decode path keep the existing
+    /// behavior by accepting encoded bytes as immediately drawable.
+    fn image_decoded(&mut self, id: u64, encoded: &[u8]) -> bool {
+        let _ = (id, encoded);
+        true
+    }
+
     fn draw_image(&mut self, _rect: Rect, _image_id: u64, _encoded: &[u8]) {}
 
     fn draw_image_with_mode(
