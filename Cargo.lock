@@ -2432,6 +2432,7 @@ dependencies = [
  "taffy",
  "tempfile",
  "thiserror 1.0.69",
+ "unicode-segmentation",
  "url",
 ]
 
