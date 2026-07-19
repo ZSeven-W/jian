@@ -11,25 +11,7 @@ pub(crate) fn rect_has_extent(rect: Rect) -> bool {
 }
 
 pub fn stable_image_source_id(src: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    let bytes = src.as_bytes();
-    // Hash length + bounded head/middle/tail windows rather than the whole
-    // string, so the id is O(1) even for multi-MB data URLs. Re-hashing the
-    // full base64 on every drag frame (the scene rebuilds on each node move)
-    // was the source of the image-drag lag. Distinct images differ in length
-    // and/or these windows, so collisions are negligible.
-    bytes.len().hash(&mut h);
-    const W: usize = 512;
-    if bytes.len() <= 3 * W {
-        bytes.hash(&mut h);
-    } else {
-        let mid = bytes.len() / 2;
-        bytes[..W].hash(&mut h);
-        bytes[mid..mid + W].hash(&mut h);
-        bytes[bytes.len() - W..].hash(&mut h);
-    }
-    h.finish()
+    jian_ops_schema::node::image_src::paint_image_id(src)
 }
 
 /// Vertices for a regular polygon fitted inside `rect`.
@@ -46,4 +28,17 @@ pub fn regular_polygon_points(rect: Rect, sides: u32) -> Vec<Point2D> {
             Point2D::new(cx + rx * angle.cos(), cy + ry * angle.sin())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene_image_id_matches_the_persisted_schema_id() {
+        assert_eq!(
+            stable_image_source_id("data:image/png;base64,AA=="),
+            0x641a_8b95_c7ff_c372
+        );
+    }
 }

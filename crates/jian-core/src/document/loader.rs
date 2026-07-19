@@ -68,11 +68,13 @@ pub fn build_with(
         tree.insert_subtree(n, None);
     }
 
-    Ok(RuntimeDocument {
+    let document = RuntimeDocument {
         schema,
         tree,
         active_page,
-    })
+    };
+    jian_ops_schema::image_thumbs::activate_for_document(&document.schema);
+    Ok(document)
 }
 
 fn resolve_default(entry: &StateEntry) -> Value {

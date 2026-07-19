@@ -9,6 +9,7 @@ description  = "Canonical schema and types for Jian .op files."
 readme       = "README.md"
 
 [dependencies]
+base64     = "0.22"
 serde      = { workspace = true }
 serde_json = { workspace = true }
 schemars   = { workspace = true }

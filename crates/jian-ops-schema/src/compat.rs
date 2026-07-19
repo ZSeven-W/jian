@@ -71,14 +71,17 @@ pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDo
         });
     }
 
-    // Documents saved with a deduplicated image table carry
-    // `op-image:<id>` refs. Take the table out and resolve the refs
+    // Decode the independent paint-id thumbnail table first, but do not
+    // publish it until the typed document parse succeeds. Documents saved
+    // with a deduplicated image table carry `op-image:<id>` refs; take that
+    // table out next and resolve the refs
     // DURING the typed parse (`ImageSrc::deserialize` +
     // `image_src::intern`): every reference receives a clone of one
     // shared `Arc` per unique payload, so a thousand fills sharing an
     // image cost one allocation instead of a thousand copies. The same
     // scope content-interns duplicate large inline data URLs, so
     // legacy (pre-table) files stop inflating too.
+    let pending_thumbs = crate::image_thumbs::take_pending_from_document(&mut raw);
     let table = crate::image_table::take_image_table(&mut raw);
     let mut doc: PenDocument =
         crate::node::image_src::intern::with_load_scope(table, || serde_json::from_value(raw))?;
@@ -92,6 +95,8 @@ pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDo
             });
         }
     }
+
+    crate::image_thumbs::attach_to_document(&mut doc, pending_thumbs);
 
     Ok(LoadResult {
         value: doc,
@@ -121,6 +126,8 @@ const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
     // Save-side deduplicated image table (`image_table.rs`) — resolved
     // back to inline data URLs before the typed parse.
     "images",
+    // Paint-id keyed blur-up JPEG table — decoded into the runtime registry.
+    "imageThumbs",
 ];
 
 #[cfg(test)]
@@ -150,6 +157,109 @@ mod tests {
             panic!("image node expected");
         };
         assert_eq!(&img.src, payload.as_str(), "ref resolved to inline URL");
+    }
+
+    #[test]
+    fn load_attaches_thumbnail_seed_until_document_activation() {
+        crate::image_thumbs::with_test_serialized(|| {
+            crate::image_thumbs::clear_registry();
+            crate::image_thumbs::store_thumb(99, vec![1, 2, 3]);
+            let src = r#"{"version":"0.8.0","imageThumbs":{"41":"/9j/2Q=="},"children":[]}"#;
+
+            let loaded = load_str(src).expect("load document with thumbnails");
+            assert_eq!(loaded.warnings.len(), 0, "imageThumbs is a known field");
+            assert!(
+                crate::image_thumbs::thumb_for(41).is_none(),
+                "parse-only loads must not publish a document seed"
+            );
+            assert_eq!(
+                &*crate::image_thumbs::thumb_for(99).expect("active thumbnail survives parse"),
+                &[1, 2, 3]
+            );
+
+            assert!(crate::image_thumbs::activate_for_document(&loaded.value));
+            assert_eq!(
+                &*crate::image_thumbs::thumb_for(41).expect("activated thumbnail"),
+                &[0xff, 0xd8, 0xff, 0xd9]
+            );
+            assert!(
+                crate::image_thumbs::thumb_for(99).is_none(),
+                "a present activated table replaces the prior document"
+            );
+
+            let absent = load_str(r#"{"version":"0.8.0","children":[]}"#)
+                .expect("load document without thumbnails");
+            assert!(!crate::image_thumbs::activate_for_document(&absent.value));
+            assert!(
+                crate::image_thumbs::thumb_for(41).is_some(),
+                "a missing additive table leaves the content cache intact"
+            );
+        });
+    }
+
+    #[test]
+    fn failed_typed_load_preserves_the_thumbnail_registry() {
+        crate::image_thumbs::with_test_serialized(|| {
+            crate::image_thumbs::replace_from_load(Default::default());
+            crate::image_thumbs::store_thumb(99, vec![1, 2, 3]);
+            let src = r#"{"version":"0.8.0","imageThumbs":{"41":"/9j/2Q=="},"children":[{"type":"not_a_node"}]}"#;
+
+            assert!(load_str(src).is_err(), "the typed node parse must fail");
+            assert_eq!(
+                &*crate::image_thumbs::thumb_for(99).expect("prior thumbnail survives"),
+                &[1, 2, 3]
+            );
+            assert!(
+                crate::image_thumbs::thumb_for(41).is_none(),
+                "a rejected document must not publish its thumbnail table"
+            );
+        });
+    }
+
+    #[test]
+    fn pending_thumbnail_seed_follows_a_document_clone() {
+        crate::image_thumbs::with_test_serialized(|| {
+            crate::image_thumbs::clear_registry();
+            let loaded =
+                load_str(r#"{"version":"0.8.0","imageThumbs":{"42":"/9j/2Q=="},"children":[]}"#)
+                    .expect("load document with thumbnails");
+
+            let cloned = loaded.value.clone();
+            drop(loaded);
+            assert!(crate::image_thumbs::thumb_for(42).is_none());
+            assert!(
+                crate::image_thumbs::activate_for_document(&cloned),
+                "the runtime-owned clone must retain the pending seed"
+            );
+            assert_eq!(
+                &*crate::image_thumbs::thumb_for(42).expect("clone activated thumbnail"),
+                &[0xff, 0xd8, 0xff, 0xd9]
+            );
+        });
+    }
+
+    #[test]
+    fn explicitly_discarding_a_parsed_document_removes_its_pending_seed() {
+        crate::image_thumbs::with_test_serialized(|| {
+            crate::image_thumbs::clear_registry();
+            let loaded =
+                load_str(r#"{"version":"0.8.0","imageThumbs":{"43":"/9j/2Q=="},"children":[]}"#)
+                    .expect("load document with thumbnails");
+            assert_eq!(crate::image_thumbs::pending_document_seed_count(), 1);
+
+            assert!(crate::image_thumbs::discard_for_document(&loaded.value));
+            drop(loaded);
+            assert_eq!(
+                crate::image_thumbs::pending_document_seed_count(),
+                0,
+                "explicit discard must remove the exact pointer association"
+            );
+
+            let absent = load_str(r#"{"version":"0.8.0","children":[]}"#)
+                .expect("parse subsequent document without a table");
+            assert!(!crate::image_thumbs::activate_for_document(&absent.value));
+            assert!(crate::image_thumbs::thumb_for(43).is_none());
+        });
     }
 
     /// Two nodes referencing the same table entry must share ONE

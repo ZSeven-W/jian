@@ -15,10 +15,12 @@
 //!
 //! - [`externalize_images`] — save side. Moves each large `data:` URL
 //!   into a top-level `"images"` table keyed by content hash and
-//!   replaces every occurrence with `"op-image:<id>"`.
+//!   replaces every occurrence with `"op-image:<id>"`; independently
+//!   snapshots referenced paint-id thumbnails into `"imageThumbs"`.
 //! - [`inline_images`] — Value-level load side. Resolves `op-image:`
-//!   refs back to the full data URLs and removes the table, restoring
-//!   the exact pre-save strings (the round trip is lossless). The
+//!   refs back to the full data URLs, seeds blur-up thumbnails, and removes
+//!   both tables, restoring the exact pre-save strings (the round trip is
+//!   lossless). The
 //!   PRODUCT load paths use [`take_image_table`] +
 //!   [`crate::node::image_src::intern::with_load_scope`] instead:
 //!   resolving during the typed parse hands every reference a clone of
@@ -150,7 +152,9 @@ fn visit_stroke_mut(stroke: &mut Value, f: &mut impl FnMut(&mut String)) {
 /// hashes, so identical payloads collapse to one table entry no
 /// matter how many nodes reference them, and re-saving an unchanged
 /// document produces identical ids. No-op on non-object roots; the
-/// table key is only created when at least one URL externalizes.
+/// `images` is only created when at least one URL externalizes;
+/// `imageThumbs` is independently created only for referenced paint ids that
+/// are present in the runtime thumbnail registry.
 pub fn externalize_images(root: &mut Value) {
     // Preserve (and extend) an existing table so a caller that
     // externalizes twice stays idempotent.
@@ -169,6 +173,12 @@ pub fn externalize_images(root: &mut Value) {
             None => Map::new(),
         }
     };
+    // Collect persisted thumbnail keys while sources still name their final
+    // payloads. On an idempotent second pass, resolve existing `op-image:`
+    // refs through the preserved image table before hashing; hashing the ref
+    // string itself would silently switch identities and drop the thumb.
+    let referenced_paint_ids = referenced_paint_ids_for_save(root, &table);
+    let thumb_table = crate::image_thumbs::snapshot_for(&referenced_paint_ids);
     visit_image_strings_mut(root, &mut |s| {
         if s.len() >= MIN_EXTERNALIZE_LEN && s.starts_with("data:") {
             let id = intern(&mut table, s);
@@ -181,6 +191,34 @@ pub fn externalize_images(root: &mut Value) {
     if !table.is_empty() {
         map.insert(IMAGES_KEY.to_owned(), Value::Object(table));
     }
+    if thumb_table.is_empty() {
+        map.remove(crate::image_thumbs::IMAGE_THUMBS_KEY);
+    } else {
+        map.insert(
+            crate::image_thumbs::IMAGE_THUMBS_KEY.to_owned(),
+            Value::Object(thumb_table),
+        );
+    }
+}
+
+/// Paint ids referenced by the node tree before save-side source rewriting.
+fn referenced_paint_ids_for_save(
+    root: &Value,
+    image_table: &Map<String, Value>,
+) -> std::collections::BTreeSet<u64> {
+    let mut ids = std::collections::BTreeSet::new();
+    visit_image_strings_ref(root, &mut |source| {
+        let final_source = if let Some(table_id) = source.strip_prefix(REF_PREFIX) {
+            let Some(Value::String(payload)) = image_table.get(table_id) else {
+                return;
+            };
+            payload.as_str()
+        } else {
+            source
+        };
+        ids.insert(crate::node::image_src::paint_image_id(final_source));
+    });
+    ids
 }
 
 /// Insert `payload` into the table (if absent) and return its id.
@@ -210,8 +248,10 @@ fn intern(table: &mut Map<String, Value>, payload: &str) -> String {
 /// the table. A ref whose id is missing from the table (hand-edited
 /// or badly merged file) is left as-is — it renders as a placeholder
 /// instead of failing the load. No-op when the document carries no
-/// table.
+/// table. The independent `imageThumbs` table is always consumed first; an
+/// absent thumbnail table leaves the active content cache unchanged.
 pub fn inline_images(root: &mut Value) {
+    crate::image_thumbs::seed_from_document(root);
     let table = {
         let Value::Object(map) = &mut *root else {
             return;
@@ -584,5 +624,78 @@ mod tests {
         let once = doc.clone();
         externalize_images(&mut doc);
         assert_eq!(doc, once, "second pass changes nothing");
+    }
+
+    #[test]
+    fn thumbnail_snapshot_is_filtered_and_idempotent_before_rewrite() {
+        crate::image_thumbs::with_test_serialized(|| {
+            crate::image_thumbs::replace_from_load(Default::default());
+            let url = big_data_url("thumb");
+            let paint_id = crate::node::image_src::paint_image_id(&url);
+            let jpeg = vec![0xff, 0xd8, 0xff, 0xd9];
+            crate::image_thumbs::store_thumb(paint_id, jpeg.clone());
+            crate::image_thumbs::store_thumb(paint_id.wrapping_add(1), vec![1, 2, 3]);
+            let mut doc = json!({
+                "children": [{"type": "image", "src": url}],
+            });
+            let original = doc.clone();
+
+            externalize_images(&mut doc);
+            assert_eq!(
+                doc["imageThumbs"],
+                json!({paint_id.to_string(): "/9j/2Q=="}),
+                "the table uses decimal paint ids and excludes unrelated registry entries"
+            );
+            let once = doc.clone();
+            externalize_images(&mut doc);
+            assert_eq!(
+                doc, once,
+                "a second pass resolves existing refs before collecting paint ids"
+            );
+
+            crate::image_thumbs::replace_from_load(Default::default());
+            inline_images(&mut doc);
+            assert_eq!(doc, original, "both top-level tables are load-only forms");
+            assert_eq!(
+                &*crate::image_thumbs::thumb_for(paint_id).expect("inline seeded thumbnail"),
+                jpeg.as_slice()
+            );
+        });
+    }
+
+    #[test]
+    fn no_referenced_thumbnail_keeps_image_thumbs_absent() {
+        crate::image_thumbs::with_test_serialized(|| {
+            crate::image_thumbs::replace_from_load(Default::default());
+            let mut doc = json!({
+                "children": [{"type": "image", "src": big_data_url("no-thumb")}],
+            });
+            externalize_images(&mut doc);
+            assert!(
+                doc.get("imageThumbs").is_none(),
+                "an additive table is not emitted when the loaded document had none"
+            );
+        });
+    }
+
+    #[test]
+    fn thumbnail_table_does_not_depend_on_image_externalization() {
+        crate::image_thumbs::with_test_serialized(|| {
+            crate::image_thumbs::replace_from_load(Default::default());
+            let url = "assets/small-logo.jpg";
+            let paint_id = crate::node::image_src::paint_image_id(url);
+            crate::image_thumbs::store_thumb(paint_id, vec![0xff, 0xd8, 0xff, 0xd9]);
+            let mut doc = json!({
+                "children": [{"type": "image", "src": url}],
+            });
+
+            externalize_images(&mut doc);
+            assert!(doc.get("images").is_none(), "small source stays inline");
+            assert_eq!(
+                doc["imageThumbs"],
+                json!({paint_id.to_string(): "/9j/2Q=="}),
+                "the paint id needs no images-table mapping"
+            );
+        });
     }
 }

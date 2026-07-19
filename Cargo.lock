@@ -2485,6 +2485,7 @@ dependencies = [
 name = "jian-ops-schema"
 version = "0.0.1"
 dependencies = [
+ "base64",
  "insta",
  "schemars 0.8.22",
  "serde",
@@ -2497,6 +2498,7 @@ dependencies = [
 name = "jian-scene"
 version = "0.0.1"
 dependencies = [
+ "jian-ops-schema",
  "jian-widgets",
 ]
 

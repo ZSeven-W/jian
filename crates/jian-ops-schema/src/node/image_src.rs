@@ -25,6 +25,40 @@
 
 use std::sync::Arc;
 
+/// Stable, bounded identifier used by every paint and raster-cache path.
+///
+/// Multi-megabyte data URLs must not be re-hashed in full on every scene
+/// rebuild. FNV-1a receives the source length as an explicit little-endian
+/// `u64`, followed by either the complete source (up to 1536 bytes) or
+/// 512-byte head, middle, and tail windows. The exact byte stream is part of
+/// the persisted `imageThumbs` format; do not replace it with `Hash` or a
+/// toolchain-defined hasher.
+pub fn paint_image_id(src: &str) -> u64 {
+    const WINDOW: usize = 512;
+    let bytes = src.as_bytes();
+    let mut hash = FNV1A_OFFSET;
+    fnv1a_extend(&mut hash, &(bytes.len() as u64).to_le_bytes());
+    if bytes.len() <= 3 * WINDOW {
+        fnv1a_extend(&mut hash, bytes);
+    } else {
+        let middle = bytes.len() / 2;
+        fnv1a_extend(&mut hash, &bytes[..WINDOW]);
+        fnv1a_extend(&mut hash, &bytes[middle..middle + WINDOW]);
+        fnv1a_extend(&mut hash, &bytes[bytes.len() - WINDOW..]);
+    }
+    hash
+}
+
+const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+fn fnv1a_extend(hash: &mut u64, bytes: &[u8]) {
+    for &byte in bytes {
+        *hash ^= u64::from(byte);
+        *hash = hash.wrapping_mul(FNV1A_PRIME);
+    }
+}
+
 /// An `Arc`-shared image source string. See the module docs for why.
 #[derive(Debug, Clone)]
 pub struct ImageSrc(Arc<str>);
@@ -212,6 +246,34 @@ pub mod intern {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paint_image_id_has_a_fixed_cross_toolchain_value() {
+        assert_eq!(
+            paint_image_id("data:image/png;base64,AA=="),
+            0x641a_8b95_c7ff_c372
+        );
+    }
+
+    #[test]
+    fn paint_image_id_hashes_bounded_windows_and_the_full_length() {
+        let mut source = vec![b'a'; 2_048];
+        let baseline = paint_image_id(std::str::from_utf8(&source).expect("ascii"));
+
+        source[768] = b'b';
+        assert_eq!(
+            paint_image_id(std::str::from_utf8(&source).expect("ascii")),
+            baseline,
+            "bytes outside the bounded head/middle/tail windows are skipped"
+        );
+
+        source.push(b'a');
+        assert_ne!(
+            paint_image_id(std::str::from_utf8(&source).expect("ascii")),
+            baseline,
+            "the total length participates as a fixed-width u64"
+        );
+    }
 
     #[test]
     fn serializes_and_deserializes_as_a_plain_string() {

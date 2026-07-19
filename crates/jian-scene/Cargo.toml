@@ -11,4 +11,5 @@ license.workspace = true
 test-support = []
 
 [dependencies]
+jian-ops-schema = { path = "../jian-ops-schema" }
 jian-widgets = { path = "../jian-widgets" }

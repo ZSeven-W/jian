@@ -347,6 +347,13 @@ pub trait Painter {
         true
     }
 
+    /// Draw a small blur-up placeholder raster for a full image that is still
+    /// decoding. Platform backends may synchronously decode this bounded JPEG
+    /// into a dedicated thumbnail cache; the full-image cache is untouched.
+    fn draw_image_thumb(&mut self, rect: Rect, image_id: u64, jpeg: &[u8]) {
+        let _ = (rect, image_id, jpeg);
+    }
+
     fn draw_image(&mut self, _rect: Rect, _image_id: u64, _encoded: &[u8]) {}
 
     fn draw_image_with_mode(
@@ -640,5 +647,14 @@ mod tests {
         p.fill_svg_path_in_rect_with_fill_rule("M0 0h1v1z", rect, Color::RED, true);
 
         assert!(matches!(p.ops.as_slice(), [PaintOp::FillSvgPath { .. }]));
+    }
+
+    #[test]
+    fn image_thumb_hook_defaults_to_a_no_op() {
+        let mut p = CapturePainter::default();
+
+        p.draw_image_thumb(Rect::xywh(0.0, 0.0, 20.0, 10.0), 7, b"jpeg");
+
+        assert!(p.ops.is_empty());
     }
 }

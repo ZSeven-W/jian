@@ -9,7 +9,7 @@ use crate::variable::VariableDefinition;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
@@ -66,6 +66,30 @@ pub struct PenDocument {
     /// Code-to-design conversion ledger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversion: Option<crate::conversion::ConversionSpec>,
+}
+
+impl Clone for PenDocument {
+    fn clone(&self) -> Self {
+        let mut cloned = Self {
+            version: self.version.clone(),
+            name: self.name.clone(),
+            themes: self.themes.clone(),
+            variables: self.variables.clone(),
+            pages: self.pages.clone(),
+            children: self.children.clone(),
+            format_version: self.format_version.clone(),
+            id: self.id.clone(),
+            app: self.app.clone(),
+            routes: self.routes.clone(),
+            state: self.state.clone(),
+            lifecycle: self.lifecycle.clone(),
+            logic_modules: self.logic_modules.clone(),
+            design_md: self.design_md.clone(),
+            conversion: self.conversion.clone(),
+        };
+        crate::image_thumbs::propagate_to_clone(self, &mut cloned);
+        cloned
+    }
 }
 
 #[cfg(test)]
