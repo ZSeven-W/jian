@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Matrix
 import android.text.InputType
 import android.util.Log
+import android.view.KeyEvent
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.Surface
@@ -102,8 +103,31 @@ class JianSurfaceView(context: Context) : SurfaceView(context), SurfaceHolder.Ca
         JianNative.nativeTextGetState(engine, s)
         outAttrs.initialSelStart = s.selectionStart
         outAttrs.initialSelEnd = s.selectionEnd
-        return JianInputConnection(this)
+        return JianInputConnection(this).also { keyConnection = it }
     }
+
+    /**
+     * Connection used to apply VIEW-level key events. A physical keyboard (and
+     * `adb shell input text`) dispatches to the focused view and never touches
+     * the `InputConnection`, so without these overrides typing on real hardware
+     * does nothing at all while a soft keyboard works fine.
+     */
+    private var keyConnection: JianInputConnection? = null
+
+    private fun routeKey(event: KeyEvent): Boolean {
+        if (!editable || engine == 0L) return false
+        val connection = keyConnection ?: JianInputConnection(this).also { keyConnection = it }
+        return connection.applyKey(event)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        routeKey(event) || super.onKeyDown(keyCode, event)
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        routeKey(event) || super.onKeyUp(keyCode, event)
+
+    override fun onKeyMultiple(keyCode: Int, repeatCount: Int, event: KeyEvent): Boolean =
+        routeKey(event) || super.onKeyMultiple(keyCode, repeatCount, event)
 
     /** Focus/editable transition from the engine (called on the main thread). */
     fun applyFocus(focused: Boolean, kind: Int, returnKey: Int) {

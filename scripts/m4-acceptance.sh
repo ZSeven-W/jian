@@ -35,6 +35,28 @@ alive() { [ -n "$("$ADB" shell pidof "$PKG" 2>/dev/null | tr -d '\r')" ]; }
 # amount. A loaded host makes engine startup and the fetch round-trip take
 # several seconds longer than any blind sleep worth writing, and a too-short
 # sleep turns into a phantom failure of an assertion that would have passed.
+# wait_pixel <x> <y> <r> <g> <b> [seconds]: poll a screencap pixel until it is
+# close to the target. An image appears through a fade, so a single grab can
+# catch a blend of the placeholder and the decoded image ((57,121,207) is
+# exactly gray 128 mixed into #1E66C8) — an exact-match assertion on one frame
+# is flaky by construction. Echoes the last sampled value.
+wait_pixel() {
+  local x="$1" y="$2" tr="$3" tg="$4" tb="$5" limit="${6:-15}" waited=0 rgb=""
+  while [ "$waited" -lt "$limit" ]; do
+    "$ADB" exec-out screencap -p > /tmp/m4-pixel-probe.png 2>/dev/null
+    rgb=$(python3 scripts/m4-pixel.py /tmp/m4-pixel-probe.png "$x" "$y" 2>/dev/null)
+    if [ -n "$rgb" ]; then
+      local r g b
+      r=${rgb%%,*}; b=${rgb##*,}; g=${rgb#*,}; g=${g%%,*}
+      if [ $(( (r-tr)*(r-tr) + (g-tg)*(g-tg) + (b-tb)*(b-tb) )) -le 400 ]; then
+        echo "$rgb"; return 0
+      fi
+    fi
+    sleep 1; waited=$((waited+1))
+  done
+  echo "${rgb:-unreadable}"; return 1
+}
+
 wait_log() {
   local pattern="$1" limit="${2:-30}" waited=0
   while [ "$waited" -lt "$limit" ]; do
@@ -84,16 +106,23 @@ if [ -n "${IME_APK:-}" ]; then
       "$ADB" install -r -g "$IME_APK" >/dev/null 2>&1 \
         && ok "Chinese IME installed" || bad "Chinese IME install"
       "$ADB" shell ime enable "$IME_COMPONENT" >/dev/null 2>&1
-      "$ADB" shell ime set "$IME_COMPONENT" >/dev/null 2>&1
-      current=$("$ADB" shell settings get secure default_input_method | tr -d '\r')
-      [ "$current" = "$IME_COMPONENT" ] \
-        && ok "Chinese IME selected ($current)" || bad "Chinese IME not selected (got $current)"
+      "$ADB" shell ime list -s 2>/dev/null | tr -d '\r' | grep -qF "$IME_COMPONENT" \
+        && ok "Chinese IME enabled and selectable" || bad "Chinese IME not in the enabled list"
+      # Deliberately NOT left as the default: selecting a third-party keyboard
+      # raises system input-method UI that dims the app and steals focus, which
+      # breaks every pixel and text assertion below. Hand-test Chinese with
+      #   adb shell ime set com.sohu.inputmethod.sogou/.SogouIME
     fi
   fi
 else
   echo "  SKIP  no IME_APK set — the IME harnesses below are IME-independent;"
   echo "        pass IME_APK=<apk> to also exercise a real Chinese keyboard."
 fi
+
+# Deterministic keyboard for the automated sections: the stock IME passes
+# hardware keys through to the app, which section G depends on.
+"$ADB" shell ime set com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME >/dev/null 2>&1
+sleep 1
 
 step "A. First frame — responsive variant + viewport width (m1_acceptance)"
 launch m1_acceptance
@@ -145,11 +174,11 @@ logs | grep -q "no authored timeout, using 30000ms guard" && ok "un-authored tim
 # a delivered image stayed a placeholder until unrelated input woke a frame.
 # `img-remote-ok` is 64x48 at (180,20) logical, dpr 2.625, served solid
 # #1E66C8 by the test endpoint.
-"$ADB" exec-out screencap -p > /tmp/m4-frame.png 2>/dev/null
-remote_rgb=$(python3 scripts/m4-pixel.py /tmp/m4-frame.png 555 160 2>/dev/null)
-[ "$remote_rgb" = "30,102,200" ] \
-  && ok "fetched remote image PAINTED without further input (RGB $remote_rgb)" \
-  || bad "remote image not on screen (RGB ${remote_rgb:-unreadable}, want 30,102,200)"
+if remote_rgb=$(wait_pixel 555 160 30 102 200 15); then
+  ok "fetched remote image PAINTED without further input (RGB $remote_rgb)"
+else
+  bad "remote image not on screen (RGB $remote_rgb, want ~30,102,200)"
+fi
 
 step "D2. Idle delivery — bytes arrive long after the engine went quiet"
 # The realistic network case, and the one the pump-ordering bug broke: the
@@ -157,18 +186,23 @@ step "D2. Idle delivery — bytes arrive long after the engine went quiet"
 # frame is the ONLY frame the image gets. NO input is sent here on purpose.
 launch m4_remote_slow
 wait_log "result [0-9]+ kind=4 ok=true .* status=0" 40 || true
-sleep 2
-"$ADB" exec-out screencap -p > /tmp/m4-slow.png 2>/dev/null
-slow_rgb=$(python3 scripts/m4-pixel.py /tmp/m4-slow.png 400 400 2>/dev/null)
-[ "$slow_rgb" = "30,102,200" ] \
-  && ok "late-arriving image painted with no input at all (RGB $slow_rgb)" \
-  || bad "late image not on screen (RGB ${slow_rgb:-unreadable}, want 30,102,200)"
+if slow_rgb=$(wait_pixel 400 400 30 102 200 15); then
+  ok "late-arriving image painted with no input at all (RGB $slow_rgb)"
+else
+  bad "late image not on screen (RGB $slow_rgb, want ~30,102,200)"
+fi
 
 step "E. Deterministic IME harnesses (assert via nativeTextGetState)"
 # Re-load the media document: these harnesses need its long text field, and
 # section D2 left a text-free document mounted.
 launch m4_media
-"$ADB" shell input tap 200 260 >/dev/null 2>&1; sleep 2   # focus the long field
+# Retry the focus tap: on a loaded host the first frame can land after the tap,
+# which silently turns every harness below into a SKIP.
+for attempt in 1 2 3; do
+  "$ADB" shell input tap 200 260 >/dev/null 2>&1; sleep 2
+  "$ADB" shell am broadcast -a dev.jian.player.TEXT_DUMP >/dev/null 2>&1; sleep 1
+  logs | grep -q "TEXT_DUMP caret=" && break
+done
 clear_logs
 bcast IME_QUERY_TEST                    # first: needs the untouched long field
 bcast IME_DELETE_TEST
@@ -185,6 +219,33 @@ while read -r line; do
     *"IME_TEST"*SKIP*) bad "${line#*IME_TEST }";;
   esac
 done < <(logs | grep "IME_TEST")
+
+step "G. Hardware-key input (physical keyboards bypass the InputConnection)"
+# A physical keyboard dispatches to the focused VIEW; it never reaches
+# InputConnection.sendKeyEvent, so this path needs its own overrides and its
+# own assertion. Pinned to the stock IME: a third-party keyboard may consume
+# the key-down itself (Sogou does), which the app can neither see nor fix.
+"$ADB" shell ime set com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME >/dev/null 2>&1
+sleep 2
+launch m4_media
+clear_logs
+# Same focus retry as section E — an unfocused field reports no state at all.
+for attempt in 1 2 3; do
+  "$ADB" shell input tap 200 260 >/dev/null 2>&1; sleep 2
+  "$ADB" shell am broadcast -a dev.jian.player.TEXT_DUMP >/dev/null 2>&1; sleep 1
+  before_len=$(logs | grep TEXT_DUMP | tail -1 | grep -oE "len=[0-9]+" | cut -d= -f2)
+  [ -n "$before_len" ] && break
+done
+"$ADB" shell input text "hi" >/dev/null 2>&1; sleep 2
+"$ADB" shell am broadcast -a dev.jian.player.TEXT_DUMP >/dev/null 2>&1; sleep 1
+after_len=$(logs | grep TEXT_DUMP | tail -1 | grep -oE "len=[0-9]+" | cut -d= -f2)
+[ -n "$before_len" ] && [ -n "$after_len" ] && [ "$after_len" -eq "$((before_len + 2))" ] \
+  && ok "hardware keys typed into the engine ($before_len → $after_len)" \
+  || bad "hardware keys did not reach the engine (len $before_len → ${after_len:-?}, want +2)"
+# Backspace is deliberately NOT asserted here: with a live composition the
+# keyboard consumes KEYCODE_DEL for its own buffer and the app never sees it,
+# so the result would measure the IME, not this code. IME_KEY_TEST covers
+# KEYCODE_DEL through the connection deterministically.
 
 step "F. LOAD_DOC full recreate + teardown"
 clear_logs; bcast LOAD_DOC --es name m1_acceptance; sleep 2

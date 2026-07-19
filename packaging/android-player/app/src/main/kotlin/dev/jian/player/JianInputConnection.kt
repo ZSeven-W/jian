@@ -158,16 +158,38 @@ class JianInputConnection(
      */
     override fun sendKeyEvent(event: KeyEvent): Boolean {
         if (!valid || engine == 0L) return false
-        // Consume the UP half so the platform does not re-dispatch it.
+        return applyKey(event)
+    }
+
+    /**
+     * Applies one key event, reporting whether it actually produced an edit.
+     *
+     * The honest return value matters: [JianSurfaceView] routes VIEW-level key
+     * events here too (a physical keyboard never goes through an
+     * `InputConnection`), and it may only consume what this handled. Claiming
+     * every key would swallow Back and the volume keys.
+     */
+    internal fun applyKey(event: KeyEvent): Boolean {
+        if (!valid || engine == 0L) return false
+        // Text the platform cannot express as key codes arrives whole here.
+        if (event.action == KeyEvent.ACTION_MULTIPLE && event.keyCode == KeyEvent.KEYCODE_UNKNOWN) {
+            val characters = event.characters
+            if (characters.isNullOrEmpty()) return false
+            commitText(characters, 1)
+            return true
+        }
+        val handled = when (event.keyCode) {
+            KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL, KeyEvent.KEYCODE_ENTER -> true
+            else -> event.unicodeChar != 0
+        }
+        if (!handled) return false
+        // Consume the UP half of a key we own so nothing re-dispatches it.
         if (event.action != KeyEvent.ACTION_DOWN) return true
         when (event.keyCode) {
             KeyEvent.KEYCODE_DEL -> deleteOneUnit(before = true)
             KeyEvent.KEYCODE_FORWARD_DEL -> deleteOneUnit(before = false)
             KeyEvent.KEYCODE_ENTER -> commitText("\n", 1)
-            else -> {
-                val point = event.unicodeChar
-                if (point != 0) commitText(String(Character.toChars(point)), 1)
-            }
+            else -> commitText(String(Character.toChars(event.unicodeChar)), 1)
         }
         return true
     }
