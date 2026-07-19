@@ -47,6 +47,10 @@ const FONT_WIDTH: Width = Width::NORMAL;
 /// painter's line advance for explicit multiline content.
 const DEFAULT_PAINT_LINE_HEIGHT: f32 = 1.2;
 
+/// Family Skia falls back to when a requested family resolves to nothing.
+/// Matches the face the resolver registers as its own last resort.
+const DEFAULT_FAMILY: &str = "Roboto";
+
 /// Measure backend that defers to skia's paragraph shaper.
 ///
 /// Construct once at host startup, share the same `Rc` across the
@@ -138,9 +142,15 @@ impl SkiaMeasure {
 /// still shapes with the right metrics here — otherwise `fit_content`
 /// heights are computed from fallback glyphs and every text block lands
 /// at the wrong height.
+///
+/// The default family name is mandatory, not cosmetic: without it Skia's
+/// `defaultFallback()` asks the manager for a NULL family, and the ordered
+/// manager forwards that straight into a `TypefaceFontProvider`, which builds
+/// an `SkString` from the null pointer and segfaults. Naming a family keeps
+/// every fallback lookup on a real string.
 pub(crate) fn build_collection(font_resolver: &FontResolver) -> FontCollection {
     let mut fc = FontCollection::new();
-    fc.set_default_font_manager(font_resolver.ordered_font_manager(), None);
+    fc.set_default_font_manager(font_resolver.ordered_font_manager(), Some(DEFAULT_FAMILY));
     if let Some(provider) = crate::bundled_fonts::asset_provider() {
         fc.set_asset_font_manager(Some(provider.into()));
     }
