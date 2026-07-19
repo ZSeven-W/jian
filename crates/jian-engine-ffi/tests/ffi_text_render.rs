@@ -210,3 +210,69 @@ fn the_painted_caret_matches_the_engines_caret_rect() {
 
     unsafe { jian_destroy(engine) };
 }
+
+/// A text field must not paint outside its own box.
+///
+/// Regression: `m4_media`'s `longfield` is a 280x36 `text_input` holding 5400
+/// characters, and it painted every one of them straight down the screen over
+/// the buttons below it. The nodes do not overlap — the field simply never
+/// clipped its content.
+#[test]
+fn a_text_field_clips_its_content_to_its_own_box() {
+    const TALL: usize = 160;
+    const FIELD_BOTTOM: usize = 40;
+    // The field occupies the top 40px; everything below must stay clean.
+    const DOC: &[u8] = br#"{
+      "version":"1.2","formatVersion":"1.2",
+      "children":[{"type":"frame","id":"root","width":200,"height":160,
+        "children":[{"type":"text_input","id":"field","x":0,"y":0,
+                     "width":150,"height":40,
+                     "value":"the quick brown fox jumps over the lazy dog and keeps going well past the end of this rather small box so that any unclipped overflow is impossible to miss"}]}]
+    }"#;
+
+    let desc = JianCreateDesc {
+        size: size_of::<JianCreateDesc>(),
+        doc_ptr: DOC.as_ptr(),
+        doc_len: DOC.len(),
+        width: WIDTH as f32,
+        height: TALL as f32,
+        dpr: 1.0,
+        storage_dir_ptr: ptr::null(),
+        storage_dir_len: 0,
+        callbacks: ptr::null(),
+        asset_base_ptr: ptr::null(),
+        asset_base_len: 0,
+    };
+    let create: unsafe extern "C" fn(*const JianCreateDesc, *mut *mut JianEngine) -> JianStatus =
+        jian_create;
+    let mut engine = ptr::null_mut();
+    assert_eq!(unsafe { create(&desc, &mut engine) }, JianStatus::Ok);
+
+    let frame: unsafe extern "C" fn(*mut JianEngine, u64, *mut u8, usize, usize) -> JianStatus =
+        jian_frame_cpu;
+    let stride = WIDTH * 4;
+    let mut buffer = vec![0u8; stride * TALL];
+    assert_eq!(
+        unsafe { frame(engine, 16, buffer.as_mut_ptr(), buffer.len(), stride) },
+        JianStatus::Ok
+    );
+
+    // Ink strictly below the field is overflow, by construction: nothing else
+    // is authored down there.
+    let mut escaped = 0;
+    for y in (FIELD_BOTTOM + 4)..TALL {
+        for x in 0..WIDTH {
+            let p = y * stride + x * 4;
+            if buffer[p] < 128 && buffer[p + 1] < 128 && buffer[p + 2] < 128 {
+                escaped += 1;
+            }
+        }
+    }
+    assert_eq!(
+        escaped, 0,
+        "{escaped} ink pixels painted below the field's 40px box; a text field must clip \
+         its content to its own bounds"
+    );
+
+    unsafe { jian_destroy(engine) };
+}

@@ -140,7 +140,22 @@ fn walk(
             false,
         );
     }
+    // A text field clips to its own box. Its content is independent of its
+    // height — a short field can hold thousands of characters — and without
+    // this the overflow paints straight down the page over whatever follows.
+    // Only the command stream can express this; the flat DrawOp collectors
+    // have no clip, which is why this lives here rather than in the emitter.
+    let clips_text = matches!(
+        json.get("type").and_then(|t| t.as_str()),
+        Some("text_input" | "text_area" | "number_input")
+    );
+    if clips_text {
+        commands.push(ScenePaintCommand::PushClip(bounds));
+    }
     append_draws(commands, ops, text_runs);
+    if clips_text {
+        commands.push(ScenePaintCommand::Pop);
+    }
 
     let clipped = clip_content(&json);
     if clipped {
