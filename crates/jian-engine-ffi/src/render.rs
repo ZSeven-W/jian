@@ -1,6 +1,7 @@
 use jian_core::geometry::Affine2;
 use jian_core::render::{
-    collect_scene_paint_commands_with_state, RenderBackend, ScenePaintCommand,
+    collect_scene_paint_commands_with_widgets, RenderBackend, ScenePaintCommand, WidgetRenderCtx,
+    WidgetTheme,
 };
 use jian_core::runtime::Runtime;
 use jian_skia::{InstanceImageRegistry, RegisteredBackend, SkiaBackend, SkiaSurface};
@@ -19,11 +20,27 @@ pub(crate) fn prepare_commands(
         images,
     };
     runtime.prepare_frame(&mut registered, backend_generation);
+    // WITH widgets: this host takes input, so a text field must paint what the
+    // user typed rather than the value the document was authored with. The
+    // state-only collector leaves every edit invisible.
+    let theme = WidgetTheme::default();
+    let focused = runtime.focused_widget_id();
+    let widgets = WidgetRenderCtx {
+        states: &runtime.widget_states,
+        theme: &theme,
+        focused_id: focused.as_deref(),
+        now_ms: runtime.last_now_ms(),
+    };
     runtime
         .document
         .as_ref()
         .map(|document| {
-            collect_scene_paint_commands_with_state(document, &runtime.layout, &runtime.state)
+            collect_scene_paint_commands_with_widgets(
+                document,
+                &runtime.layout,
+                &runtime.state,
+                &widgets,
+            )
         })
         .unwrap_or_default()
 }

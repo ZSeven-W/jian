@@ -4,7 +4,7 @@ use crate::gesture::SemanticEvent;
 
 impl Runtime {
     /// Stable schema id of the currently-focused node, if any.
-    pub(super) fn focused_widget_id(&self) -> Option<String> {
+    pub fn focused_widget_id(&self) -> Option<String> {
         let key = self.focus.current()?;
         let node = self.document.as_ref()?.tree.nodes.get(key)?;
         Some(crate::document::tree::node_schema_id(&node.schema).to_owned())

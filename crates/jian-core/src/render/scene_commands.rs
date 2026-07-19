@@ -1,6 +1,6 @@
 //! Structured scene traversal for production render backends.
 
-use super::scene::{apply_bindings, emit_for_node};
+use super::scene::{apply_bindings, emit_for_node, emit_live_text_input, WidgetRenderCtx};
 use super::{DrawOp, RichTextPlan, ScenePaintCommand, ShadowSpec};
 use crate::geometry::{Affine2, Rect};
 use crate::scene::Color;
@@ -19,18 +19,51 @@ pub fn collect_scene_paint_commands_with_state(
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
 ) -> Vec<ScenePaintCommand> {
+    collect(doc, layout, state, None)
+}
+
+/// Like [`collect_scene_paint_commands_with_state`] but paints live widget
+/// state — typed text, caret, selection — instead of the schema's authored
+/// `value`. Hosts that accept input MUST use this: without the context a
+/// `text_input` renders what the document was authored with, so every edit is
+/// invisible no matter how many frames are drawn.
+pub fn collect_scene_paint_commands_with_widgets(
+    doc: &crate::document::RuntimeDocument,
+    layout: &crate::layout::LayoutEngine,
+    state: &crate::state::StateGraph,
+    widgets: &WidgetRenderCtx,
+) -> Vec<ScenePaintCommand> {
+    collect(doc, layout, state, Some(widgets))
+}
+
+fn collect(
+    doc: &crate::document::RuntimeDocument,
+    layout: &crate::layout::LayoutEngine,
+    state: &crate::state::StateGraph,
+    widgets: Option<&WidgetRenderCtx>,
+) -> Vec<ScenePaintCommand> {
     let mut commands = Vec::with_capacity(doc.tree.nodes.len() * 2);
     let mut visited = HashSet::with_capacity(doc.tree.nodes.len());
     for &root in &doc.tree.roots {
-        walk(doc, layout, state, root, &mut commands, &mut visited);
+        walk(
+            doc,
+            layout,
+            state,
+            widgets,
+            root,
+            &mut commands,
+            &mut visited,
+        );
     }
     commands
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
+    widgets: Option<&WidgetRenderCtx>,
     key: crate::document::NodeKey,
     commands: &mut Vec<ScenePaintCommand>,
     visited: &mut HashSet<crate::document::NodeKey>,
@@ -75,15 +108,38 @@ fn walk(
 
     let mut ops = Vec::new();
     let mut text_runs = Vec::new();
-    emit_for_node(
-        bounds,
-        &json,
-        doc.schema.is_responsive(),
-        Some(state),
-        &mut ops,
-        &mut text_runs,
-        false,
-    );
+    // Live widget render takes precedence, exactly as in the flat collector:
+    // a text widget with runtime state paints that state, not the authored
+    // value. Falls back when no context or no state exists for this node.
+    let live = widgets
+        .filter(|_| {
+            matches!(
+                json.get("type").and_then(|t| t.as_str()),
+                Some("text_input" | "text_area" | "number_input")
+            )
+        })
+        .and_then(|ctx| {
+            let id = json.get("id")?.as_str()?;
+            match ctx.states.get(id)? {
+                crate::widget_state::WidgetState::TextInput(st) => {
+                    emit_live_text_input(bounds, &json, st, ctx, id, &mut ops);
+                    Some(())
+                }
+                _ => None,
+            }
+        })
+        .is_some();
+    if !live {
+        emit_for_node(
+            bounds,
+            &json,
+            doc.schema.is_responsive(),
+            Some(state),
+            &mut ops,
+            &mut text_runs,
+            false,
+        );
+    }
     append_draws(commands, ops, text_runs);
 
     let clipped = clip_content(&json);
@@ -91,7 +147,7 @@ fn walk(
         commands.push(ScenePaintCommand::PushClip(bounds));
     }
     for &child in &node.children {
-        walk(doc, layout, state, child, commands, visited);
+        walk(doc, layout, state, widgets, child, commands, visited);
     }
     if clipped {
         commands.push(ScenePaintCommand::Pop);

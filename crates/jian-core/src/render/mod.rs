@@ -19,13 +19,17 @@ pub use paint::{
     PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
     TextRun,
 };
+pub use scene::WidgetRenderCtx;
 pub use scene::{collect_draws, collect_draws_with_state, collect_rich_draws_with_state};
-pub use scene_commands::collect_scene_paint_commands_with_state;
+pub use scene_commands::{
+    collect_scene_paint_commands_with_state, collect_scene_paint_commands_with_widgets,
+};
 pub use text::{RichDrawList, RichTextGrowth, RichTextPlan, TextSpan};
 pub use text_geometry::{
     byte_to_utf16_offset, normalize_utf16_offset, utf16_len, utf16_to_byte_offset, FieldKey,
     Granularity, TextGeometry, TextGeometryError, TextRect, WritingDirection,
 };
+pub use widget_style::WidgetTheme;
 
 use crate::geometry::{Affine2, Rect, Size};
 

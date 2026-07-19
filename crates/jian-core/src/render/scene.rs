@@ -843,7 +843,7 @@ fn clamp_visible_lines(json: &Value, lines: &[String]) -> Vec<String> {
 /// (typed text, blinking caret, selection) rather than the schema's
 /// static `value`. Used by preview mode via [`collect_draws_with_widgets`].
 /// Caret + selection only paint when the node is focused.
-fn emit_live_text_input(
+pub(crate) fn emit_live_text_input(
     r: crate::geometry::Rect,
     json: &Value,
     st: &crate::text_input::TextInputState,
