@@ -329,7 +329,7 @@ mod tests {
 
         let child = doc.get("child").unwrap();
         let style = engine.tree.style(engine.map[child]).unwrap();
-        assert_eq!(style.size.width, length(30.0));
+        assert_eq!(style.size.width, length(30.0_f32));
 
         engine.compute_responsive(roots[1], (100.0, 100.0)).unwrap();
         let rect = engine.node_rect(child).unwrap();
@@ -341,7 +341,7 @@ mod tests {
             .compute_responsive(reverse_roots[1], (100.0, 100.0))
             .unwrap();
         let first_style = reverse.tree.style(reverse_roots[0]).unwrap();
-        assert_eq!(first_style.size.width, length(400.0));
+        assert_eq!(first_style.size.width, length(400.0_f32));
         reverse
             .compute_responsive(reverse_roots[0], (400.0, 300.0))
             .unwrap();

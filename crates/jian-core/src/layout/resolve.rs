@@ -495,8 +495,8 @@ mod tests {
         .unwrap();
         let mut warnings = Vec::new();
         let style = node_to_style_responsive(&node, &mut warnings);
-        assert_eq!(style.min_size.width, length(50.0));
-        assert_eq!(style.max_size.height, length(40.0));
+        assert_eq!(style.min_size.width, length(50.0_f32));
+        assert_eq!(style.max_size.height, length(40.0_f32));
         assert!(warnings.is_empty());
     }
 
