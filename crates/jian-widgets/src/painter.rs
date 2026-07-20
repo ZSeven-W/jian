@@ -163,6 +163,40 @@ pub trait Painter {
         self.clip_round_rect(rect, radii[0]);
     }
 
+    /// Intersect the current clip with an oval inscribed in `bounds`.
+    /// Basic painters retain a bounded rounded-rect approximation; rich
+    /// backends override this with their native oval/path clip.
+    fn clip_oval(&mut self, bounds: Rect) {
+        self.clip_round_rect(bounds, bounds.size.x.min(bounds.size.y) / 2.0);
+    }
+
+    /// Intersect the current clip with a closed polygon. Basic painters use
+    /// its AABB so the API remains source-compatible; rendering hosts override
+    /// this with an exact path clip.
+    fn clip_polygon(&mut self, points: &[Point2D]) {
+        if points.len() < 3 {
+            self.clip_rect(Rect::ZERO);
+            return;
+        }
+        let first = points[0];
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x, first.y, first.x, first.y);
+        for point in &points[1..] {
+            min_x = min_x.min(point.x);
+            min_y = min_y.min(point.y);
+            max_x = max_x.max(point.x);
+            max_y = max_y.max(point.y);
+        }
+        self.clip_rect(Rect::xywh(min_x, min_y, max_x - min_x, max_y - min_y));
+    }
+
+    /// Intersect the current clip with an SVG path fitted into `rect`.
+    /// Rich backends honor `even_odd`; the compatibility fallback stays
+    /// bounded to the destination rectangle.
+    fn clip_svg_path_in_rect(&mut self, d: &str, rect: Rect, even_odd: bool) {
+        let _ = (d, even_odd);
+        self.clip_rect(rect);
+    }
+
     fn stroke_line(&mut self, from: Point2D, to: Point2D, color: Color, width: f32);
     fn fill_round_rect(&mut self, rect: Rect, radius: f32, color: Color);
     fn stroke_round_rect(&mut self, rect: Rect, radius: f32, color: Color, width: f32);
