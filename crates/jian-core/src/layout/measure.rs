@@ -130,8 +130,9 @@ impl MeasureBackend for EstimateBackend {
 
         let (width, height, line_count) = match req.max_width {
             Some(budget) if natural_w > budget + 0.5 && budget > 0.0 => {
-                let lines = (natural_w / budget).ceil().max(1.0);
-                (budget, max_size * line_mult * lines, lines as u16)
+                let lines = estimate_wrapped_line_count(req.runs, max_size, max_weight, budget);
+                let reported_lines = lines.min(f32::from(u16::MAX)) as u16;
+                (budget, max_size * line_mult * lines, reported_lines)
             }
             _ => {
                 let height = max_size * line_mult * explicit_lines as f32;
@@ -211,6 +212,46 @@ fn estimate_runs_width(runs: &[StyledRun<'_>], font_size: f32, weight: u16) -> f
     }
 
     widest.max(line_width.max(0.0))
+}
+
+/// Estimate wrapping independently for every authored line. Dividing only the
+/// widest line by the budget loses the other explicit lines, while dividing
+/// the concatenated width would incorrectly let one line's spare space absorb
+/// another. Empty lines (including a trailing one) always contribute once.
+fn estimate_wrapped_line_count(
+    runs: &[StyledRun<'_>],
+    font_size: f32,
+    weight: u16,
+    budget: f32,
+) -> f32 {
+    let ratio = if weight >= 700 {
+        0.64
+    } else if weight >= 600 {
+        0.60
+    } else {
+        0.58
+    };
+    let char_width = font_size * ratio;
+    let mut total_lines = 0.0_f32;
+    let mut line_width = 0.0_f32;
+
+    let finish_line = |width: f32| (width.max(0.0) / budget).ceil().max(1.0);
+    for run in runs {
+        let spacing = if run.letter_spacing.is_finite() {
+            run.letter_spacing
+        } else {
+            0.0
+        };
+        for ch in run.text.chars() {
+            if ch == '\n' {
+                total_lines += finish_line(line_width);
+                line_width = 0.0;
+            } else {
+                line_width += char_width + spacing;
+            }
+        }
+    }
+    total_lines + finish_line(line_width)
 }
 
 /// Convenience constructor — most call sites want
@@ -402,5 +443,19 @@ mod tests {
         });
         assert_eq!(measured.line_count, u16::MAX);
         assert_eq!(measured.height, 16.0 * (f32::from(u16::MAX) + 1.0));
+    }
+
+    #[test]
+    fn backend_wraps_each_explicit_line_independently() {
+        let runs = [run("a\nb\nc\n", 400)];
+        let measured = EstimateBackend.measure(&MeasureRequest {
+            runs: &runs,
+            line_height: 1.0,
+            max_width: Some(5.0),
+        });
+        // Each glyph wraps to two lines at this width, and the authored
+        // trailing newline contributes one final empty line.
+        assert_eq!(measured.line_count, 7);
+        assert_eq!(measured.height, 16.0 * 7.0);
     }
 }
