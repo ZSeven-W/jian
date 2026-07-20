@@ -14,5 +14,19 @@ fn main() {
     }
 
     PenDocument::export_all().expect("ts-rs export failed");
+    // ts-rs emits a space before some documentation-driven line breaks.
+    // Normalize generated output so rerunning the exporter cannot make
+    // `git diff --check` fail.
+    let output = std::path::Path::new(&target_dir).join("ops.ts");
+    let generated = std::fs::read_to_string(&output).expect("read generated TypeScript");
+    let mut normalized = generated
+        .lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if generated.ends_with('\n') {
+        normalized.push('\n');
+    }
+    std::fs::write(&output, normalized).expect("normalize generated TypeScript");
     eprintln!("TS bindings written under {target_dir}");
 }

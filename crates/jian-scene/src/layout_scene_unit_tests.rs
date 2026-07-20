@@ -170,7 +170,7 @@ fn set_node_fill_patches_matching_node_and_reports_match() {
 }
 
 #[test]
-fn set_node_fill_bakes_node_opacity_into_alpha() {
+fn legacy_set_node_fill_bakes_node_opacity_into_alpha() {
     let mut node = SceneNode::leaf("n", NodeKind::Rect);
     node.opacity = 0.5;
     let mut scene = LayoutScene {
@@ -198,6 +198,39 @@ fn set_node_fill_bakes_node_opacity_into_alpha() {
     // Alpha scaled by the node's cumulative opacity; rgb unchanged.
     assert_eq!(fill.a, 0.5);
     assert_eq!((fill.r, fill.g, fill.b), (0.2, 0.4, 0.6));
+}
+
+#[test]
+fn layered_set_node_fill_keeps_authored_alpha_for_group_compositing() {
+    let mut node = SceneNode::leaf("n", NodeKind::Rect);
+    node.opacity = 0.5;
+    node.fill_layers = vec![SceneFillLayer::Solid {
+        color: Color::BLACK,
+        blend_mode: ImageBlendMode::Multiply,
+    }];
+    let mut scene = LayoutScene {
+        pages: vec![ScenePage {
+            id: "p".into(),
+            name: "P".into(),
+            children: vec![node],
+        }],
+        active_page_index: 0,
+    };
+    let opaque = Color {
+        r: 0.2,
+        g: 0.4,
+        b: 0.6,
+        a: 1.0,
+    };
+
+    assert!(scene.set_node_fill(&["n".into()], opaque));
+    let node = scene.active_page().and_then(|p| p.find("n")).unwrap();
+    assert_eq!(node.fill.map(|fill| fill.a), Some(0.5));
+    assert!(matches!(
+        node.fill_layers.as_slice(),
+        [SceneFillLayer::Solid { color, blend_mode }]
+            if *color == opaque && *blend_mode == ImageBlendMode::Multiply
+    ));
 }
 
 #[test]

@@ -14,7 +14,9 @@ pub mod tokens;
 pub(crate) mod test_support;
 
 pub use geometry::{Color, Point2D, Rect};
-pub use painter::{ImageAdjustments, ImageDrawMode, Painter, TextLayout};
+pub use painter::{
+    ImageAdjustments, ImageBlendMode, ImageDrawMode, Painter, TextBaselineRequest, TextLayout,
+};
 pub use tokens::{Density, Tokens};
 
 /// The baseline `y` that vertically centers `font_size` text in the box

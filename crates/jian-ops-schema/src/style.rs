@@ -229,6 +229,10 @@ pub struct ImageFillBody {
     pub explain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f32>,
+    /// Per-fill compositing mode. Optional for wire compatibility with
+    /// documents authored before image fills supported blending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend_mode: Option<BlendMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exposure: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

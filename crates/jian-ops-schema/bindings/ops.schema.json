@@ -3120,6 +3120,17 @@
                 }
               ]
             },
+            "blendMode": {
+              "description": "Image-node compositing mode. Absent is the historical `normal` source-over behaviour.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "width": {
               "anyOf": [
                 {
@@ -7783,6 +7794,17 @@
                 "null"
               ],
               "format": "float"
+            },
+            "blendMode": {
+              "description": "Per-fill compositing mode. Optional for wire compatibility with documents authored before image fills supported blending.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "exposure": {
               "type": [

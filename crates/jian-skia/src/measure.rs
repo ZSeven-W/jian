@@ -108,10 +108,14 @@ impl SkiaMeasure {
     fn resolved_natural_width(&self, req: &MeasureRequest<'_>) -> f32 {
         let mut max_line_width = 0.0_f32;
         let mut line_width = 0.0_f32;
-        let mut line_chars = 0usize;
-        let mut line_spacing = 0.0_f32;
+        let mut line_spacing_width = 0.0_f32;
         for run in req.runs {
             let italic = matches!(run.font_style, FontStyleKind::Italic);
+            let spacing = if run.letter_spacing.is_finite() {
+                run.letter_spacing
+            } else {
+                0.0
+            };
             let mut parts = run.text.split('\n').peekable();
             while let Some(part) = parts.next() {
                 line_width += self.font_resolver.measure_text(
@@ -121,18 +125,18 @@ impl SkiaMeasure {
                     run.font_weight,
                     italic,
                 );
-                line_chars += part.chars().count();
-                line_spacing = line_spacing.max(run.letter_spacing.max(0.0));
+                let part_chars = part.chars().count();
+                line_spacing_width += part_chars as f32 * spacing;
                 if parts.peek().is_some() {
-                    max_line_width = max_line_width
-                        .max(line_width + letter_spacing_width(line_chars, line_spacing));
+                    let width = line_width + line_spacing_width;
+                    max_line_width = max_line_width.max(width.max(0.0));
                     line_width = 0.0;
-                    line_chars = 0;
-                    line_spacing = 0.0;
+                    line_spacing_width = 0.0;
                 }
             }
         }
-        max_line_width.max(line_width + letter_spacing_width(line_chars, line_spacing))
+        let width = line_width + line_spacing_width;
+        max_line_width.max(width.max(0.0))
     }
 }
 
@@ -155,13 +159,6 @@ pub(crate) fn build_collection(font_resolver: &FontResolver) -> FontCollection {
         fc.set_asset_font_manager(Some(provider.into()));
     }
     fc
-}
-
-fn letter_spacing_width(chars: usize, spacing: f32) -> f32 {
-    if chars <= 1 {
-        return 0.0;
-    }
-    chars.saturating_sub(1) as f32 * spacing
 }
 
 fn has_literal_newline(req: &MeasureRequest<'_>) -> bool {
@@ -225,7 +222,11 @@ impl SkiaMeasure {
             let mut ts = TextStyle::new();
             ts.set_font_size(run.font_size);
             if let Some(family) = run.font_family {
-                ts.set_font_families(&[family]);
+                let families = self.font_resolver.font_families_for_shaping(Some(family));
+                let family_refs = families.iter().map(String::as_str).collect::<Vec<_>>();
+                if !family_refs.is_empty() {
+                    ts.set_font_families(&family_refs);
+                }
             }
             let weight = Weight::from(run.font_weight as i32);
             let slant = match run.font_style {
@@ -269,7 +270,12 @@ impl SkiaMeasure {
             None => self.resolved_natural_width(req),
         };
         let line_count = paragraph.line_number().max(1) as u16;
-        let height = if has_literal_newline(req) {
+        // The canvas painter advances authored line boxes by the exact
+        // `font_size * line_height` value. Paragraph rounds fractional line
+        // boxes (for example 15 * 1.5) to whole pixels, which accumulates into
+        // container-height drift. Keep Paragraph's font-metric height only for
+        // a default-height, single logical line.
+        let height = if req.line_height > 0.0 || has_literal_newline(req) {
             painted_multiline_height(req, line_count)
         } else {
             paragraph.height()
@@ -429,6 +435,64 @@ mod tests {
             res.height > 16.0,
             "wrapped text should be taller than one line"
         );
+    }
+
+    #[test]
+    fn natural_width_applies_positive_and_negative_letter_spacing() {
+        let backend = SkiaMeasure::new();
+        let mut tracked = run("NOVA.", 700, 24.0);
+        let base = backend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&tracked),
+            line_height: 0.0,
+            max_width: None,
+        });
+
+        tracked.letter_spacing = -1.5;
+        let tightened = backend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&tracked),
+            line_height: 0.0,
+            max_width: None,
+        });
+        assert!(
+            (base.width - tightened.width - 7.5).abs() < 0.01,
+            "five characters contribute five -1.5px tracking advances: base={}, tightened={}",
+            base.width,
+            tightened.width,
+        );
+
+        tracked.letter_spacing = 2.0;
+        let expanded = backend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&tracked),
+            line_height: 0.0,
+            max_width: None,
+        });
+        assert!(
+            (expanded.width - base.width - 10.0).abs() < 0.01,
+            "five characters contribute five 2px tracking advances: base={}, expanded={}",
+            base.width,
+            expanded.width,
+        );
+    }
+
+    #[test]
+    fn authored_line_height_preserves_fractional_line_box_height() {
+        let backend = SkiaMeasure::new();
+        for (font_size, line_height, expected) in
+            [(15.0, 1.5, 22.5), (13.0, 1.5, 19.5), (72.0, 1.04, 74.88)]
+        {
+            let runs = [run("Label", 400, font_size)];
+            let measured = backend.measure(&MeasureRequest {
+                runs: &runs,
+                line_height,
+                max_width: None,
+            });
+            assert_eq!(measured.line_count, 1);
+            assert!(
+                (measured.height - expected).abs() < 0.001,
+                "font_size={font_size}, line_height={line_height}: expected {expected}, got {}",
+                measured.height,
+            );
+        }
     }
 
     #[test]

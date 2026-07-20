@@ -10,6 +10,21 @@ pub struct TextLayout {
     italic: bool,
 }
 
+/// Inputs used to locate the first alphabetic baseline inside a text line.
+///
+/// `line_height` is the authored multiplier (`0` means backend default).
+/// Including the actual line text lets a backend resolve the same fallback
+/// face used for CJK/emoji paint instead of sampling an unrelated Latin glyph.
+#[derive(Debug, Clone, Copy)]
+pub struct TextBaselineRequest<'a> {
+    pub text: &'a str,
+    pub font_family: &'a str,
+    pub font_size: f32,
+    pub font_weight: u16,
+    pub italic: bool,
+    pub line_height: f32,
+}
+
 /// Raster image placement mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageDrawMode {
@@ -19,6 +34,27 @@ pub enum ImageDrawMode {
     Crop,
     Tile,
     Stretch,
+}
+
+/// Compositing mode applied while painting a raster image.
+///
+/// `Normal` preserves the historical source-over behaviour. The remaining
+/// variants mirror the blend modes supported by the canonical `.op` schema
+/// and map directly onto Skia / CanvasKit paint modes in host backends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageBlendMode {
+    #[default]
+    Normal,
+    Darken,
+    Multiply,
+    Screen,
+    Overlay,
+    Lighten,
+    Difference,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
 }
 
 /// Per-image adjustment values in the UI slider range `[-100, 100]`.
@@ -296,6 +332,25 @@ pub trait Painter {
         self.save();
     }
 
+    /// Begin a bounded offscreen compositing layer. Draws until the matching
+    /// [`Painter::restore`] are first combined in isolation, then land on the
+    /// backdrop once with `opacity` and `mode`. Rich backends must create a
+    /// real save-layer even for fully opaque source-over; that case still
+    /// provides the isolation required by background blend stacks.
+    fn push_composite_layer(&mut self, bounds: Rect, opacity: f32, mode: ImageBlendMode) {
+        let _ = (bounds, opacity, mode);
+        self.save();
+    }
+
+    /// Begin an isolated compositing layer. Draws until the matching
+    /// [`Painter::restore`] are blended with the backdrop using `mode`.
+    /// Backends without save-layer blend support degrade to source-over while
+    /// preserving the caller's save/restore balance.
+    fn push_blend_layer(&mut self, mode: ImageBlendMode) {
+        let _ = mode;
+        self.save();
+    }
+
     /// Begin a save-layer initialized from a blurred copy of the
     /// already-painted backdrop. The caller owns the silhouette clip
     /// and balances this layer with [`Painter::restore`].
@@ -339,11 +394,24 @@ pub trait Painter {
         }
     }
 
-    /// True when drawing this image would not synchronously decode it.
-    /// Backends without an asynchronous decode path keep the existing
-    /// behavior by accepting encoded bytes as immediately drawable.
-    fn image_decoded(&mut self, id: u64, encoded: &[u8]) -> bool {
-        let _ = (id, encoded);
+    /// True when drawing this image would not synchronously decode it
+    /// AND the cached raster is at least `max_edge_px` on its longest
+    /// edge. Backends that raster per required size answer `false` for a
+    /// too-coarse cache hit so paint can request a sharper decode while
+    /// still drawing what it already has. Backends without an
+    /// asynchronous decode path keep the existing behavior by accepting
+    /// encoded bytes as immediately drawable.
+    fn image_decoded(&mut self, id: u64, encoded: &[u8], max_edge_px: u32) -> bool {
+        let _ = (id, encoded, max_edge_px);
+        true
+    }
+
+    /// True when SOME raster for this image is resident, even one too
+    /// coarse for the current zoom. Paint draws it while a sharper
+    /// decode is in flight; without this a zoom-in would drop a
+    /// perfectly good image back to placeholder art.
+    fn image_resident(&mut self, id: u64) -> bool {
+        let _ = id;
         true
     }
 
@@ -408,6 +476,37 @@ pub trait Painter {
             adjustments,
             opacity,
             corner_radius,
+        );
+    }
+
+    /// Draw an image with affine sampling and an explicit compositing mode.
+    ///
+    /// The default deliberately routes through the pre-existing transform
+    /// method so third-party painters remain source-compatible and render new
+    /// documents as `Normal` until they opt into blend support.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_image_with_options_transform_and_blend(
+        &mut self,
+        rect: Rect,
+        image_id: u64,
+        encoded: &[u8],
+        mode: ImageDrawMode,
+        adjustments: ImageAdjustments,
+        opacity: f32,
+        corner_radius: f32,
+        transform: Option<[f32; 6]>,
+        blend_mode: ImageBlendMode,
+    ) {
+        let _ = blend_mode;
+        self.draw_image_with_options_and_transform(
+            rect,
+            image_id,
+            encoded,
+            mode,
+            adjustments,
+            opacity,
+            corner_radius,
+            transform,
         );
     }
 
@@ -573,6 +672,15 @@ pub trait Painter {
     /// with backends that only implement [`Painter::text_ascent`].
     fn text_ascent_family(&mut self, font_size: f32, _family: &str, weight: u16) -> f32 {
         self.text_ascent(font_size, weight)
+    }
+
+    /// Distance from the top of the first line box to its alphabetic baseline.
+    /// Rich backends shape `request.text` with the requested family/style and
+    /// authored line height. The default deliberately preserves the historical
+    /// ascent-only behavior for capture/estimate backends.
+    fn text_first_baseline(&mut self, request: &TextBaselineRequest<'_>) -> f32 {
+        let _ = (request.text, request.italic, request.line_height);
+        self.text_ascent_family(request.font_size, request.font_family, request.font_weight)
     }
 
     fn measure_text_styled(

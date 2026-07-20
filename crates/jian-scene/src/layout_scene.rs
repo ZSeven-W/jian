@@ -27,9 +27,10 @@
 //! own paint enums (`NodeKind` / `Effect`). The web host builds
 //! scenes too.
 
+pub use crate::layout_scene_fill::SceneFillLayer;
 use crate::scene_geometry::rect_has_extent;
 pub use crate::scene_geometry::{regular_polygon_points, stable_image_source_id};
-use jian_widgets::{Color, ImageAdjustments, ImageDrawMode, Point2D, Rect};
+use jian_widgets::{Color, ImageAdjustments, ImageBlendMode, ImageDrawMode, Point2D, Rect};
 #[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
 
@@ -337,8 +338,21 @@ fn set_matching_node_fill(nodes: &mut [SceneNode], ids: &[String], color: Color)
     let mut changed = false;
     for node in nodes {
         if ids.iter().any(|id| id == &node.id) {
-            node.fill = Some(bake_node_alpha(color, node.opacity));
-            changed = true;
+            let baked_color = bake_node_alpha(color, node.opacity);
+            // Legacy scenes only have `fill`. A layered scene can take the
+            // cheap paint patch when its primary layer is solid; richer
+            // primary paints must fall back to a canonical scene rebuild.
+            // Layer colours stay authored: the layered painter applies node
+            // opacity once to the assembled background stack.
+            let layer_patched = node.fill_layers.is_empty()
+                || node
+                    .fill_layers
+                    .first_mut()
+                    .is_some_and(|layer| layer.set_solid_color(color));
+            if layer_patched {
+                node.fill = Some(baked_color);
+                changed = true;
+            }
         } else if set_matching_node_fill(&mut node.children, ids, color) {
             changed = true;
         }
@@ -518,6 +532,9 @@ pub struct SceneNode {
     /// gradient keeps its first stop here (parity with the current
     /// canvas, which paints the first solid colour). `None` = no fill.
     pub fill: Option<Color>,
+    /// Complete canonical fill stack, ordered front-to-back. Empty means this
+    /// scene came from a legacy payload and the single-fill fields apply.
+    pub fill_layers: Vec<SceneFillLayer>,
     /// Fill paint mode — `Solid` / `LinearGradient` / `RadialGradient`
     /// / `Image`. The current canvas paints all of them as the solid
     /// `fill` colour; carried so a richer painter can branch later.
@@ -606,6 +623,9 @@ pub struct SceneNode {
     pub image_src_id: u64,
     /// How `image_src` is placed into `bounds`.
     pub image_fit: SceneImageFit,
+    /// How an image node composites with the already-painted backdrop.
+    /// `Normal` retains the historical source-over behaviour.
+    pub image_blend_mode: ImageBlendMode,
     /// Figma image-fill affine transform in normalized UV coordinates.
     /// `[m00, m01, m02, m10, m11, m12]` maps a node-local unit point
     /// `(x, y)` to image UV as `(m00*x + m01*y + m02,
@@ -778,6 +798,7 @@ impl SceneNode {
             corner_radii: None,
             clip_content: false,
             fill: None,
+            fill_layers: Vec::new(),
             fill_type: SceneFillType::Solid,
             gradient: None,
             shader: None,
@@ -807,6 +828,7 @@ impl SceneNode {
             image_src: None,
             image_src_id: 0,
             image_fit: SceneImageFit::Fill,
+            image_blend_mode: ImageBlendMode::Normal,
             image_transform: None,
             image_adjustments: ImageAdjustments::default(),
             effects: Vec::new(),

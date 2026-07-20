@@ -33,6 +33,8 @@
 
 pub mod backend;
 #[cfg(feature = "textlayout")]
+pub mod baseline;
+#[cfg(feature = "textlayout")]
 pub mod bundled_fonts;
 pub mod color;
 pub mod convert;
@@ -55,15 +57,18 @@ pub mod text_geometry;
 
 pub use backend::SkiaBackend;
 #[cfg(feature = "textlayout")]
+pub use baseline::ParagraphBaseline;
+#[cfg(feature = "textlayout")]
 pub use bundled_fonts::{
-    generation as font_generation, list_families, parse_imported_font_meta, register_bundled_fonts,
-    register_imported_font, remove_imported_font, FamilyMeta, FontBlob, FontSource,
-    ImportedFontMeta,
+    generation as font_generation, list_bundled_families, list_families, parse_imported_font_meta,
+    register_bundled_fonts, register_imported_font, remove_imported_font, FamilyMeta, FontBlob,
+    FontSource, ImportedFontMeta,
 };
 pub use font_lock::with_font_lock;
 #[cfg(feature = "textlayout")]
 pub use font_resolve::{
-    FontResolver, FontSegment, ResolvedTypeface, SYNTHETIC_BOLD_WIDTH_FACTOR, SYNTHETIC_ITALIC_SKEW,
+    font_family_candidates, FontResolver, FontSegment, ResolvedTypeface,
+    SYNTHETIC_BOLD_WIDTH_FACTOR, SYNTHETIC_ITALIC_SKEW,
 };
 pub use image_registry::{InstanceImageRegistry, RegisteredBackend};
 #[cfg(feature = "textlayout")]

@@ -2,7 +2,7 @@ use super::base::PenNodeBase;
 use super::container::CornerRadius;
 use super::image_src::ImageSrc;
 use crate::sizing::SizingBehavior;
-use crate::style::PenEffect;
+use crate::style::{BlendMode, PenEffect};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -33,6 +33,10 @@ pub struct ImageNode {
     pub src: ImageSrc,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_fit: Option<ImageFitMode>,
+    /// Image-node compositing mode. Absent is the historical `normal`
+    /// source-over behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blend_mode: Option<BlendMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

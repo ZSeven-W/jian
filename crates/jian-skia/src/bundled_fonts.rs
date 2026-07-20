@@ -261,6 +261,25 @@ pub fn list_families() -> Vec<FamilyMeta> {
     metas
 }
 
+/// Registered app-shipped family names, sorted and deduplicated for host UI
+/// availability snapshots. Unlike [`list_families`], this reports only
+/// [`FontSource::Bundled`] faces and therefore reflects the exact blobs the
+/// current host registered at startup instead of a compile-time catalog.
+pub fn list_bundled_families() -> Vec<String> {
+    let guard = registry().read().expect("font registry poisoned");
+    let mut families = guard
+        .fonts
+        .iter()
+        .filter(|font| font.source == FontSource::Bundled)
+        .map(|font| font.family.trim())
+        .filter(|family| !family.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    families.sort_by_key(|family| family.to_ascii_lowercase());
+    families.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    families
+}
+
 /// Build a `TypefaceFontProvider` carrying every *bundled* blob, keyed
 /// by each font's own family name (alias `None`). Returns `None` when
 /// nothing is registered, so callers keep their default-only collection

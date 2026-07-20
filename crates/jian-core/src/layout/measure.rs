@@ -114,7 +114,7 @@ impl MeasureBackend for EstimateBackend {
                 max_weight = run.font_weight;
             }
         }
-        let (natural_w, natural_h) = estimate_concat(&content, max_size, max_weight);
+        let natural_w = estimate_runs_width(req.runs, max_size, max_weight);
         let line_mult = if req.line_height > 0.0 {
             req.line_height
         } else {
@@ -122,7 +122,10 @@ impl MeasureBackend for EstimateBackend {
         };
 
         let (width, height, line_count) = match req.max_width {
-            None => (natural_w, natural_h, content.lines().count().max(1) as u16),
+            None => {
+                let lines = content.lines().count().max(1) as u16;
+                (natural_w, max_size * line_mult * f32::from(lines), lines)
+            }
             Some(budget) => {
                 if natural_w > budget + 0.5 && budget > 0.0 {
                     let lines = (natural_w / budget).ceil().max(1.0);
@@ -172,6 +175,40 @@ fn estimate_concat(content: &str, font_size: f32, weight: u16) -> (f32, f32) {
     let width = widest as f32 * font_size * ratio;
     let height = lines.len() as f32 * font_size * 1.3;
     (width, height)
+}
+
+/// Estimate the widest CSS line while preserving authored tracking. Intrinsic
+/// inline width includes tracking after the final character as well as between
+/// characters, so every character contributes its run's spacing.
+fn estimate_runs_width(runs: &[StyledRun<'_>], font_size: f32, weight: u16) -> f32 {
+    let ratio = if weight >= 700 {
+        0.64
+    } else if weight >= 600 {
+        0.60
+    } else {
+        0.58
+    };
+    let char_width = font_size * ratio;
+    let mut widest = 0.0_f32;
+    let mut line_width = 0.0_f32;
+
+    for run in runs {
+        let spacing = if run.letter_spacing.is_finite() {
+            run.letter_spacing
+        } else {
+            0.0
+        };
+        for ch in run.text.chars() {
+            if ch == '\n' {
+                widest = widest.max(line_width.max(0.0));
+                line_width = 0.0;
+                continue;
+            }
+            line_width += char_width + spacing;
+        }
+    }
+
+    widest.max(line_width.max(0.0))
 }
 
 /// Convenience constructor — most call sites want
@@ -260,5 +297,83 @@ mod tests {
         assert_eq!(res.width, 40.0);
         assert!(res.line_count > 1);
         assert!(res.height > 16.0 * 1.3);
+    }
+
+    #[test]
+    fn backend_applies_positive_and_negative_letter_spacing() {
+        let mut plain = run("NOVA.", 700);
+        let base = EstimateBackend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&plain),
+            line_height: 0.0,
+            max_width: None,
+        });
+
+        plain.letter_spacing = -1.5;
+        let tightened = EstimateBackend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&plain),
+            line_height: 0.0,
+            max_width: None,
+        });
+        assert!((base.width - tightened.width - 7.5).abs() < f32::EPSILON);
+
+        plain.letter_spacing = 2.0;
+        let expanded = EstimateBackend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&plain),
+            line_height: 0.0,
+            max_width: None,
+        });
+        assert!((expanded.width - base.width - 10.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn backend_applies_each_runs_tracking_to_its_characters() {
+        let mut left = run("AB", 400);
+        left.letter_spacing = -2.0;
+        let mut right = run("CD", 400);
+        right.letter_spacing = 3.0;
+        let measured = EstimateBackend.measure(&MeasureRequest {
+            runs: &[left, right],
+            line_height: 0.0,
+            max_width: None,
+        });
+        let base = 4.0 * 16.0 * 0.58;
+        // Every character contributes its run's spacing: 2*(-2) + 2*(+3).
+        assert!((measured.width - (base + 2.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn backend_intrinsic_width_includes_trailing_tracking() {
+        let mut heading = run("逛逛分类", 700);
+        let base = EstimateBackend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&heading),
+            line_height: 0.0,
+            max_width: None,
+        });
+        heading.letter_spacing = -1.0;
+        let tightened = EstimateBackend.measure(&MeasureRequest {
+            runs: std::slice::from_ref(&heading),
+            line_height: 0.0,
+            max_width: None,
+        });
+        assert!((base.width - tightened.width - 4.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn backend_natural_height_honors_authored_line_height() {
+        let runs = [StyledRun {
+            text: "Navigation",
+            font_family: None,
+            font_size: 15.0,
+            font_weight: 700,
+            font_style: FontStyleKind::Normal,
+            letter_spacing: 0.0,
+        }];
+        let measured = EstimateBackend.measure(&MeasureRequest {
+            runs: &runs,
+            line_height: 1.5,
+            max_width: None,
+        });
+        assert_eq!(measured.line_count, 1);
+        assert!((measured.height - 22.5).abs() < f32::EPSILON);
     }
 }
