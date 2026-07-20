@@ -619,17 +619,21 @@ mod tests {
 
     #[test]
     fn expands_generics_and_deduplicates_aliases() {
+        let mut expected = Vec::new();
+        for family in [
+            "Missing",
+            platform_system_ui_family(),
+            platform_sans_serif_family(),
+            platform_serif_family(),
+            platform_monospace_family(),
+        ] {
+            push_unique_font_family(&mut expected, family.to_string());
+        }
         assert_eq!(
             font_family_candidates(Some(
                 "Missing, ui-sans-serif, system-ui, sans-serif, serif, monospace"
             )),
-            vec![
-                "Missing",
-                platform_system_ui_family(),
-                platform_sans_serif_family(),
-                platform_serif_family(),
-                platform_monospace_family(),
-            ]
+            expected
         );
     }
 

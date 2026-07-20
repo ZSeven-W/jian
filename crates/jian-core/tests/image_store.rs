@@ -1,6 +1,6 @@
-use jian_core::render::image_store::{
-    canonical_url_key, data_url_key, decode_data_url, read_confined_local,
-};
+#[cfg(unix)]
+use jian_core::render::image_store::read_confined_local;
+use jian_core::render::image_store::{canonical_url_key, data_url_key, decode_data_url};
 use jian_core::render::image_store::{ImageState, ImageStore};
 use jian_core::render::{DecodeError, DrawOp, RenderBackend};
 use jian_core::{geometry::Affine2, geometry::Rect, geometry::Size};

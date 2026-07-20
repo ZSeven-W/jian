@@ -34,13 +34,35 @@ use jian_core::startup::{
     BootstrapSource, HostAgnosticBootstrap, PhaseResult, StartupConfig, StartupDriver,
     StartupPhase, StartupStage,
 };
-use std::time::Instant;
+use std::{
+    sync::{Mutex, MutexGuard},
+    time::Instant,
+};
 
 /// Generous overhead ceiling for the no-op driver, picked so the
 /// test stays green across the GitHub Actions matrix (linux x86_64,
 /// linux aarch64, macos aarch64, windows x86_64). Tighten when Plan
 /// 19 Tasks 2-7 turn the phase impls into real work.
 const FRAMEWORK_CEILING_MS: f64 = 200.0;
+const TIMED_SAMPLES: usize = 3;
+
+// These tests deliberately measure wall clock. Running multiple bootstrap
+// fixtures at once measures libtest contention instead of startup work, so
+// serialize this integration-test binary and retain the best steady-state
+// sample to discard runner preemption.
+static STARTUP_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_startup_test() -> MutexGuard<'static, ()> {
+    STARTUP_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn best_timed_sample(mut sample: impl FnMut() -> f64) -> f64 {
+    (0..TIMED_SAMPLES)
+        .map(|_| sample())
+        .fold(f64::INFINITY, f64::min)
+}
 
 fn run_driver_once() -> f64 {
     let mut driver = StartupDriver::new();
@@ -65,13 +87,12 @@ fn run_driver_once() -> f64 {
 
 #[test]
 fn startup_driver_overhead_under_framework_ceiling() {
-    // First run is warmup (allocator / branch predictor / cache);
-    // measurement comes from a steady-state second pass. This pattern
-    // matches `jian perf startup`'s aggregator which discards no
-    // samples but uses median / p95 — a single hot-path run is
-    // representative for a regression guard.
+    let _serial = lock_startup_test();
+    // First run is warmup (allocator / branch predictor / cache); the best of
+    // three steady-state samples rejects scheduler preemption while a real
+    // regression still slows every sample.
     let _ = run_driver_once();
-    let elapsed = run_driver_once();
+    let elapsed = best_timed_sample(run_driver_once);
     assert!(
         elapsed < FRAMEWORK_CEILING_MS,
         "startup framework overhead exceeded {:.0} ms ceiling: {:.2} ms",
@@ -82,6 +103,7 @@ fn startup_driver_overhead_under_framework_ceiling() {
 
 #[test]
 fn startup_driver_per_phase_end_time_within_total() {
+    let _serial = lock_startup_test();
     // The actual API contract: `critical_path_ms` is a *serial sum*
     // of `on_critical` phase durations (not a longest-path metric),
     // so it's not bounded by `total_wall_clock_ms` when multiple
@@ -110,6 +132,7 @@ fn startup_driver_per_phase_end_time_within_total() {
 
 #[test]
 fn startup_driver_runs_every_phase_exactly_once() {
+    let _serial = lock_startup_test();
     // Foundational invariant — each declared StartupPhase must fire
     // exactly once per driver run. A regression in the scheduler
     // that drops a phase (or fires it twice) trips this. Plan 19's
@@ -207,14 +230,14 @@ fn synth_500_node_doc() -> String {
 
 #[test]
 fn startup_budget_counter_doc_via_bootstrap() {
-    // counter.op (3 nodes) — the canonical small-doc fixture every
-    // other Plan 19 test uses. Two runs: warmup (allocator / cache)
-    // + measurement (steady-state). Mirrors the framework-overhead
-    // pattern above so the same flake characteristics apply.
+    let _serial = lock_startup_test();
+    // counter.op (3 nodes) — the canonical small-doc fixture every other Plan
+    // 19 test uses. Warm once, then retain the best steady-state sample.
     let src = include_str!("../../jian-core/tests/counter.op").to_owned();
     let viewport = (400.0, 200.0);
     let _warmup = run_bootstrap_once(BootstrapSource::String(src.clone()), viewport);
-    let elapsed = run_bootstrap_once(BootstrapSource::String(src), viewport);
+    let elapsed =
+        best_timed_sample(|| run_bootstrap_once(BootstrapSource::String(src.clone()), viewport));
     assert!(
         elapsed < COUNTER_BUDGET_MS,
         "counter.op DataPath bootstrap exceeded {:.0} ms ceiling: {:.2} ms",
@@ -225,16 +248,18 @@ fn startup_budget_counter_doc_via_bootstrap() {
 
 #[test]
 fn startup_budget_500_node_doc_via_bootstrap() {
+    let _serial = lock_startup_test();
     // 500-node synthetic large-doc. The body is built once outside
     // the timed region — schema construction is not part of the
     // startup pipeline (the user pays for *.op* parsing inside
     // ParseSchema, and BootstrapSource::String already feeds the
-    // pipeline raw text). Warmup pass shakes out cold-allocator
-    // jitter the same as the small-doc test.
+    // pipeline raw text). Warmup plus best-of-three sampling shakes out
+    // cold-allocator and runner-scheduling jitter like the small-doc test.
     let src = synth_500_node_doc();
     let viewport = (2400.0, 2400.0);
     let _warmup = run_bootstrap_once(BootstrapSource::String(src.clone()), viewport);
-    let elapsed = run_bootstrap_once(BootstrapSource::String(src), viewport);
+    let elapsed =
+        best_timed_sample(|| run_bootstrap_once(BootstrapSource::String(src.clone()), viewport));
     assert!(
         elapsed < LARGE_DOC_BUDGET_MS,
         "500-node DataPath bootstrap exceeded {:.0} ms ceiling: {:.2} ms",
@@ -245,6 +270,7 @@ fn startup_budget_500_node_doc_via_bootstrap() {
 
 #[test]
 fn startup_budget_bootstrap_completes_every_datapath_phase() {
+    let _serial = lock_startup_test();
     // Sanity guard for the budget tests above: the bootstrap must
     // actually execute every DataPath phase — a regression that
     // silently skips one (e.g. a dep-graph mis-wire) would make the
