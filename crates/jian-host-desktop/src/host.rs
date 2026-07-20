@@ -373,6 +373,7 @@ impl DesktopHost {
     /// Replace the renderer after a context-loss recovery. Replacing the
     /// backend destroys its decoded-image cache, so the generation bump tells
     /// `Runtime::prepare_frame` to re-register every live image.
+    #[cfg(feature = "run")]
     pub(crate) fn recreate_backend_after_context_loss(&mut self) {
         self.backend = SkiaBackend::new();
         self.backend_generation = self.backend_generation.wrapping_add(1);

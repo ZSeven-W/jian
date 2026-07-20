@@ -28,7 +28,7 @@
 //!   would clone the payload once per reference and re-inflate the
 //!   document.
 //!
-//! The traversal is STRUCTURAL (see [`visit_image_strings_mut`]): it
+//! The traversal is STRUCTURAL (see `visit_image_strings_mut`): it
 //! follows the node tree (`children` / `pages[].children`) and visits
 //! only the schema positions typed as `ImageSrc` — `ImageNode.src`
 //! and image-fill `url`s in `fill` / `stroke.fill` / `states.*`
@@ -271,7 +271,7 @@ pub fn inline_images(root: &mut Value) {
 }
 
 /// Collect every image-table id referenced from the node tree of
-/// `root` (same positions as [`visit_image_strings_mut`]). Used by
+/// `root` (same positions as `visit_image_strings_mut`). Used by
 /// the structured merge to prune unreferenced table entries.
 pub fn referenced_ids(root: &Value) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();

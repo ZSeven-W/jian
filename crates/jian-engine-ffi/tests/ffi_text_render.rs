@@ -66,7 +66,7 @@ fn typed_text_is_painted_by_the_cpu_frame() {
     let stride = WIDTH * 4;
     let mut buffer = vec![0u8; stride * HEIGHT];
     let mut tick = 0u64;
-    let mut paint = |engine, buffer: &mut Vec<u8>, tick: u64| {
+    let paint = |engine, buffer: &mut Vec<u8>, tick: u64| {
         assert_eq!(
             unsafe { frame(engine, tick * 16, buffer.as_mut_ptr(), buffer.len(), stride) },
             JianStatus::Ok

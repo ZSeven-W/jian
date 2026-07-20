@@ -29,7 +29,6 @@ use crate::render::{
     TextRun,
 };
 use crate::scene::Color;
-use jian_ops_schema::node::text::canonical_line_height_multiplier;
 use jian_ops_schema::node::PenNode;
 use serde_json::Value;
 

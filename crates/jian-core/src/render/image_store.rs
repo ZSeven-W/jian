@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::path::Path;
 // Only the Linux (/proc/self/fd) and macOS (F_GETPATH) confinement
 // branches name PathBuf; other targets infer it.
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::path::PathBuf;
 
 use base64::Engine as _;
