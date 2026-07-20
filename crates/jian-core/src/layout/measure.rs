@@ -121,19 +121,21 @@ impl MeasureBackend for EstimateBackend {
             1.3
         };
 
+        // `str::lines` intentionally omits the final empty line. Text layout
+        // cannot do that: an authored trailing newline still advances one
+        // line. Keep the count as `usize` while calculating height so very
+        // large documents do not wrap through the public `u16` count.
+        let explicit_lines = content.split('\n').count().max(1);
+        let reported_explicit_lines = explicit_lines.min(usize::from(u16::MAX)) as u16;
+
         let (width, height, line_count) = match req.max_width {
-            None => {
-                let lines = content.lines().count().max(1) as u16;
-                (natural_w, max_size * line_mult * f32::from(lines), lines)
+            Some(budget) if natural_w > budget + 0.5 && budget > 0.0 => {
+                let lines = (natural_w / budget).ceil().max(1.0);
+                (budget, max_size * line_mult * lines, lines as u16)
             }
-            Some(budget) => {
-                if natural_w > budget + 0.5 && budget > 0.0 {
-                    let lines = (natural_w / budget).ceil().max(1.0);
-                    (budget, max_size * line_mult * lines, lines as u16)
-                } else {
-                    let lines = content.lines().count().max(1) as u16;
-                    (natural_w, max_size * line_mult * lines as f32, lines)
-                }
+            _ => {
+                let height = max_size * line_mult * explicit_lines as f32;
+                (natural_w, height, reported_explicit_lines)
             }
         };
         MeasureResult {
@@ -375,5 +377,30 @@ mod tests {
         });
         assert_eq!(measured.line_count, 1);
         assert!((measured.height - 22.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn backend_preserves_trailing_empty_line() {
+        let runs = [run("text\n", 400)];
+        let measured = EstimateBackend.measure(&MeasureRequest {
+            runs: &runs,
+            line_height: 1.0,
+            max_width: None,
+        });
+        assert_eq!(measured.line_count, 2);
+        assert!((measured.height - 32.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn backend_clamps_reported_line_count_without_wrapping_height() {
+        let content = "x\n".repeat(usize::from(u16::MAX));
+        let runs = [run(&content, 400)];
+        let measured = EstimateBackend.measure(&MeasureRequest {
+            runs: &runs,
+            line_height: 1.0,
+            max_width: None,
+        });
+        assert_eq!(measured.line_count, u16::MAX);
+        assert_eq!(measured.height, 16.0 * (f32::from(u16::MAX) + 1.0));
     }
 }
