@@ -21,7 +21,7 @@ pub mod text;
 pub mod text_area;
 pub mod text_input;
 
-pub use base::{BoolOrExpression, NumberOrExpression, PenNodeBase};
+pub use base::{BoolOrExpression, MaskType, NumberOrExpression, PenNodeBase};
 pub use checkbox::CheckboxNode;
 pub use container::{
     AlignItems, ContainerProps, CornerRadius, JustifyContent, LayoutMode, Padding,

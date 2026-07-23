@@ -27,6 +27,8 @@ pub enum SceneFillLayer {
         src_id: u64,
         fit: SceneImageFit,
         transform: Option<[f32; 6]>,
+        original_size: Option<[f32; 2]>,
+        tile_scale: f32,
         adjustments: ImageAdjustments,
         opacity: f32,
         blend_mode: ImageBlendMode,

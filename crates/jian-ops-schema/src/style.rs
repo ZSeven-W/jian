@@ -18,6 +18,11 @@ pub enum BlendMode {
     Saturation,
     Color,
     Luminosity,
+    SoftLight,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    Exclusion,
 }
 
 // --- Fills ---
@@ -225,6 +230,12 @@ pub struct ImageFillBody {
     pub original_size: Option<ImageOriginalSize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transform: Option<ImageTransform>,
+    /// Figma TILE paint scale. A value of `1.0` draws each source bitmap pixel
+    /// as one document pixel; omitted values retain that default. Other image
+    /// placement modes ignore this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "export-ts", ts(optional = nullable))]
+    pub tile_scale: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -542,9 +553,22 @@ mod tests {
 
     #[test]
     fn image_fill_roundtrip() {
-        let json = r#"{"type":"image","url":"data:image/png;base64,...","mode":"crop"}"#;
+        let json = r#"{"type":"image","url":"data:image/png;base64,...","mode":"tile","tileScale":0.38618907}"#;
         let f: PenFill = serde_json::from_str(json).unwrap();
-        assert!(matches!(f, PenFill::Image(_)));
+        let PenFill::Image(image) = &f else {
+            panic!("expected image fill");
+        };
+        assert_eq!(image.tile_scale, Some(0.38618907));
+        let wire_scale = serde_json::to_value(f).unwrap()["tileScale"]
+            .as_f64()
+            .expect("numeric tile scale");
+        assert!((wire_scale - 0.38618907).abs() < 1.0e-7);
+
+        let old: PenFill = serde_json::from_str(
+            r#"{"type":"image","url":"data:image/png;base64,...","mode":"tile"}"#,
+        )
+        .unwrap();
+        assert!(matches!(old, PenFill::Image(image) if image.tile_scale.is_none()));
     }
 
     #[test]

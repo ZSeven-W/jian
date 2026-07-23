@@ -19,6 +19,35 @@ const MAX_BASE64_BYTES: usize = MAX_THUMB_BYTES.div_ceil(3) * 4;
 
 type ThumbMap = HashMap<u64, Arc<[u8]>>;
 
+/// Cheap, immutable snapshot of the active document's blur-up thumbnails.
+///
+/// Desktop saves may run on a background thread after the user has already
+/// opened another document. Capturing the registry together with the document
+/// snapshot keeps that save self-contained: the payload bytes remain shared
+/// through `Arc`, and the worker never consults whichever registry happens to
+/// be active later.
+#[derive(Clone, Default)]
+pub struct ImageThumbSnapshot(ThumbMap);
+
+/// Capture the active thumbnail registry without copying encoded JPEG bytes.
+pub fn capture_snapshot() -> ImageThumbSnapshot {
+    ImageThumbSnapshot(lock_thumbs().clone())
+}
+
+impl ImageThumbSnapshot {
+    pub(crate) fn serialized_for(&self, referenced_ids: &BTreeSet<u64>) -> Map<String, Value> {
+        referenced_ids
+            .iter()
+            .filter_map(|id| {
+                self.0.get(id).map(|bytes| {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    (id.to_string(), Value::String(encoded))
+                })
+            })
+            .collect()
+    }
+}
+
 /// Decoded thumbnail table waiting for its typed document load to succeed.
 ///
 /// Loaders take this seed out of raw JSON before deserializing the document,
@@ -227,16 +256,7 @@ pub fn take_pending_from_document(root: &mut Value) -> PendingThumbSeed {
 
 /// Serialize only thumbnails referenced by the document being saved.
 pub(crate) fn snapshot_for(referenced_ids: &BTreeSet<u64>) -> Map<String, Value> {
-    let registry = lock_thumbs();
-    referenced_ids
-        .iter()
-        .filter_map(|id| {
-            registry.get(id).map(|bytes| {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-                (id.to_string(), Value::String(encoded))
-            })
-        })
-        .collect()
+    capture_snapshot().serialized_for(referenced_ids)
 }
 
 /// Remove and decode a document's thumbnail table.

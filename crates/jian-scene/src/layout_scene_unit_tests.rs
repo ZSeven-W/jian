@@ -319,3 +319,41 @@ fn content_bounds_none_for_empty_page() {
     };
     assert!(scene.content_bounds().is_none());
 }
+
+#[test]
+fn visual_bounds_include_only_unclipped_descendant_overflow() {
+    let mut child = SceneNode::leaf("overflow", NodeKind::Rect);
+    child.bounds = Rect::xywh(250.0, 30.0, 50.0, 20.0);
+
+    let mut hidden_child = SceneNode::leaf("hidden-overflow", NodeKind::Rect);
+    hidden_child.bounds = Rect::xywh(900.0, 30.0, 50.0, 20.0);
+    hidden_child.hidden = true;
+
+    let mut open = SceneNode::leaf("open", NodeKind::Frame);
+    open.bounds = Rect::xywh(0.0, 0.0, 100.0, 100.0);
+    open.children.push(child);
+    open.children.push(hidden_child.clone());
+    assert_eq!(open.aggregate_bounds(), open.bounds);
+    assert_eq!(open.visual_bounds(), Rect::xywh(0.0, 0.0, 300.0, 100.0));
+
+    let mut clipped = open.clone();
+    clipped.clip_content = true;
+    assert_eq!(clipped.aggregate_bounds(), clipped.bounds);
+    assert_eq!(clipped.visual_bounds(), clipped.bounds);
+    let clipped_bounds = clipped.bounds;
+
+    let scene_for = |node| LayoutScene {
+        pages: vec![ScenePage {
+            id: "p".into(),
+            name: "P".into(),
+            children: vec![node],
+        }],
+        active_page_index: 0,
+    };
+    assert_eq!(
+        scene_for(open).content_bounds(),
+        Some(Rect::xywh(0.0, 0.0, 300.0, 100.0))
+    );
+    assert_eq!(scene_for(clipped).content_bounds(), Some(clipped_bounds));
+    assert_eq!(scene_for(hidden_child).content_bounds(), None);
+}

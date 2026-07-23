@@ -288,6 +288,7 @@ pub fn project_screens(
             id: page_id,
             name: s.name,
             children: vec![s.frame],
+            background_color: None,
             state: None,
             lifecycle: None,
         });
@@ -336,6 +337,7 @@ fn normalize_screen_ids(screens: &mut [Screen], warnings: &mut Vec<ProjectionWar
             id: variant_page_id(screen),
             name: screen.name.clone(),
             children: Vec::new(),
+            background_color: None,
             state: None,
             lifecycle: None,
         })

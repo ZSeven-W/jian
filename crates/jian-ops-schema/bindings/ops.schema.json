@@ -239,6 +239,13 @@
             "$ref": "#/definitions/PenNode"
           }
         },
+        "backgroundColor": {
+          "description": "Optional infinite-canvas background for this page. When absent, editors use their normal canvas surface and grid treatment.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "state": {
           "type": [
             "object",
@@ -487,6 +494,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -829,6 +858,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -1167,6 +1218,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -1576,6 +1649,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -1824,6 +1919,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -2076,6 +2193,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -2164,6 +2303,13 @@
                 {
                   "type": "null"
                 }
+              ]
+            },
+            "mask": {
+              "description": "Whether this path acts as a sibling mask for the layers above it.\n\nThis is intentionally optional so existing `.op` documents retain their byte shape. It is the legacy opaque-path marker; newer alpha, vector, and luminance semantics use the shared `mask_type` field.",
+              "type": [
+                "boolean",
+                "null"
               ]
             },
             "width": {
@@ -2376,6 +2522,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -2726,6 +2894,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -3053,6 +3243,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -3114,17 +3326,6 @@
               "anyOf": [
                 {
                   "$ref": "#/definitions/ImageFitMode"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "blendMode": {
-              "description": "Image-node compositing mode. Absent is the historical `normal` source-over behaviour.",
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/BlendMode"
                 },
                 {
                   "type": "null"
@@ -3395,6 +3596,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -3659,6 +3882,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -3989,6 +4234,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -4297,6 +4564,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -4590,6 +4879,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -4891,6 +5202,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -5209,6 +5542,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -5508,6 +5863,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -5853,6 +6230,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -6159,6 +6558,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -6473,6 +6894,28 @@
                 "null"
               ]
             },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "theme": {
               "type": [
                 "object",
@@ -6708,6 +7151,28 @@
               "type": [
                 "boolean",
                 "null"
+              ]
+            },
+            "maskType": {
+              "description": "Sibling-mask semantics. Absence means this node is painted normally.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/MaskType"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "blendMode": {
+              "description": "Composite this node's complete rendered subtree with the backdrop. Absence is the source-over default; pass-through groups also stay absent.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/BlendMode"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "theme": {
@@ -7362,6 +7827,36 @@
         }
       ]
     },
+    "MaskType": {
+      "description": "Pixel operation used when this node masks the sibling layers in front of it. This lives on the shared base because Figma permits masks on frames, rectangles, text, instances, and vector nodes alike.",
+      "type": "string",
+      "enum": [
+        "alpha",
+        "vector",
+        "luminance"
+      ]
+    },
+    "BlendMode": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "darken",
+        "multiply",
+        "screen",
+        "overlay",
+        "lighten",
+        "difference",
+        "hue",
+        "saturation",
+        "color",
+        "luminosity",
+        "soft_light",
+        "color_dodge",
+        "color_burn",
+        "hard_light",
+        "exclusion"
+      ]
+    },
     "SizingBehavior": {
       "description": "Sizing value: a number, a fixed keyword, or an arbitrary string (typically `$variable` ref).",
       "anyOf": [
@@ -7782,6 +8277,14 @@
                 }
               ]
             },
+            "tileScale": {
+              "description": "Figma TILE paint scale. A value of `1.0` draws each source bitmap pixel as one document pixel; omitted values retain that default. Other image placement modes ignore this field.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "float"
+            },
             "explain": {
               "type": [
                 "string",
@@ -7857,22 +8360,6 @@
             }
           }
         }
-      ]
-    },
-    "BlendMode": {
-      "type": "string",
-      "enum": [
-        "normal",
-        "darken",
-        "multiply",
-        "screen",
-        "overlay",
-        "lighten",
-        "difference",
-        "hue",
-        "saturation",
-        "color",
-        "luminosity"
       ]
     },
     "GradientStop": {

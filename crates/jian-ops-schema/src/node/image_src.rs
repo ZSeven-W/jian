@@ -144,6 +144,9 @@ impl From<&str> for ImageSrc {
 
 impl serde::Serialize for ImageSrc {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if let Some(reference) = crate::image_table::scoped_reference(self) {
+            return serializer.serialize_str(&reference);
+        }
         // Transparent: emit the bare string, identical to a `String` field.
         serializer.serialize_str(&self.0)
     }

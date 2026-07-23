@@ -36,7 +36,7 @@ pub enum ImageDrawMode {
     Stretch,
 }
 
-/// Compositing mode applied while painting a raster image.
+/// Compositing mode applied to an isolated paint layer or raster image.
 ///
 /// `Normal` preserves the historical source-over behaviour. The remaining
 /// variants mirror the blend modes supported by the canonical `.op` schema
@@ -55,6 +55,11 @@ pub enum ImageBlendMode {
     Saturation,
     Color,
     Luminosity,
+    SoftLight,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    Exclusion,
 }
 
 /// Per-image adjustment values in the UI slider range `[-100, 100]`.
@@ -376,6 +381,21 @@ pub trait Painter {
         self.save();
     }
 
+    /// Whether this backend can assemble a deferred mask source and composite
+    /// it into an isolated destination with Porter-Duff `DstIn`.
+    fn supports_pixel_masks(&self) -> bool {
+        false
+    }
+
+    /// Begin the mask-source save-layer. On matching [`Painter::restore`],
+    /// the assembled source is applied to the current isolated content using
+    /// `DstIn`; luminance mode first converts source luminance into alpha.
+    /// Callers must guard this with [`Painter::supports_pixel_masks`].
+    fn push_mask_source_layer(&mut self, luminance: bool) {
+        let _ = luminance;
+        self.save();
+    }
+
     /// Begin an isolated compositing layer. Draws until the matching
     /// [`Painter::restore`] are blended with the backdrop using `mode`.
     /// Backends without save-layer blend support degrade to source-over while
@@ -541,6 +561,38 @@ pub trait Painter {
             opacity,
             corner_radius,
             transform,
+        );
+    }
+
+    /// Draw an image with a dedicated TILE scale. The additive entry point
+    /// keeps existing painter implementations source-compatible; backends
+    /// that do not opt in retain the historical neutral scale.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_image_with_options_transform_blend_and_tile_scale(
+        &mut self,
+        rect: Rect,
+        image_id: u64,
+        encoded: &[u8],
+        mode: ImageDrawMode,
+        adjustments: ImageAdjustments,
+        opacity: f32,
+        corner_radius: f32,
+        transform: Option<[f32; 6]>,
+        blend_mode: ImageBlendMode,
+        original_size: Option<[f32; 2]>,
+        tile_scale: f32,
+    ) {
+        let _ = (original_size, tile_scale);
+        self.draw_image_with_options_transform_and_blend(
+            rect,
+            image_id,
+            encoded,
+            mode,
+            adjustments,
+            opacity,
+            corner_radius,
+            transform,
+            blend_mode,
         );
     }
 

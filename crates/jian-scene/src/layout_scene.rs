@@ -30,6 +30,7 @@
 pub use crate::layout_scene_fill::SceneFillLayer;
 use crate::scene_geometry::rect_has_extent;
 pub use crate::scene_geometry::{regular_polygon_points, stable_image_source_id};
+pub use jian_ops_schema::node::MaskType;
 use jian_widgets::{Color, ImageAdjustments, ImageBlendMode, ImageDrawMode, Point2D, Rect};
 #[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
@@ -226,14 +227,15 @@ impl LayoutScene {
         self.pages.get(self.active_page_index)
     }
 
-    /// Union AABB of every top-level node on the active page, in
-    /// document space — the extent a "zoom to fit" frames. `None`
-    /// when the page is empty (nothing to fit).
+    /// Union AABB of every top-level node's paint-visible bounds on the active
+    /// page. Open containers include descendant overflow; clipping containers
+    /// stop at their authored bounds. This is the extent a "zoom to fit"
+    /// frames. `None` when the page is empty (nothing to fit).
     pub fn content_bounds(&self) -> Option<Rect> {
         let page = self.active_page()?;
         let mut acc: Option<Rect> = None;
         for child in &page.children {
-            let b = child.aggregate_bounds();
+            let b = child.visual_bounds();
             if b.size.x <= 0.0 && b.size.y <= 0.0 {
                 continue;
             }
@@ -274,8 +276,9 @@ impl LayoutScene {
     /// `EditorState` fill first, but a solid-colour change touches no
     /// layout, so the scene stays in sync by patching the resolved fill
     /// until release-time reconciliation. `color`'s alpha is scaled by
-    /// each node's baked cumulative opacity to match scene-build. Returns
-    /// whether any node matched.
+    /// each node's direct paint opacity to match scene-build; any isolated
+    /// group alpha remains on `composite_opacity`. Returns whether any node
+    /// matched.
     pub fn set_node_fill(&mut self, ids: &[String], color: Color) -> bool {
         if ids.is_empty() {
             return false;
@@ -378,10 +381,10 @@ fn set_matching_node_stroke(nodes: &mut [SceneNode], ids: &[String], color: Colo
     changed
 }
 
-/// Scale `color`'s alpha by a node's baked cumulative opacity so an
-/// in-place paint patch matches what scene-build would have produced
-/// (scene-build bakes opacity into fill / stroke alpha). Opaque fast-path
-/// when the node is fully opaque.
+/// Scale `color`'s alpha by a node's direct paint opacity so an in-place
+/// paint patch matches what scene-build would have produced. Isolated group
+/// alpha lives on `SceneNode::composite_opacity` and must not be folded in a
+/// second time. Opaque fast-path when the direct paint is fully opaque.
 fn bake_node_alpha(color: Color, opacity: f32) -> Color {
     if opacity >= 1.0 {
         return color;
@@ -504,12 +507,23 @@ pub struct SceneNode {
     /// bottom up, so hot paint / hit-test paths do not repeatedly
     /// union large subtrees every frame.
     pub aggregate_bounds_cache: Rect,
-    /// Cumulative node opacity (0.0..=1.0), already multiplied down
-    /// the subtree. Fill / stroke / gradient / shadow colours have it
-    /// baked into their alpha at scene-build; the painter applies it
-    /// directly only for raster images (which carry no colour to
-    /// bake into). 1.0 = fully opaque.
+    /// Opacity (0.0..=1.0) applied directly to this node's paints. The leaf
+    /// fast path includes local opacity here; when this node's complete output
+    /// is isolated, its local opacity moves to `composite_opacity` and this
+    /// field carries only inherited direct-paint alpha. Fill / stroke /
+    /// gradient / shadow colours have it baked into their alpha at scene-build;
+    /// the painter applies it directly only for raster images and canonical
+    /// fill stacks. 1.0 = fully opaque.
     pub opacity: f32,
+    /// Local opacity applied once when this node's complete rendered output is
+    /// restored from an isolation layer. `1.0` means node opacity stayed on
+    /// the direct-paint fast path. Containers with translucent subtrees and
+    /// nodes with a non-Normal blend mode use this field so overlapping child
+    /// paints are not alpha-multiplied independently.
+    pub composite_opacity: f32,
+    /// Blend operation for the node's complete rendered output, including its
+    /// own effects and descendants. `Normal` needs no isolation layer.
+    pub blend_mode: ImageBlendMode,
     /// Rotation in radians, clockwise about the node's bounds centre.
     pub rotation: f32,
     /// Mirror horizontally around the node's aggregate-bounds centre.
@@ -594,6 +608,13 @@ pub struct SceneNode {
     pub path_anchors: Vec<SceneAnchor>,
     /// Whether a `Path` node is closed (last anchor links to first).
     pub path_closed: bool,
+    /// Legacy mask marker retained while older payloads/documents migrate to
+    /// `mask_type`.
+    pub is_mask: bool,
+    /// Pixel operation this node applies to front-layer siblings. Valid for
+    /// every node kind; an ALPHA/LUMINANCE container renders its whole subtree
+    /// into the deferred mask-source layer.
+    pub mask_type: Option<MaskType>,
     /// Whether SVG path fills use the even-odd winding rule.
     pub even_odd_fill: bool,
     /// Preserved SVG path data for imported Path nodes. Coordinates
@@ -631,6 +652,12 @@ pub struct SceneNode {
     /// `(x, y)` to image UV as `(m00*x + m01*y + m02,
     /// m10*x + m11*y + m12)`. `None` keeps the placement-mode default.
     pub image_transform: Option<[f32; 6]>,
+    /// Authored source dimensions used to keep TILE frequency stable when the
+    /// backend holds a downsampled raster. Invalid/absent values use the raster.
+    pub image_original_size: Option<[f32; 2]>,
+    /// Positive scale applied to source bitmap dimensions in TILE mode.
+    /// Legacy scenes and non-tile images retain the neutral 1.0 value.
+    pub image_tile_scale: f32,
     /// Per-image colour adjustments from the image-fill editor.
     pub image_adjustments: ImageAdjustments,
     /// Drop-shadow / effects painted behind the node's fill.
@@ -791,6 +818,8 @@ impl SceneNode {
             bounds: Rect::ZERO,
             aggregate_bounds_cache: Rect::ZERO,
             opacity: 1.0,
+            composite_opacity: 1.0,
+            blend_mode: ImageBlendMode::Normal,
             rotation: 0.0,
             flip_x: false,
             flip_y: false,
@@ -819,6 +848,8 @@ impl SceneNode {
             points: Vec::new(),
             path_anchors: Vec::new(),
             path_closed: false,
+            is_mask: false,
+            mask_type: None,
             even_odd_fill: false,
             svg_path: None,
             arc_start_angle: None,
@@ -830,6 +861,8 @@ impl SceneNode {
             image_fit: SceneImageFit::Fill,
             image_blend_mode: ImageBlendMode::Normal,
             image_transform: None,
+            image_original_size: None,
+            image_tile_scale: 1.0,
             image_adjustments: ImageAdjustments::default(),
             effects: Vec::new(),
             hidden: false,

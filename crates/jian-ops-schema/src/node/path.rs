@@ -59,7 +59,16 @@ pub struct PathNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "fillRule")]
+    #[cfg_attr(feature = "export-ts", ts(optional = nullable))]
     pub fill_rule: Option<PathFillRule>,
+    /// Whether this path acts as a sibling mask for the layers above it.
+    ///
+    /// This is intentionally optional so existing `.op` documents retain
+    /// their byte shape. It is the legacy opaque-path marker; newer alpha,
+    /// vector, and luminance semantics use the shared `mask_type` field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "export-ts", ts(optional = nullable))]
+    pub mask: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,5 +110,17 @@ mod tests {
         let absent = r#"{"id":"plain"}"#;
         let path: PathNode = serde_json::from_str(absent).expect("parse path without fill rule");
         assert_eq!(serde_json::to_string(&path).unwrap(), absent);
+    }
+
+    #[test]
+    fn mask_round_trips_and_stays_absent_by_default() {
+        let masked = r#"{"id":"clip","mask":true}"#;
+        let path: PathNode = serde_json::from_str(masked).expect("parse path mask");
+        assert_eq!(path.mask, Some(true));
+        assert_eq!(serde_json::to_string(&path).unwrap(), masked);
+
+        let plain: PathNode = serde_json::from_str(r#"{"id":"plain"}"#).unwrap();
+        assert_eq!(plain.mask, None);
+        assert_eq!(serde_json::to_string(&plain).unwrap(), r#"{"id":"plain"}"#);
     }
 }

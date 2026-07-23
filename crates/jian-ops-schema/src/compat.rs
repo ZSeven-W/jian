@@ -26,8 +26,31 @@ pub fn load_str(src: &str) -> OpsResult<LoadResult<PenDocument>> {
 
 /// Like [`load_str`], but with explicit [`LoadOptions`].
 pub fn load_str_with(src: &str, opts: LoadOptions) -> OpsResult<LoadResult<PenDocument>> {
-    let mut raw: serde_json::Value = serde_json::from_str(src)?;
+    load_str_with_preprocess(src, opts, |_| {})
+}
 
+/// Parse once, let a caller repair the raw JSON in place, then run the normal
+/// version/warning/image-table compatibility pipeline on that same value.
+///
+/// This is intended for product loaders that accept additional legacy wire
+/// shapes. A caller-side `Value -> String -> Value` round trip can dominate
+/// both RSS and parse time for large documents; preprocessing the schema
+/// loader's own value preserves all standard compatibility behavior without
+/// constructing a second full JSON tree.
+pub fn load_str_with_preprocess(
+    src: &str,
+    opts: LoadOptions,
+    preprocess: impl FnOnce(&mut serde_json::Value),
+) -> OpsResult<LoadResult<PenDocument>> {
+    let mut raw: serde_json::Value = serde_json::from_str(src)?;
+    preprocess(&mut raw);
+    load_value_with(raw, opts)
+}
+
+fn load_value_with(
+    mut raw: serde_json::Value,
+    opts: LoadOptions,
+) -> OpsResult<LoadResult<PenDocument>> {
     let format_version = raw.get("formatVersion").and_then(|v| v.as_str());
     let legacy_version = raw.get("version").and_then(|v| v.as_str());
     let v = format_version.or(legacy_version);
@@ -159,6 +182,10 @@ const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
     // warned "UnknownField: designMd" on open.
     "designMd",
     "conversion",
+    // OpenPencil editor-only view state. It is intentionally not part of the
+    // typed `PenDocument`; compatible hosts may carry it through the raw JSON
+    // while schema consumers ignore it.
+    "editorMeta",
     // Save-side deduplicated image table (`image_table.rs`) — resolved
     // back to inline data URLs before the typed parse.
     "images",
@@ -169,6 +196,27 @@ const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preprocess_runs_before_the_standard_compat_pipeline() {
+        let src = r#"{"version":"2.8","futureTopLevel":true,"children":[]}"#;
+        let loaded = load_str_with_preprocess(src, LoadOptions::default(), |raw| {
+            raw.as_object_mut().expect("document object").insert(
+                "version".to_owned(),
+                serde_json::Value::String("1.0".to_owned()),
+            );
+        })
+        .expect("preprocessed version must load");
+
+        assert_eq!(loaded.value.version, "1.0");
+        assert_eq!(
+            loaded.warnings,
+            vec![LoadWarning::UnknownField {
+                path: "$".to_owned(),
+                field: "futureTopLevel".to_owned(),
+            }]
+        );
+    }
 
     #[test]
     fn load_v0() {
@@ -361,6 +409,16 @@ mod tests {
         assert!(r.warnings.iter().any(
             |w| matches!(w, LoadWarning::UnknownField { field, .. } if field == "myExperimental")
         ));
+    }
+
+    #[test]
+    fn editor_meta_is_known_but_remains_outside_the_typed_document() {
+        let src = r#"{"version":"0.8.0","children":[],"editorMeta":{"activePageIndex":7}}"#;
+        let loaded = load_str(src).expect("editor extension must be compatible");
+
+        assert!(loaded.warnings.is_empty());
+        let typed = serde_json::to_value(&loaded.value).expect("serialize typed document");
+        assert!(typed.get("editorMeta").is_none());
     }
 
     #[test]

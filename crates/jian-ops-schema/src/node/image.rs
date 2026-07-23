@@ -2,7 +2,7 @@ use super::base::PenNodeBase;
 use super::container::CornerRadius;
 use super::image_src::ImageSrc;
 use crate::sizing::SizingBehavior;
-use crate::style::{BlendMode, PenEffect};
+use crate::style::PenEffect;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -33,10 +33,6 @@ pub struct ImageNode {
     pub src: ImageSrc,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub object_fit: Option<ImageFitMode>,
-    /// Image-node compositing mode. Absent is the historical `normal`
-    /// source-over behaviour.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blend_mode: Option<BlendMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<SizingBehavior>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,4 +75,20 @@ pub struct ImageNode {
     pub gestures: Option<crate::gestures::GestureOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub route: Option<crate::navigation::NavigationRoute>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::BlendMode;
+
+    #[test]
+    fn legacy_image_blend_mode_uses_the_shared_node_base_once() {
+        let json = r#"{"id":"image-1","src":"data:image/png;base64,AA==","blendMode":"multiply"}"#;
+        let image: ImageNode = serde_json::from_str(json).expect("legacy image node");
+        assert_eq!(image.base.blend_mode, Some(BlendMode::Multiply));
+
+        let serialized = serde_json::to_string(&image).expect("serialize image node");
+        assert_eq!(serialized.matches("\"blendMode\"").count(), 1);
+    }
 }

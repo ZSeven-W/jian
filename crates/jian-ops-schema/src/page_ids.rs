@@ -70,6 +70,7 @@ mod tests {
                 id: (*id).to_owned(),
                 name: (*id).to_owned(),
                 children: Vec::new(),
+                background_color: None,
                 state: None,
                 lifecycle: None,
             })
