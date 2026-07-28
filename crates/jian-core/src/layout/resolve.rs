@@ -85,6 +85,109 @@ pub fn resolve_align(a: Option<&OpsAlign>) -> AlignItems {
     }
 }
 
+/// True when this container stacks its children at a common origin rather
+/// than flowing them: `layout: "none"` — the `.op` spelling of a Figma
+/// "absolute position" frame / CSS `position: relative` stacking context.
+pub fn is_stack_container(layout: Option<&LayoutMode>) -> bool {
+    matches!(layout, Some(LayoutMode::None))
+}
+
+/// Same predicate, keyed off a whole node. Leaves and non-container
+/// variants are never stacks.
+pub fn node_is_stack_container(n: &jian_ops_schema::node::PenNode) -> bool {
+    use jian_ops_schema::node::PenNode;
+    let layout = match n {
+        PenNode::Frame(f) => f.container.layout.as_ref(),
+        PenNode::Group(g) => g.container.layout.as_ref(),
+        PenNode::Rectangle(r) => r.container.layout.as_ref(),
+        _ => None,
+    };
+    is_stack_container(layout)
+}
+
+/// Style for a `layout: "none"` container: a single-cell CSS grid.
+///
+/// Flex has no way to overlap siblings, so `layout: "none"` used to fall
+/// through `resolve_flex_direction`'s `_ => Row` default and lay its
+/// children out side by side — a hero frame holding [content, scrim,
+/// photo] rendered as two half-width columns instead of three stacked
+/// layers. A 1×1 grid is the standard CSS stacking primitive and keeps
+/// the two properties flex would lose:
+///
+/// - **`fill_container` resolves against the parent.** `justify_content` /
+///   `align_content` are deliberately left unset so taffy's grid default
+///   (`Stretch`) grows the single auto track to the container's content
+///   box; a `percent(1.0)` child then measures the full frame instead of
+///   an equal flex share.
+/// - **`fit_content` parents still hug.** An auto track sizes to its
+///   largest item, so a `fit_content` badge wrapping one absolute label
+///   keeps its content size (pure `position: absolute` children would
+///   contribute nothing and collapse it to 0×0).
+///
+/// Authored `justifyContent` / `alignItems` move from the container to the
+/// ITEMS (`justify_items` / `align_items`), which keeps the meaning they had
+/// under the old flex-row reading — horizontal from `justifyContent`,
+/// vertical from `alignItems` — for the very common
+/// `layout:"none" + justifyContent:center + alignItems:center` icon badge
+/// holding one glyph. Leaving them on the container would instead position
+/// the TRACK and defeat the stretch that `fill_container` depends on.
+/// Children are placed into the shared cell by [`apply_stack_child`].
+fn stack_container_to_style(c: &ContainerProps, mut style: Style) -> Style {
+    style.display = Display::Grid;
+    style.grid_template_rows = vec![auto()];
+    style.grid_template_columns = vec![auto()];
+    style.justify_content = None;
+    style.align_content = None;
+    style.justify_items = Some(resolve_justify_items(c.justify_content.as_ref()));
+    style.align_items = Some(resolve_align_items(c.align_items.as_ref()));
+    // Gap is meaningless between overlapping layers, and a non-zero value
+    // would offset the implicit second track if a child ever escapes the
+    // shared cell.
+    style.gap = Size {
+        width: zero(),
+        height: zero(),
+    };
+    style
+}
+
+/// `justifyContent` read as a per-item inline-axis alignment. The
+/// distribution values have no single-item meaning and fall back to `Start`,
+/// which is where flex put a lone child anyway.
+fn resolve_justify_items(j: Option<&OpsJustify>) -> AlignItems {
+    match j {
+        Some(OpsJustify::Center) => AlignItems::Center,
+        Some(OpsJustify::End) => AlignItems::End,
+        _ => AlignItems::Start,
+    }
+}
+
+/// `alignItems` read as a per-item block-axis alignment. `Start` rather than
+/// grid's `Stretch` default, which would inflate every `fit_content` child to
+/// the full cell.
+fn resolve_align_items(a: Option<&OpsAlign>) -> AlignItems {
+    match a {
+        Some(OpsAlign::Center) => AlignItems::Center,
+        Some(OpsAlign::End) => AlignItems::End,
+        _ => AlignItems::Start,
+    }
+}
+
+/// Place a child into a stack parent's shared cell and neutralise the flex
+/// hints that no longer apply. Called by `LayoutEngine::build` once the
+/// parent is known; children keep their own `Position::Absolute` inset when
+/// they authored an explicit `x` / `y` (grid positions those against the
+/// container's padding box, which is the same origin as the cell).
+pub fn apply_stack_child(style: &mut Style) {
+    style.grid_row = line(1);
+    style.grid_column = line(1);
+    // A stacked layer is never flexed, and `min_size: 0` (set by
+    // `container_to_style` so a fill child can yield space to a fixed
+    // sibling in a row) would let a grid item shrink below its content.
+    style.flex_shrink = 0.0;
+    style.flex_grow = 0.0;
+    style.align_self = None;
+}
+
 pub fn container_to_style(c: &ContainerProps) -> Style {
     let gap_val = match c.gap.as_ref() {
         Some(jian_ops_schema::node::base::NumberOrExpression::Number(n)) => *n as f32,
@@ -111,7 +214,7 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
         c.height.as_ref(),
         Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
     );
-    Style {
+    let style = Style {
         display: Display::Flex,
         size: Size {
             width: resolve_sizing(c.width.as_ref()),
@@ -131,7 +234,11 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
             height: gap_lp,
         },
         ..Default::default()
+    };
+    if is_stack_container(c.layout.as_ref()) {
+        return stack_container_to_style(c, style);
     }
+    style
 }
 
 /// Map optional authored bounds onto taffy's min/max dimensions.
@@ -391,6 +498,12 @@ pub fn main_axis_is_fixed_number(
 ///   `percent(1.0)` + `flex_shrink` collapses the spacer to zero). Height-only:
 ///   no text-wrap / width impact, so it is safe from the main-axis regression
 ///   above (which was width-driven).
+///
+/// Both remedies are flex-flow mechanisms, so `LayoutEngine::build` does not
+/// call this for a child of a `layout: "none"` stack — those resolve their
+/// `percent(1.0)` against the grid track directly. Applying it there rewrote a
+/// full-bleed gradient scrim's height to `auto` with no flow line to stretch
+/// against, and it measured 0.
 pub fn apply_fill_container_axes(
     style: &mut Style,
     child: &jian_ops_schema::node::PenNode,
@@ -475,6 +588,98 @@ mod tests {
         assert_eq!(r.bottom, lp_len(10.0));
         assert_eq!(r.left, lp_len(20.0));
         assert_eq!(r.right, lp_len(20.0));
+    }
+
+    #[test]
+    fn layout_none_becomes_a_single_cell_grid() {
+        let container: ContainerProps =
+            serde_json::from_str(r#"{"layout":"none","width":375,"height":320}"#).unwrap();
+        let style = container_to_style(&container);
+        assert_eq!(style.display, Display::Grid);
+        assert_eq!(style.grid_template_rows.len(), 1);
+        assert_eq!(style.grid_template_columns.len(), 1);
+        // Track alignment must stay at taffy's `Stretch` default so the auto
+        // track absorbs the frame's definite size and a `fill_container`
+        // child's `percent(1.0)` has something to resolve against.
+        assert_eq!(style.justify_content, None);
+        assert_eq!(style.align_content, None);
+        // Items default to Start, not grid's Stretch, which would inflate
+        // every `fit_content` layer to the whole cell.
+        assert_eq!(style.align_items, Some(AlignItems::Start));
+        assert_eq!(style.justify_items, Some(AlignItems::Start));
+    }
+
+    #[test]
+    fn layout_none_moves_alignment_onto_the_items() {
+        // Authored alignment keeps the axes it had under the old flex-row
+        // reading: `justifyContent` horizontal, `alignItems` vertical.
+        let container: ContainerProps = serde_json::from_str(
+            r#"{"layout":"none","justifyContent":"center","alignItems":"end"}"#,
+        )
+        .unwrap();
+        let style = container_to_style(&container);
+        assert_eq!(style.justify_items, Some(AlignItems::Center));
+        assert_eq!(style.align_items, Some(AlignItems::End));
+        assert_eq!(style.justify_content, None);
+        assert_eq!(style.align_content, None);
+    }
+
+    #[test]
+    fn flow_layouts_stay_flex() {
+        for layout in [r#""vertical""#, r#""horizontal""#] {
+            let container: ContainerProps =
+                serde_json::from_str(&format!(r#"{{"layout":{layout}}}"#)).unwrap();
+            assert_eq!(container_to_style(&container).display, Display::Flex);
+        }
+        // An absent `layout` is a flex row, not a stack.
+        let container: ContainerProps = serde_json::from_str(r#"{"width":10}"#).unwrap();
+        assert_eq!(container_to_style(&container).display, Display::Flex);
+    }
+
+    #[test]
+    fn stack_child_is_pinned_to_the_shared_cell() {
+        let mut style = Style {
+            flex_shrink: 1.0,
+            flex_grow: 1.0,
+            align_self: Some(AlignItems::Stretch),
+            ..Default::default()
+        };
+        apply_stack_child(&mut style);
+        assert_eq!(style.grid_row, line(1));
+        assert_eq!(style.grid_column, line(1));
+        assert_eq!(style.flex_shrink, 0.0);
+        assert_eq!(style.flex_grow, 0.0);
+        assert_eq!(style.align_self, None);
+    }
+
+    #[test]
+    fn stack_child_keeps_its_fill_container_height() {
+        // `apply_stack_child` is the whole per-child adjustment a stack gets:
+        // the flow-line height remedy is skipped, so `percent(1.0)` survives
+        // for the grid track to resolve. Rewriting it to `auto` left a
+        // full-bleed gradient scrim with no height source and it measured 0.
+        let node: jian_ops_schema::node::PenNode = serde_json::from_str(
+            r#"{"type":"rectangle","id":"scrim","x":0,"y":0,
+                "width":"fill_container","height":"fill_container"}"#,
+        )
+        .unwrap();
+        let mut style = node_to_style(&node);
+        assert_eq!(style.position, Position::Absolute);
+        apply_stack_child(&mut style);
+        assert_eq!(style.size.height, percent(1.0_f32));
+        assert_eq!(style.align_self, None);
+    }
+
+    #[test]
+    fn fill_height_remedy_still_applies_to_flow_children() {
+        let node: jian_ops_schema::node::PenNode =
+            serde_json::from_str(r#"{"type":"rectangle","id":"col","height":"fill_container"}"#)
+                .unwrap();
+        let mut style = node_to_style(&node);
+        assert_eq!(style.position, Position::Relative);
+        apply_fill_container_axes(&mut style, &node, true);
+        assert_eq!(style.align_self, Some(AlignItems::Stretch));
+        assert_eq!(style.size.height, Dimension::Auto);
     }
 
     #[test]

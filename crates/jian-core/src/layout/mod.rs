@@ -261,14 +261,22 @@ impl LayoutEngine {
             // wrap and sibling cards stay equal-height (otherwise an overflowing
             // row squeezes the cards into ragged, uneven heights).
             if let Some(p) = data.parent {
-                let parent_horizontal = resolve::node_is_horizontal(&doc_tree.nodes[p].schema);
-                if resolve::main_axis_is_fixed_number(&data.schema, parent_horizontal) {
-                    style.flex_shrink = 0.0;
+                if resolve::node_is_stack_container(&doc_tree.nodes[p].schema) {
+                    // `layout: "none"` parent: children share one grid cell
+                    // and overlap. The flex hints below all assume a flow
+                    // line and would fight the stack (`main_axis` has no
+                    // meaning when every child starts at the same origin).
+                    resolve::apply_stack_child(&mut style);
+                } else {
+                    let parent_horizontal = resolve::node_is_horizontal(&doc_tree.nodes[p].schema);
+                    if resolve::main_axis_is_fixed_number(&data.schema, parent_horizontal) {
+                        style.flex_shrink = 0.0;
+                    }
+                    // A fill-height child in a row stretches to the row's height
+                    // (so a space_between sidebar's footer reaches the bottom)
+                    // instead of collapsing on an indefinite-height parent.
+                    resolve::apply_fill_container_axes(&mut style, &data.schema, parent_horizontal);
                 }
-                // A fill-height child in a row stretches to the row's height
-                // (so a space_between sidebar's footer reaches the bottom)
-                // instead of collapsing on an indefinite-height parent.
-                resolve::apply_fill_container_axes(&mut style, &data.schema, parent_horizontal);
             }
             self.base_styles.insert(key, style.clone());
             let ctx = text_measure_for(&data.schema);
