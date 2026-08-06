@@ -223,7 +223,7 @@ fn draw_canvas(
             let path = to_sk_path(commands);
             if let Some(fill_color) = paint.fill {
                 let mut p = SkPaint::new(to_sk_color(fill_color), None);
-                p.set_alpha_f(paint.opacity);
+                p.set_alpha_f(combined_alpha(fill_color, paint.opacity));
                 p.set_anti_alias(true);
                 p.set_style(PaintStyle::Fill);
                 canvas.draw_path(&path, &p);
@@ -233,7 +233,7 @@ fn draw_canvas(
                 p.set_style(PaintStyle::Stroke);
                 p.set_stroke_width(stroke.width);
                 p.set_anti_alias(true);
-                p.set_alpha_f(paint.opacity);
+                p.set_alpha_f(combined_alpha(stroke.color, paint.opacity));
                 canvas.draw_path(&path, &p);
             }
         }
@@ -940,7 +940,7 @@ fn draw_rect(canvas: &skia_safe::Canvas, r: Rect, paint: &Paint) {
     let rr: SkRect = to_sk_rect(r);
     if let Some(fill) = paint.fill {
         let mut p = SkPaint::new(to_sk_color(fill), None);
-        p.set_alpha_f(paint.opacity);
+        p.set_alpha_f(combined_alpha(fill, paint.opacity));
         p.set_anti_alias(true);
         p.set_style(PaintStyle::Fill);
         canvas.draw_rect(rr, &p);
@@ -949,7 +949,7 @@ fn draw_rect(canvas: &skia_safe::Canvas, r: Rect, paint: &Paint) {
         let mut p = SkPaint::new(to_sk_color(stroke.color), None);
         p.set_style(PaintStyle::Stroke);
         p.set_stroke_width(stroke.width);
-        p.set_alpha_f(paint.opacity);
+        p.set_alpha_f(combined_alpha(stroke.color, paint.opacity));
         p.set_anti_alias(true);
         canvas.draw_rect(rr, &p);
     }
@@ -966,7 +966,7 @@ fn draw_rrect(canvas: &skia_safe::Canvas, r: Rect, radii: BorderRadii, paint: &P
     let rrect = RRect::new_rect_radii(sk_rect, &radii_arr);
     if let Some(fill) = paint.fill {
         let mut p = SkPaint::new(to_sk_color(fill), None);
-        p.set_alpha_f(paint.opacity);
+        p.set_alpha_f(combined_alpha(fill, paint.opacity));
         p.set_anti_alias(true);
         p.set_style(PaintStyle::Fill);
         canvas.draw_rrect(rrect, &p);
@@ -975,10 +975,14 @@ fn draw_rrect(canvas: &skia_safe::Canvas, r: Rect, radii: BorderRadii, paint: &P
         let mut p = SkPaint::new(to_sk_color(stroke.color), None);
         p.set_style(PaintStyle::Stroke);
         p.set_stroke_width(stroke.width);
-        p.set_alpha_f(paint.opacity);
+        p.set_alpha_f(combined_alpha(stroke.color, paint.opacity));
         p.set_anti_alias(true);
         canvas.draw_rrect(rrect, &p);
     }
+}
+
+fn combined_alpha(color: jian_core::scene::Color, opacity: f32) -> f32 {
+    (f32::from(color.a()) / 255.0) * opacity.clamp(0.0, 1.0)
 }
 
 // Convenience: keeps `BlurStyle` / `MaskFilter` imported for future
@@ -1006,6 +1010,33 @@ mod tests {
         });
         backend.end_frame(&mut surface);
         surface
+    }
+
+    #[test]
+    fn authored_color_alpha_multiplies_paint_opacity() {
+        let color = Color::rgba(0x7c, 0x3a, 0xed, 0x59);
+        assert!((combined_alpha(color, 0.5) - (0x59 as f32 / 255.0 * 0.5)).abs() < 1e-6);
+
+        let mut backend = SkiaBackend::new();
+        let mut surface = backend.new_surface(size(8.0, 8.0));
+        backend.begin_frame(&mut surface, 0x00000000);
+        backend.draw(&DrawOp::Rect {
+            rect: rect(0.0, 0.0, 8.0, 8.0),
+            paint: Paint {
+                fill: Some(color),
+                stroke: None,
+                opacity: 0.5,
+            },
+        });
+        backend.end_frame(&mut surface);
+
+        let mut pixels = vec![0u8; 8 * 8 * 4];
+        assert!(surface.read_rgba8(&mut pixels));
+        assert!(
+            (0x2c..=0x2d).contains(&pixels[3]),
+            "expected alpha 0x2c/0x2d, got {:#04x}",
+            pixels[3]
+        );
     }
 
     #[test]

@@ -154,9 +154,11 @@ impl Runtime {
         use crate::widget_state::WidgetState;
         use jian_ops_schema::node::PenNode;
 
+        #[derive(Clone, Copy)]
         enum Act {
             Toggle,
             Slider,
+            Tabs,
             FocusOnly,
             NotWidget,
         }
@@ -173,12 +175,12 @@ impl Runtime {
             let act = match schema {
                 PenNode::Switch(_) | PenNode::Checkbox(_) => Act::Toggle,
                 PenNode::Slider(_) => Act::Slider,
+                PenNode::Tabs(_) => Act::Tabs,
                 PenNode::TextInput(_)
                 | PenNode::TextArea(_)
                 | PenNode::NumberInput(_)
                 | PenNode::Select(_)
-                | PenNode::RadioGroup(_)
-                | PenNode::Tabs(_) => Act::FocusOnly,
+                | PenNode::RadioGroup(_) => Act::FocusOnly,
                 _ => Act::NotWidget,
             };
             (id, act)
@@ -199,11 +201,80 @@ impl Runtime {
                 }
             }),
             Act::Slider => self.set_slider_from_x(node, position.x),
+            Act::Tabs => self.set_tabs_from_point(node, position),
             Act::FocusOnly | Act::NotWidget => false,
         };
         if changed {
             self.sync_widget_binding(&id);
+            if matches!(act, Act::Tabs) {
+                // Panels share the same laid-out grid cell, so switching does
+                // not require layout. It does require hit and focus indexes to
+                // drop the old subtree before the next input event.
+                self.rebuild_spatial();
+            }
         }
+    }
+
+    /// Activate the equal-width tab cell under `position` when it lies in the
+    /// intrinsic 32px tab bar. The panel area below the bar is intentionally
+    /// excluded so interacting with panel content cannot switch tabs.
+    fn set_tabs_from_point(
+        &mut self,
+        node: crate::document::NodeKey,
+        position: crate::geometry::Point,
+    ) -> bool {
+        use crate::widget_state::WidgetState;
+        use jian_ops_schema::node::PenNode;
+
+        let Some(doc) = self.document.as_ref() else {
+            return false;
+        };
+        let Some(nd) = doc.tree.nodes.get(node) else {
+            return false;
+        };
+        let PenNode::Tabs(tabs) = &nd.schema else {
+            return false;
+        };
+        let values: Vec<String> = tabs
+            .tabs
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(|tab| tab.value.clone())
+            .collect();
+        if values.is_empty() {
+            return false;
+        }
+        let Some(rect) = self.node_scene_rect(node) else {
+            return false;
+        };
+        let bar_height = crate::layout::resolve::TABS_BAR_HEIGHT.min(rect.size.height);
+        let in_bar = rect.contains(position) && position.y < rect.min_y() + bar_height;
+        if !in_bar || rect.size.width <= 0.0 {
+            return false;
+        }
+        let cell_width = rect.size.width / values.len() as f32;
+        let index =
+            (((position.x - rect.min_x()) / cell_width).floor() as usize).min(values.len() - 1);
+        let next = values[index].as_str();
+        self.with_widget_state(node, |state| {
+            let WidgetState::Tabs { active, .. } = state else {
+                return false;
+            };
+            // Resolve through the shared contract before comparing the raw
+            // value. A stale/missing value paints/indexes panel zero, but a
+            // click on that cell still normalizes and persists its real value.
+            let _ = crate::widget_state::resolve_tab_index(
+                values.iter().map(|value| Some(value.as_str())),
+                active.as_deref(),
+            );
+            if active.as_deref() == Some(next) {
+                false
+            } else {
+                *active = Some(next.to_owned());
+                true
+            }
+        })
     }
 
     /// Set a slider's value from a pointer x within its track, using the

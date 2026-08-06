@@ -1,6 +1,9 @@
 //! Structured scene traversal for production render backends.
 
-use super::scene::{apply_bindings, emit_for_node, emit_live_text_input, WidgetRenderCtx};
+use super::scene::{
+    active_tab_index, apply_bindings, apply_live_widget_state, emit_for_node, emit_live_text_input,
+    is_tabs_node, WidgetRenderCtx,
+};
 use super::{DrawOp, RichTextPlan, ScenePaintCommand, ShadowSpec};
 use crate::geometry::{Affine2, Rect};
 use crate::scene::Color;
@@ -81,6 +84,9 @@ fn walk(
         return;
     };
     let overrides = apply_bindings(&mut json, state, doc.schema.is_responsive());
+    if let Some(ctx) = widgets {
+        apply_live_widget_state(&mut json, ctx);
+    }
     if !json.get("visible").and_then(Value::as_bool).unwrap_or(true) {
         return;
     }
@@ -93,8 +99,16 @@ fn walk(
 
     let effects = layer_effects(&json);
     let mut bounds_visited = HashSet::with_capacity(doc.tree.nodes.len());
-    let content_bounds =
-        subtree_content_bounds(doc, layout, state, key, bounds, &json, &mut bounds_visited);
+    let content_bounds = subtree_content_bounds(
+        doc,
+        layout,
+        state,
+        widgets,
+        key,
+        bounds,
+        &json,
+        &mut bounds_visited,
+    );
     let layer_bounds = nested_effect_bounds(content_bounds, &effects);
     for (effect, layer_bounds) in effects.iter().zip(layer_bounds) {
         match effect {
@@ -161,7 +175,12 @@ fn walk(
     if clipped {
         commands.push(ScenePaintCommand::PushClip(bounds));
     }
-    for &child in &node.children {
+    let tabs_node = is_tabs_node(&json);
+    let active_tab = active_tab_index(&json);
+    for (index, &child) in node.children.iter().enumerate() {
+        if tabs_node && active_tab != Some(index) {
+            continue;
+        }
         walk(doc, layout, state, widgets, child, commands, visited);
     }
     if clipped {
@@ -262,6 +281,7 @@ fn subtree_content_bounds(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
+    widgets: Option<&WidgetRenderCtx>,
     key: crate::document::NodeKey,
     bounds: Rect,
     json: &Value,
@@ -278,8 +298,14 @@ fn subtree_content_bounds(
     let Some(node) = doc.tree.nodes.get(key) else {
         return aggregate;
     };
-    for &child in &node.children {
-        if let Some(child_bounds) = painted_node_bounds(doc, layout, state, child, visited) {
+    let tabs_node = is_tabs_node(json);
+    let active_tab = active_tab_index(json);
+    for (index, &child) in node.children.iter().enumerate() {
+        if tabs_node && active_tab != Some(index) {
+            continue;
+        }
+        if let Some(child_bounds) = painted_node_bounds(doc, layout, state, widgets, child, visited)
+        {
             aggregate = union(aggregate, child_bounds);
         }
     }
@@ -290,6 +316,7 @@ fn painted_node_bounds(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
+    widgets: Option<&WidgetRenderCtx>,
     key: crate::document::NodeKey,
     visited: &mut HashSet<crate::document::NodeKey>,
 ) -> Option<Rect> {
@@ -300,12 +327,15 @@ fn painted_node_bounds(
     let mut bounds = layout.node_rect(key)?;
     let mut json = serde_json::to_value(&node.schema).ok()?;
     let overrides = apply_bindings(&mut json, state, doc.schema.is_responsive());
+    if let Some(ctx) = widgets {
+        apply_live_widget_state(&mut json, ctx);
+    }
     if !json.get("visible").and_then(Value::as_bool).unwrap_or(true) {
         return None;
     }
     bounds = overrides.apply_to_rect(bounds);
 
-    let content = subtree_content_bounds(doc, layout, state, key, bounds, &json, visited);
+    let content = subtree_content_bounds(doc, layout, state, widgets, key, bounds, &json, visited);
     let effects = layer_effects(&json);
     let painted = nested_effect_bounds(content, &effects)
         .first()

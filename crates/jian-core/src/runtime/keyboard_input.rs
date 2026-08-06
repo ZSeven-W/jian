@@ -40,6 +40,12 @@ impl Runtime {
         }
         let now = self.now_ms;
         let focused_id = self.focused_widget_id();
+        let focused_tabs = focused_id.as_deref().is_some_and(|id| {
+            self.document
+                .as_ref()
+                .and_then(|doc| doc.tree.get(id).and_then(|key| doc.tree.nodes.get(key)))
+                .is_some_and(|node| matches!(&node.schema, jian_ops_schema::node::PenNode::Tabs(_)))
+        });
         let mut consumed = false;
         if let Some(st) = self.focused_text_state_for_keyboard() {
             use crate::gesture::pointer::Modifiers;
@@ -86,6 +92,11 @@ impl Runtime {
         if consumed {
             if let Some(id) = focused_id.as_deref() {
                 self.sync_widget_binding(id);
+            }
+            if focused_tabs {
+                // Keyboard tab changes must retire the old panel from pointer
+                // and focus indexes in the same turn, just like bar clicks.
+                self.rebuild_spatial();
             }
             return Vec::new();
         }

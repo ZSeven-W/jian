@@ -696,6 +696,8 @@ pub struct SceneWidget {
     pub checked: Option<bool>,
     /// Numeric value for slider / progress / number_input.
     pub value_num: Option<f32>,
+    /// Progress has no determinate value and paints its unknown-progress frame.
+    pub indeterminate: bool,
     /// String value for select / radio_group / tabs / text inputs.
     pub value_str: Option<String>,
     /// Placeholder text for inputs / select.
@@ -712,6 +714,9 @@ pub struct SceneWidget {
     pub max: Option<f32>,
     /// Range step. `None` = 1.
     pub step: Option<f32>,
+    /// The source explicitly authored `cornerRadius`, including square `0`.
+    /// False lets legacy controls retain their intrinsic rounded geometry.
+    pub corner_radius_authored: bool,
     /// `(value, label)` rows for select / radio_group / tabs.
     pub options: Vec<SceneWidgetOption>,
 }

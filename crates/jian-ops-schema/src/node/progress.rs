@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 
 /// Progress indicator. Display-only (not focusable/keyboard-driven):
 /// `value` is read from the state graph via `bindings.value`. `max`
-/// defaults to 100; `indeterminate` shows an animated unknown-progress
-/// state and ignores `value`.
+/// defaults to 100; `indeterminate` shows a deterministic unknown-progress
+/// state and ignores `value`. Hosts may animate that marker, while static and
+/// headless renderers intentionally emit the same stable frame.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]

@@ -191,6 +191,7 @@ mod tests {
     include!("runtime/tests_reload.rs");
     include!("runtime/tests_async_resources.rs");
     include!("runtime/tests_widgets.rs");
+    include!("runtime/tests_tabs.rs");
     include!("runtime/tests_input_layout.rs");
     include!("runtime/tests_variants.rs");
 }

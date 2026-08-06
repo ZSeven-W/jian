@@ -7,6 +7,10 @@ use jian_ops_schema::node::container::{
 use jian_ops_schema::sizing::{SizingBehavior, SizingKeyword};
 use taffy::prelude::*;
 
+/// Intrinsic tab-bar height shared with the composite renderer. Tabs panels
+/// occupy the stacked content cell below this inset.
+pub(crate) const TABS_BAR_HEIGHT: f32 = 32.0;
+
 pub fn resolve_sizing(s: Option<&SizingBehavior>) -> Dimension {
     match s {
         Some(SizingBehavior::Number(v)) => length(*v as f32),
@@ -100,6 +104,7 @@ pub fn node_is_stack_container(n: &jian_ops_schema::node::PenNode) -> bool {
         PenNode::Frame(f) => f.container.layout.as_ref(),
         PenNode::Group(g) => g.container.layout.as_ref(),
         PenNode::Rectangle(r) => r.container.layout.as_ref(),
+        PenNode::Tabs(_) => return true,
         _ => None,
     };
     is_stack_container(layout)
@@ -241,6 +246,28 @@ pub fn container_to_style(c: &ContainerProps) -> Style {
     style
 }
 
+fn tabs_to_style(tabs: &jian_ops_schema::node::TabsNode) -> Style {
+    let fixed = matches!(tabs.width.as_ref(), Some(SizingBehavior::Number(_)))
+        && matches!(tabs.height.as_ref(), Some(SizingBehavior::Number(_)));
+    Style {
+        display: Display::Grid,
+        size: Size {
+            width: resolve_sizing(tabs.width.as_ref()),
+            height: resolve_sizing(tabs.height.as_ref()),
+        },
+        flex_shrink: if fixed { 0.0 } else { 1.0 },
+        grid_template_rows: vec![auto()],
+        grid_template_columns: vec![auto()],
+        padding: Rect {
+            left: zero(),
+            right: zero(),
+            top: length(TABS_BAR_HEIGHT),
+            bottom: zero(),
+        },
+        ..Default::default()
+    }
+}
+
 /// Map optional authored bounds onto taffy's min/max dimensions.
 pub(crate) fn apply_limits(style: &mut Style, limits: &jian_ops_schema::sizing::SizeLimits) {
     if let Some(value) = limits.min_width {
@@ -270,6 +297,7 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
         PenNode::Frame(f) => container_to_style(&f.container),
         PenNode::Group(g) => container_to_style(&g.container),
         PenNode::Rectangle(r) => container_to_style(&r.container),
+        PenNode::Tabs(t) => tabs_to_style(t),
         PenNode::Line(l) => Style {
             size: Size {
                 width: length(l.x2.unwrap_or(0.0).abs() as f32),

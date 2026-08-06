@@ -102,15 +102,32 @@ fn preload_replaces_prior_snapshot() {
 }
 
 fn compute_single_child(child: PenNode) -> Rect {
+    compute_single_child_with_engine(child, LayoutEngine::new())
+}
+
+fn compute_single_child_with_engine(child: PenNode, mut engine: LayoutEngine) -> Rect {
     let root = frame_node("root", vec![child]);
     let mut tree = NodeTree::new();
     tree.insert_subtree(root, None);
-    let mut engine = LayoutEngine::new();
     let roots = engine.build(&tree).expect("taffy build");
     let root_id = *roots.first().expect("root id");
     engine.compute(root_id, (400.0, 100.0)).expect("compute");
     let key = tree.get("input").expect("input key");
     engine.node_rect(key).expect("input rect")
+}
+
+#[derive(Debug)]
+struct FixedCheckboxLabelMeasure;
+
+impl measure::MeasureBackend for FixedCheckboxLabelMeasure {
+    fn measure(&self, _req: &measure::MeasureRequest<'_>) -> measure::MeasureResult {
+        measure::MeasureResult {
+            width: 42.0,
+            height: 14.0,
+            line_count: 1,
+            baseline: 11.0,
+        }
+    }
 }
 
 fn text_input_node(value: serde_json::Value) -> PenNode {
@@ -190,6 +207,43 @@ fn fit_content_text_input_without_icon_measures_horizontal_padding() {
             rect.size.width,
             text.width
         );
+}
+
+#[test]
+fn fit_content_labelled_checkbox_measures_indicator_gap_and_label_only() {
+    let checkbox = text_input_node(json!({
+        "type":"checkbox",
+        "id":"input",
+        "width":"fit_content",
+        "height":"fit_content",
+        "label":"Accept"
+    }));
+    let engine = LayoutEngine::with_backend(Rc::new(FixedCheckboxLabelMeasure));
+    let rect = compute_single_child_with_engine(checkbox, engine);
+
+    assert_eq!(rect.size.width, 68.0, "18px box + 8px gap + 42px label");
+    assert_eq!(
+        rect.size.height, 18.0,
+        "checkbox does not inherit input chrome"
+    );
+}
+
+#[test]
+fn default_labelled_checkbox_measure_keeps_the_intrinsic_eighteen_pixel_height() {
+    let checkbox = text_input_node(json!({
+        "type":"checkbox",
+        "id":"input",
+        "width":"fit_content",
+        "height":"fit_content",
+        "label":"Accept"
+    }));
+    let rect = compute_single_child(checkbox);
+
+    assert_eq!(rect.size.height, 18.0);
+    assert!(
+        rect.size.width > 26.0,
+        "label must contribute after box + gap"
+    );
 }
 
 #[test]

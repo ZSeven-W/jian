@@ -23,6 +23,7 @@
 
 use crate::geometry::{point, rect, Point};
 use crate::render::text::{resolve_text, RichDrawList, RichTextPlan};
+use crate::render::widget_style::{resolve_authored_widget_visual, with_visual_opacity};
 use crate::render::{
     BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
     PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
@@ -209,6 +210,9 @@ fn walk(
     if let (Some(_), Some(j), Some(state)) = (r, json.as_mut(), state) {
         overrides = apply_bindings(j, state, doc.schema.is_responsive());
     }
+    if let (Some(json), Some(ctx)) = (json.as_mut(), widgets) {
+        apply_live_widget_state(json, ctx);
+    }
 
     if let Some(json) = json.as_ref() {
         let visible = json
@@ -259,7 +263,12 @@ fn walk(
         }
     }
 
-    for &child in &node.children {
+    let tabs_node = json.as_ref().is_some_and(is_tabs_node);
+    let active_tab = json.as_ref().and_then(active_tab_index);
+    for (index, &child) in node.children.iter().enumerate() {
+        if tabs_node && active_tab != Some(index) {
+            continue;
+        }
         walk(
             doc,
             layout,
@@ -272,6 +281,59 @@ fn walk(
             visited,
         );
     }
+}
+
+/// Project interactive runtime state onto the effective widget JSON after
+/// state bindings have been evaluated. Runtime state is authoritative for the
+/// current frame; authored/bound values remain the fallback when a widget has
+/// not been mounted into the state store. Text inputs keep their dedicated
+/// selection/caret renderer and are intentionally not rewritten here.
+pub(super) fn apply_live_widget_state(json: &mut Value, ctx: &WidgetRenderCtx<'_>) {
+    let Some(id) = json.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(state) = ctx.states.get(id) else {
+        return;
+    };
+    let kind = json.get("type").and_then(Value::as_str);
+    let projected = match (kind, state) {
+        (Some("switch" | "checkbox"), crate::widget_state::WidgetState::Toggle { on }) => {
+            Some(("checked", Value::Bool(*on)))
+        }
+        (Some("slider"), crate::widget_state::WidgetState::Slider { value, .. }) => {
+            serde_json::Number::from_f64(*value).map(|value| ("value", Value::Number(value)))
+        }
+        (Some("select"), crate::widget_state::WidgetState::Select { value, .. })
+        | (Some("radio_group"), crate::widget_state::WidgetState::Radio { value, .. }) => Some((
+            "value",
+            value.clone().map(Value::String).unwrap_or(Value::Null),
+        )),
+        (Some("tabs"), crate::widget_state::WidgetState::Tabs { active, .. }) => Some((
+            "value",
+            active.clone().map(Value::String).unwrap_or(Value::Null),
+        )),
+        _ => None,
+    };
+    if let (Some(object), Some((field, value))) = (json.as_object_mut(), projected) {
+        object.insert(field.to_owned(), value);
+    }
+}
+
+pub(super) fn is_tabs_node(json: &Value) -> bool {
+    json.get("type").and_then(Value::as_str) == Some("tabs")
+}
+
+/// Resolve the schema contract `tabs[i] <-> children[i]`. Missing or invalid
+/// values deterministically select the first declared tab; an empty/missing
+/// tab list has no active panel.
+pub(super) fn active_tab_index(json: &Value) -> Option<usize> {
+    let tabs = json.get("tabs").and_then(Value::as_array)?;
+    let selected = json.get("value").and_then(Value::as_str);
+    crate::widget_state::resolve_tab_index(
+        tabs.iter()
+            .map(|tab| tab.get("value").and_then(Value::as_str)),
+        selected,
+    )
 }
 
 /// Records which `bindings.<rect-prop>` fired this frame so the walker
@@ -315,6 +377,7 @@ impl BindingOverrides {
 ///   leaves this is enough to move them around.)
 /// - `fill[0].color` (hex string — written into the first fill's color
 ///   field, defaulting `type` to `"solid"`)
+/// - `value` (display-only widget value, preserving scalar JSON type)
 pub(super) fn apply_bindings(
     node: &mut Value,
     state: &crate::state::StateGraph,
@@ -388,6 +451,11 @@ pub(super) fn apply_bindings(
                     set_first_fill_color(obj, s);
                 }
             }
+            "value" => {
+                if let Some(projected) = bound_scalar_to_json(&value) {
+                    obj.insert("value".into(), projected);
+                }
+            }
             // Two-way input binding: project the bound state value
             // into the node's `value` field so `emit_text_input`
             // (and any future writable surfaces) repaint from
@@ -401,14 +469,35 @@ pub(super) fn apply_bindings(
             // way an author-set placeholder/seed isn't silently
             // wiped by a path that hasn't been seeded yet.
             "bind:value" => {
-                if let Some(projected) = bound_scalar_to_string(&value) {
-                    obj.insert("value".into(), Value::String(projected));
+                let kind = obj.get("type").and_then(Value::as_str);
+                match kind {
+                    Some("switch" | "checkbox") => {
+                        if let Some(projected) = value.as_bool() {
+                            obj.insert("checked".into(), Value::Bool(projected));
+                        }
+                    }
+                    Some("slider" | "progress") => {
+                        if let Some(projected) =
+                            number_from_runtime(&value).and_then(serde_json::Number::from_f64)
+                        {
+                            obj.insert("value".into(), Value::Number(projected));
+                        }
+                    }
+                    _ => {
+                        if let Some(projected) = bound_scalar_to_string(&value) {
+                            obj.insert("value".into(), Value::String(projected));
+                        }
+                    }
                 }
             }
             _ => {}
         }
     }
     overrides
+}
+
+fn bound_scalar_to_json(v: &crate::value::RuntimeValue) -> Option<Value> {
+    matches!(&v.0, Value::String(_) | Value::Number(_) | Value::Bool(_)).then(|| v.0.clone())
 }
 
 fn number_from_runtime(v: &crate::value::RuntimeValue) -> Option<f64> {
@@ -572,7 +661,7 @@ pub(super) fn emit_for_node(
         // --- Non-text family widgets paint composite visuals from props.
         if matches!(
             k,
-            "switch" | "checkbox" | "slider" | "progress" | "select" | "radio_group"
+            "switch" | "checkbox" | "slider" | "progress" | "select" | "radio_group" | "tabs"
         ) {
             emit_widget_visual(k, rect_logical, r, json, out);
             return;
@@ -685,14 +774,19 @@ fn emit_text_input(
     json: &Value,
     out: &mut Vec<DrawOp>,
 ) {
-    let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
+    let radii = widget_corner_radii(json, 6.0, r.size.width.min(r.size.height).max(0.0) / 2.0);
     let stroke = stroke_op(json);
     let fill = first_solid_color(json.get("fill"));
-    if fill.is_some() || stroke.is_some() {
+    let visual = resolve_authored_widget_visual(
+        fill,
+        stroke.as_ref().map(|authored_stroke| authored_stroke.color),
+    );
+    let opacity = node_opacity(json);
+    if visual.surface.is_some() || stroke.is_some() {
         let paint = Paint {
-            fill,
+            fill: visual.surface,
             stroke,
-            opacity: node_opacity(json),
+            opacity,
         };
         if radii != BorderRadii::zero() {
             out.push(DrawOp::RoundedRect {
@@ -733,12 +827,12 @@ fn emit_text_input(
         .and_then(|v| v.as_u64())
         .map(|n| n as u16)
         .unwrap_or(400);
-    // Placeholder text gets dimmed; resolved value uses the input's
-    // own foreground colour (defaulting to near-black when unset).
+    // Value, placeholder, and caret share the authored-widget contrast
+    // policy used by the canvas painter.
     let text_color = if is_placeholder {
-        Color::rgba(0x66, 0x66, 0x66, 0xff)
+        with_visual_opacity(visual.muted_foreground, opacity)
     } else {
-        Color::rgb(0x11, 0x11, 0x11)
+        with_visual_opacity(visual.foreground, opacity)
     };
 
     let pad_x = 6.0_f32;
@@ -775,9 +869,9 @@ fn emit_text_input(
         out.push(DrawOp::Rect {
             rect: rect(caret_x, caret_top, 1.0, font_size),
             paint: Paint {
-                fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xa0)),
+                fill: Some(visual.foreground),
                 stroke: None,
-                opacity: node_opacity(json),
+                opacity,
             },
         });
         return;
@@ -808,9 +902,9 @@ fn emit_text_input(
     out.push(DrawOp::Rect {
         rect: rect(caret_x, caret_top, 1.0, caret_height),
         paint: Paint {
-            fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xa0)),
+            fill: Some(visual.foreground),
             stroke: None,
-            opacity: node_opacity(json),
+            opacity,
         },
     });
 }
@@ -855,17 +949,24 @@ pub(crate) fn emit_live_text_input(
     out: &mut Vec<DrawOp>,
 ) {
     let rect_logical = rect(r.min_x(), r.min_y(), r.size.width, r.size.height);
-    let radii = corner_radii(json).unwrap_or_else(BorderRadii::zero);
+    let radii = widget_corner_radii(json, 6.0, r.size.width.min(r.size.height).max(0.0) / 2.0);
     let focused = ctx.focused_id == Some(id);
 
     // --- authored background box ---
     let fill = first_solid_color(json.get("fill"));
     let base_stroke = stroke_op(json);
-    if fill.is_some() || base_stroke.is_some() {
+    let visual = resolve_authored_widget_visual(
+        fill,
+        base_stroke
+            .as_ref()
+            .map(|authored_stroke| authored_stroke.color),
+    );
+    let opacity = node_opacity(json);
+    if visual.surface.is_some() || base_stroke.is_some() {
         let paint = Paint {
-            fill,
+            fill: visual.surface,
             stroke: base_stroke,
-            opacity: node_opacity(json),
+            opacity,
         };
         if radii != BorderRadii::zero() {
             out.push(DrawOp::RoundedRect {
@@ -929,9 +1030,9 @@ pub(crate) fn emit_live_text_input(
         let line_height = font_size * 1.3;
         let max_width = (r.size.width - pad_x * 2.0).max(0.0);
         let color = if is_placeholder {
-            Color::rgba(0x66, 0x66, 0x66, 0xff)
+            with_visual_opacity(visual.muted_foreground, opacity)
         } else {
-            Color::rgb(0x11, 0x11, 0x11)
+            with_visual_opacity(visual.foreground, opacity)
         };
         for (i, line) in visible.iter().enumerate() {
             if line.is_empty() {
@@ -959,9 +1060,9 @@ pub(crate) fn emit_live_text_input(
             out.push(DrawOp::Rect {
                 rect: rect(cx, cy, 1.0, font_size),
                 paint: Paint {
-                    fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xff)),
+                    fill: Some(visual.foreground),
                     stroke: None,
-                    opacity: 1.0,
+                    opacity,
                 },
             });
         }
@@ -1002,7 +1103,7 @@ pub(crate) fn emit_live_text_input(
                     paint: Paint {
                         fill: Some(ctx.theme.selection),
                         stroke: None,
-                        opacity: 1.0,
+                        opacity,
                     },
                 });
             }
@@ -1031,9 +1132,9 @@ pub(crate) fn emit_live_text_input(
     // --- text run ---
     if !text.is_empty() {
         let color = if is_placeholder {
-            Color::rgba(0x66, 0x66, 0x66, 0xff)
+            with_visual_opacity(visual.muted_foreground, opacity)
         } else {
-            Color::rgb(0x11, 0x11, 0x11)
+            with_visual_opacity(visual.foreground, opacity)
         };
         out.push(DrawOp::Text(TextRun {
             content: text,
@@ -1058,9 +1159,9 @@ pub(crate) fn emit_live_text_input(
         out.push(DrawOp::Rect {
             rect: rect(caret_x, text_top, 1.0, font_size),
             paint: Paint {
-                fill: Some(Color::rgba(0x33, 0x33, 0x33, 0xff)),
+                fill: Some(visual.foreground),
                 stroke: None,
-                opacity: 1.0,
+                opacity,
             },
         });
     }
@@ -1078,9 +1179,12 @@ fn emit_widget_visual(
     json: &Value,
     out: &mut Vec<DrawOp>,
 ) {
-    let accent = first_solid_color(json.get("fill")).unwrap_or(Color::rgb(0x3b, 0x82, 0xf6));
-    let track_off = Color::rgb(0xd1, 0xd5, 0xdb);
-    let knob = Color::rgb(0xff, 0xff, 0xff);
+    let authored_fill = first_solid_color(json.get("fill"));
+    let authored_stroke = stroke_op(json);
+    let visual = resolve_authored_widget_visual(
+        authored_fill,
+        authored_stroke.as_ref().map(|stroke| stroke.color),
+    );
     let opacity = node_opacity(json);
     let (x, y, w, h) = (r.min_x(), r.min_y(), r.size.width, r.size.height);
     let solid = |c: Color| Paint {
@@ -1092,10 +1196,16 @@ fn emit_widget_visual(
     match kind {
         "switch" => {
             let on = json_bool(json, "checked");
+            let track = if on { visual.active } else { visual.inactive };
+            let thumb = if on {
+                visual.active_foreground
+            } else {
+                visual.inactive_foreground
+            };
             out.push(DrawOp::RoundedRect {
                 rect: rect_logical,
-                radii: BorderRadii::uniform(h / 2.0),
-                paint: solid(if on { accent } else { track_off }),
+                radii: widget_corner_radii(json, h / 2.0, h / 2.0),
+                paint: solid(track),
             });
             let d = (h - 4.0).max(2.0);
             let kx = if on { x + w - d - 2.0 } else { x + 2.0 };
@@ -1103,24 +1213,34 @@ fn emit_widget_visual(
                 rect: rect(kx, y + 2.0, d, d),
                 radii: BorderRadii::uniform(d / 2.0),
                 paint: Paint {
-                    fill: Some(knob),
+                    fill: Some(thumb),
                     stroke: None,
-                    opacity: 1.0,
+                    opacity,
                 },
             });
         }
         "checkbox" => {
             let on = json_bool(json, "checked");
-            let radii = corner_radii(json).unwrap_or_else(|| BorderRadii::uniform(4.0));
-            let box_stroke = stroke_op(json).unwrap_or(StrokeOp {
-                color: track_off,
+            let label = json
+                .get("label")
+                .and_then(Value::as_str)
+                .filter(|label| !label.is_empty());
+            let (box_x, box_y, box_w, box_h) = if label.is_some() {
+                let size = w.min(h).max(0.0);
+                (x, y + (h - size) / 2.0, size, size)
+            } else {
+                (x, y, w, h)
+            };
+            let radii = widget_corner_radii(json, 4.0, box_w.min(box_h) / 2.0);
+            let box_stroke = authored_stroke.clone().unwrap_or(StrokeOp {
+                color: visual.inactive,
                 width: 1.5,
             });
             out.push(DrawOp::RoundedRect {
-                rect: rect_logical,
+                rect: rect(box_x, box_y, box_w, box_h),
                 radii,
                 paint: Paint {
-                    fill: if on { Some(accent) } else { None },
+                    fill: if on { Some(visual.active) } else { None },
                     stroke: Some(box_stroke),
                     opacity,
                 },
@@ -1128,19 +1248,34 @@ fn emit_widget_visual(
             if on {
                 out.push(DrawOp::Path {
                     commands: vec![
-                        PathCommand::MoveTo(point(x + w * 0.24, y + h * 0.52)),
-                        PathCommand::LineTo(point(x + w * 0.42, y + h * 0.70)),
-                        PathCommand::LineTo(point(x + w * 0.76, y + h * 0.30)),
+                        PathCommand::MoveTo(point(box_x + box_w * 0.24, box_y + box_h * 0.52)),
+                        PathCommand::LineTo(point(box_x + box_w * 0.42, box_y + box_h * 0.70)),
+                        PathCommand::LineTo(point(box_x + box_w * 0.76, box_y + box_h * 0.30)),
                     ],
                     paint: Paint {
                         fill: None,
                         stroke: Some(StrokeOp {
-                            color: knob,
+                            color: visual.active_foreground,
                             width: 2.0,
                         }),
-                        opacity: 1.0,
+                        opacity,
                     },
                 });
+            }
+            if let Some(label) = label {
+                let font_size = 14.0_f32.min(h.max(0.0));
+                let gap = 8.0_f32;
+                out.push(DrawOp::Text(TextRun {
+                    content: label.to_owned(),
+                    font_family: String::new(),
+                    font_size,
+                    font_weight: 400,
+                    color: with_visual_opacity(visual.label_foreground, opacity),
+                    origin: point(box_x + box_w + gap, y + (h - font_size) / 2.0),
+                    max_width: (w - box_w - gap).max(0.0),
+                    align: TextAlign::Start,
+                    line_height: 0.0,
+                }));
             }
         }
         "slider" => {
@@ -1153,19 +1288,20 @@ fn emit_widget_visual(
             };
             let track_h = 4.0_f32;
             let cy = y + h / 2.0;
+            let track_radii = widget_corner_radii(json, track_h / 2.0, track_h / 2.0);
             out.push(DrawOp::RoundedRect {
                 rect: rect(x, cy - track_h / 2.0, w, track_h),
-                radii: BorderRadii::uniform(track_h / 2.0),
-                paint: solid(track_off),
+                radii: track_radii,
+                paint: solid(visual.inactive),
             });
             if frac > 0.0 {
                 out.push(DrawOp::RoundedRect {
                     rect: rect(x, cy - track_h / 2.0, w * frac, track_h),
-                    radii: BorderRadii::uniform(track_h / 2.0),
+                    radii: track_radii,
                     paint: Paint {
-                        fill: Some(accent),
+                        fill: Some(visual.active),
                         stroke: None,
-                        opacity: 1.0,
+                        opacity,
                     },
                 });
             }
@@ -1175,12 +1311,19 @@ fn emit_widget_visual(
                 rect: rect(kx, cy - d / 2.0, d, d),
                 radii: BorderRadii::uniform(d / 2.0),
                 paint: Paint {
-                    fill: Some(knob),
-                    stroke: Some(StrokeOp {
-                        color: track_off,
-                        width: 1.0,
+                    fill: Some(if frac > 0.0 {
+                        visual.active_foreground
+                    } else {
+                        visual.inactive_foreground
                     }),
-                    opacity: 1.0,
+                    stroke: Some(StrokeOp {
+                        color: visual.inactive,
+                        width: authored_stroke
+                            .as_ref()
+                            .map(|stroke| stroke.width)
+                            .unwrap_or(1.0),
+                    }),
+                    opacity,
                 },
             });
         }
@@ -1192,36 +1335,40 @@ fn emit_widget_visual(
             } else {
                 0.0
             };
-            let radii = BorderRadii::uniform(h / 2.0);
+            let indeterminate = json_bool(json, "indeterminate");
+            let radii = widget_corner_radii(json, h / 2.0, h / 2.0);
             out.push(DrawOp::RoundedRect {
                 rect: rect_logical,
                 radii,
-                paint: solid(track_off),
+                paint: solid(visual.inactive),
             });
-            if frac > 0.0 {
+            let (segment_x, segment_width) = if indeterminate {
+                (x + w * 0.325, w * 0.35)
+            } else {
+                (x, w * frac)
+            };
+            if segment_width > 0.0 {
                 out.push(DrawOp::RoundedRect {
-                    rect: rect(x, y, w * frac, h),
+                    rect: rect(segment_x, y, segment_width, h),
                     radii,
                     paint: Paint {
-                        fill: Some(accent),
+                        fill: Some(visual.active),
                         stroke: None,
-                        opacity: 1.0,
+                        opacity,
                     },
                 });
             }
         }
         "select" => {
             let radii = corner_radii(json).unwrap_or_else(|| BorderRadii::uniform(6.0));
-            let box_stroke = stroke_op(json).unwrap_or(StrokeOp {
-                color: track_off,
-                width: 1.0,
-            });
             out.push(DrawOp::RoundedRect {
                 rect: rect_logical,
                 radii,
                 paint: Paint {
-                    fill: first_solid_color(json.get("fill")),
-                    stroke: Some(box_stroke),
+                    // Absence is meaningful: an unstyled select is transparent,
+                    // not a fabricated white surface with a grey outline.
+                    fill: visual.surface,
+                    stroke: authored_stroke.clone(),
                     opacity,
                 },
             });
@@ -1240,11 +1387,14 @@ fn emit_widget_visual(
                     font_family: String::new(),
                     font_size: fs,
                     font_weight: 400,
-                    color: if selected.is_some() {
-                        Color::rgb(0x11, 0x11, 0x11)
-                    } else {
-                        Color::rgba(0x66, 0x66, 0x66, 0xff)
-                    },
+                    color: with_visual_opacity(
+                        if selected.is_some() {
+                            visual.foreground
+                        } else {
+                            visual.muted_foreground
+                        },
+                        opacity,
+                    ),
                     origin: point(x + 8.0, y + (h - fs) / 2.0),
                     max_width: (w - 36.0).max(0.0),
                     align: TextAlign::Start,
@@ -1264,10 +1414,10 @@ fn emit_widget_visual(
                 paint: Paint {
                     fill: None,
                     stroke: Some(StrokeOp {
-                        color: Color::rgb(0x66, 0x66, 0x66),
+                        color: visual.muted_foreground,
                         width: 1.5,
                     }),
-                    opacity: 1.0,
+                    opacity,
                 },
             });
         }
@@ -1287,11 +1437,11 @@ fn emit_widget_visual(
                         rect: rect(x + 2.0, ry, d, d),
                         radii: BorderRadii::uniform(d / 2.0),
                         paint: Paint {
-                            fill: if on { Some(accent) } else { None },
-                            stroke: Some(StrokeOp {
-                                color: track_off,
+                            fill: if on { Some(visual.active) } else { None },
+                            stroke: Some(authored_stroke.clone().unwrap_or(StrokeOp {
+                                color: visual.inactive,
                                 width: 1.5,
-                            }),
+                            })),
                             opacity,
                         },
                     });
@@ -1306,9 +1456,9 @@ fn emit_widget_visual(
                             ),
                             radii: BorderRadii::uniform(inner / 2.0),
                             paint: Paint {
-                                fill: Some(knob),
+                                fill: Some(visual.active_foreground),
                                 stroke: None,
-                                opacity: 1.0,
+                                opacity,
                             },
                         });
                     }
@@ -1317,13 +1467,85 @@ fn emit_widget_visual(
                         font_family: String::new(),
                         font_size: fs,
                         font_weight: 400,
-                        color: Color::rgb(0x11, 0x11, 0x11),
+                        color: with_visual_opacity(visual.label_foreground, opacity),
                         origin: point(x + 2.0 + d + 8.0, ry + (d - fs) / 2.0),
                         max_width: (w - d - 14.0).max(0.0),
                         align: TextAlign::Start,
                         line_height: 0.0,
                     }));
                 }
+            }
+        }
+        "tabs" => {
+            let Some(tabs) = json.get("tabs").and_then(Value::as_array) else {
+                return;
+            };
+            if tabs.is_empty() || w <= 0.0 || h <= 0.0 {
+                return;
+            }
+            let bar_height = h.min(crate::layout::resolve::TABS_BAR_HEIGHT);
+            let bar_radii = widget_corner_radii(json, 6.0, bar_height / 2.0);
+            out.push(DrawOp::RoundedRect {
+                rect: rect(x, y, w, bar_height),
+                radii: bar_radii,
+                paint: Paint {
+                    fill: Some(visual.inactive),
+                    stroke: authored_stroke.clone(),
+                    opacity,
+                },
+            });
+
+            let active = active_tab_index(json).unwrap_or(0).min(tabs.len() - 1);
+            let segment_width = w / tabs.len() as f32;
+            let inset = 2.0_f32.min(bar_height / 4.0);
+            let active_height = (bar_height - inset * 2.0).max(0.0);
+            let active_width = (segment_width - inset * 2.0).max(0.0);
+            if active_width > 0.0 && active_height > 0.0 {
+                out.push(DrawOp::RoundedRect {
+                    rect: rect(
+                        x + active as f32 * segment_width + inset,
+                        y + inset,
+                        active_width,
+                        active_height,
+                    ),
+                    radii: BorderRadii::uniform(active_height.min(active_width) / 2.0),
+                    paint: Paint {
+                        fill: Some(visual.active),
+                        stroke: None,
+                        opacity,
+                    },
+                });
+            }
+
+            let font_size = 14.0_f32.min(bar_height.max(0.0));
+            for (index, tab) in tabs.iter().enumerate() {
+                let label = tab
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .or_else(|| tab.get("value").and_then(Value::as_str))
+                    .unwrap_or("");
+                if label.is_empty() {
+                    continue;
+                }
+                let role = if index == active {
+                    visual.active_foreground
+                } else {
+                    visual.muted_label_foreground
+                };
+                out.push(DrawOp::Text(TextRun {
+                    content: label.to_owned(),
+                    font_family: String::new(),
+                    font_size,
+                    font_weight: 400,
+                    color: with_visual_opacity(role, opacity),
+                    origin: point(
+                        x + index as f32 * segment_width,
+                        y + (bar_height - font_size) / 2.0,
+                    ),
+                    max_width: segment_width,
+                    align: TextAlign::Center,
+                    line_height: 0.0,
+                }));
             }
         }
         _ => {}
@@ -1674,11 +1896,30 @@ fn corner_radii(json: &Value) -> Option<BorderRadii> {
     None
 }
 
+/// An absent widget radius retains intrinsic geometry; an explicitly authored
+/// zero is a square control. Clamp each corner to the part's physical cap so a
+/// node-level radius cannot invert a thin track.
+fn widget_corner_radii(json: &Value, fallback: f32, max_radius: f32) -> BorderRadii {
+    let radii = corner_radii(json).unwrap_or_else(|| BorderRadii::uniform(fallback));
+    let cap = max_radius.max(0.0);
+    let clamp = |radius: f32| radius.clamp(0.0, cap);
+    BorderRadii {
+        tl: clamp(radii.tl),
+        tr: clamp(radii.tr),
+        br: clamp(radii.br),
+        bl: clamp(radii.bl),
+    }
+}
+
 // Keep unused imports harmless.
 #[allow(dead_code)]
 fn _unused(_: PathCommand, _: Point) {}
 #[allow(dead_code)]
 fn _keep_penode(_: &PenNode) {}
+
+#[cfg(test)]
+#[path = "scene_widget_tests.rs"]
+mod widget_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1837,7 +2078,7 @@ mod tests {
                  "app": { "name":"x", "version":"1", "id":"x" },
                  "children": [
                    { "type":"text_input", "id":"e", "width":200, "height":40,
-                     "fill":[{ "type":"solid", "color":"#ffffff" }] }
+                     "fill":[{ "type":"solid", "color":"#120826" }] }
                  ]}"##,
         );
         rt.focus_next().unwrap();
@@ -1856,11 +2097,23 @@ mod tests {
         let ops =
             collect_draws_with_widgets(rt.document.as_ref().unwrap(), &rt.layout, &rt.state, &ctx);
         assert!(
-            ops.iter()
-                .any(|op| matches!(op, DrawOp::Text(t) if t.content == "hi")),
-            "live typed text should render"
+            ops.iter().any(|op| matches!(
+                op,
+                DrawOp::Text(t)
+                    if t.content == "hi" && t.color == Color::rgb(0xff, 0xff, 0xff)
+            )),
+            "live typed text should use contrast-derived white on an authored dark fill"
         );
         assert!(ops.iter().any(is_caret), "focused caret should render");
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                DrawOp::Rect { rect, paint }
+                    if (rect.size.width - 1.0).abs() < 0.01
+                        && paint.fill == Some(Color::rgb(0xff, 0xff, 0xff))
+            )),
+            "live caret should share the authored foreground"
+        );
 
         // Half a blink period later → caret hidden.
         let ctx_off = WidgetRenderCtx { now_ms: 600, ..ctx };
@@ -1931,7 +2184,6 @@ mod tests {
             "expected composite rounded-rect widget parts, got {rounded}"
         );
     }
-
     #[test]
     fn text_area_static_value_wraps_into_multiple_lines() {
         // A long single-line value in a narrow box must wrap to several

@@ -29,7 +29,9 @@ pub use text_geometry::{
     byte_to_utf16_offset, normalize_utf16_offset, utf16_len, utf16_to_byte_offset, FieldKey,
     Granularity, TextGeometry, TextGeometryError, TextRect, WritingDirection,
 };
-pub use widget_style::WidgetTheme;
+pub use widget_style::{
+    resolve_authored_widget_visual, with_visual_opacity, AuthoredWidgetVisual, WidgetTheme,
+};
 
 use crate::geometry::{Affine2, Rect, Size};
 

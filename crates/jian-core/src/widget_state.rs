@@ -9,6 +9,26 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// Resolve the shared `tabs[i] <-> children[i]` selection contract.
+///
+/// Render, hit-testing, focus collection, and pointer activation all call this
+/// helper so an absent or stale value cannot make those paths disagree. The
+/// first declared tab is the deterministic fallback; an empty declaration has
+/// no active panel.
+pub(crate) fn resolve_tab_index<'a>(
+    values: impl IntoIterator<Item = Option<&'a str>>,
+    selected: Option<&str>,
+) -> Option<usize> {
+    let mut saw_value = false;
+    for (index, value) in values.into_iter().enumerate() {
+        saw_value = true;
+        if selected.is_some() && selected == value {
+            return Some(index);
+        }
+    }
+    saw_value.then_some(0)
+}
+
 #[derive(Debug, Clone)]
 pub enum WidgetState {
     /// Shared by text_input, text_area and number_input (the latter

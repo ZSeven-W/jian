@@ -40,6 +40,7 @@ pub struct TextMeasure {
     pub line_height: f32, // multiplier; 0.0 → 1.3 default
     pub growth: TextGrowth,
     pub input_chrome: Option<InputChromeMeasure>,
+    pub checkbox_chrome: Option<CheckboxChromeMeasure>,
 }
 
 /// Static input anatomy used by text_input / number_input / select
@@ -50,6 +51,12 @@ pub struct InputChromeMeasure {
     pub leading_icon: bool,
     pub trailing_icon: bool,
 }
+
+/// Checkbox anatomy used for labelled checkbox fit-content measurement.
+/// The 18px indicator plus 8px label gap mirrors the scene painter; unlike an
+/// input this chrome adds no field padding and no 36px minimum height.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CheckboxChromeMeasure;
 
 /// Mirror of `jian_ops_schema::node::TextGrowth` re-exported into
 /// the layout module so the schema dep doesn't leak into measure
@@ -80,6 +87,8 @@ pub struct OwnedRun {
 
 const INPUT_PAD_X: f32 = 8.0;
 const INPUT_ICON_BOX: f32 = 20.0;
+const CHECKBOX_INDICATOR: f32 = 18.0;
+const CHECKBOX_LABEL_GAP: f32 = 8.0;
 
 impl OwnedRun {
     fn as_styled(&self) -> StyledRun<'_> {
@@ -515,6 +524,26 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
                 leading_icon,
                 trailing_icon,
             }),
+            checkbox_chrome: None,
+        }
+    }
+
+    fn checkbox_measure(label: String) -> TextMeasure {
+        TextMeasure {
+            runs: vec![OwnedRun {
+                text: label,
+                font_family: None,
+                font_size: 14.0,
+                font_weight: 400,
+                font_style: FontStyleKind::Normal,
+                letter_spacing: 0.0,
+            }],
+            // The adjacent label painter uses a 14px one-line box rather
+            // than input/body text's 1.3x default leading.
+            line_height: 1.0,
+            growth: TextGrowth::Auto,
+            input_chrome: None,
+            checkbox_chrome: Some(CheckboxChromeMeasure),
         }
     }
 
@@ -556,6 +585,11 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
                     .unwrap_or_default();
                 Some(plain_input_measure(text, false, true))
             }
+            PenNode::Checkbox(checkbox) => checkbox
+                .label
+                .as_ref()
+                .filter(|label| !label.is_empty())
+                .map(|label| checkbox_measure(label.clone())),
             _ => None,
         };
     };
@@ -626,6 +660,7 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
         line_height,
         growth,
         input_chrome: None,
+        checkbox_chrome: None,
     })
 }
 
@@ -725,7 +760,12 @@ fn measure_text_for_taffy(
         max_width,
     };
     let res = backend.measure(&req);
-    let (measured_width, measured_height) = if let Some(chrome) = tm.input_chrome {
+    let (measured_width, measured_height) = if tm.checkbox_chrome.is_some() {
+        (
+            CHECKBOX_INDICATOR + CHECKBOX_LABEL_GAP + res.width,
+            res.height.max(CHECKBOX_INDICATOR),
+        )
+    } else if let Some(chrome) = tm.input_chrome {
         let left = if chrome.leading_icon {
             INPUT_PAD_X + INPUT_ICON_BOX + INPUT_PAD_X
         } else {

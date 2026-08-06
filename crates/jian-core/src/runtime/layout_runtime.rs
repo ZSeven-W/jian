@@ -2,6 +2,7 @@ use super::Runtime;
 use crate::error::CoreResult;
 use crate::geometry::size;
 use crate::spatial::{NodeBBox, SpatialIndex};
+use std::collections::HashSet;
 use std::rc::Rc;
 
 impl Runtime {
@@ -36,6 +37,14 @@ impl Runtime {
         } else {
             live_doc
         };
+        // Seed tabs before deriving the active runtime tree. This makes a
+        // persisted `bind:value` authoritative on the first layout instead of
+        // briefly indexing the authored panel until the first paint.
+        for (_, node) in document.tree.nodes.iter() {
+            if matches!(node.schema, jian_ops_schema::node::PenNode::Tabs(_)) {
+                let _ = self.widget_states.get_or_init(&node.schema, &self.state);
+            }
+        }
         let mut staged = self.layout.build_staged(document)?;
         if !responsive {
             for root in staged.roots.iter().copied() {
@@ -64,10 +73,15 @@ impl Runtime {
             }
         }
 
+        let active_nodes: HashSet<_> =
+            crate::gesture::focus::active_tree_nodes(document, Some(&self.widget_states))
+                .into_iter()
+                .collect();
         let items: Vec<NodeBBox> = document
             .tree
             .nodes
             .iter()
+            .filter(|(key, _)| active_nodes.contains(key))
             .filter(|(_, node)| {
                 serde_json::to_value(&node.schema)
                     .ok()
@@ -82,17 +96,21 @@ impl Runtime {
             })
             .collect();
         let focused_became_hidden = self.focus.current().is_some_and(|focused| {
-            document.tree.nodes.get(focused).is_some_and(|node| {
-                serde_json::to_value(&node.schema)
-                    .ok()
-                    .and_then(|json| json.get("visible").and_then(|value| value.as_bool()))
-                    == Some(false)
-            })
+            !active_nodes.contains(&focused)
+                || document.tree.nodes.get(focused).is_some_and(|node| {
+                    serde_json::to_value(&node.schema)
+                        .ok()
+                        .and_then(|json| json.get("visible").and_then(|value| value.as_bool()))
+                        == Some(false)
+                })
         });
+        let focus_chain =
+            crate::gesture::focus::collect_focus_chain_with_states(document, &self.widget_states);
         let mut spatial = SpatialIndex::new();
         spatial.rebuild(items);
         self.layout.install(staged);
         self.spatial = spatial;
+        self.focus.set_chain(focus_chain);
         self.text_geometry_ready = true;
         if focused_became_hidden {
             self.focus.clear();
@@ -158,17 +176,20 @@ impl Runtime {
 
     pub fn rebuild_spatial(&mut self) {
         let document = self.document.as_ref().expect("no document loaded");
-        let items: Vec<NodeBBox> = document
-            .tree
-            .nodes
+        let active_nodes =
+            crate::gesture::focus::active_tree_nodes(document, Some(&self.widget_states));
+        let items: Vec<NodeBBox> = active_nodes
             .iter()
-            .filter_map(|(key, _)| {
+            .filter_map(|&key| {
                 self.layout
                     .node_scene_rect(document, key)
                     .map(|rect| NodeBBox { key, rect })
             })
             .collect();
         self.spatial.rebuild(items);
+        let focus_chain =
+            crate::gesture::focus::collect_focus_chain_with_states(document, &self.widget_states);
+        self.focus.set_chain(focus_chain);
     }
 
     pub fn node_scene_rect(&self, key: crate::document::NodeKey) -> Option<crate::geometry::Rect> {
@@ -189,7 +210,7 @@ impl Runtime {
         let document = self.document.as_ref().expect("no document loaded");
         let mut visible = Vec::new();
         let mut hidden = Vec::new();
-        for (key, _) in document.tree.nodes.iter() {
+        for key in crate::gesture::focus::active_tree_nodes(document, Some(&self.widget_states)) {
             let Some(rect) = self.layout.node_scene_rect(document, key) else {
                 continue;
             };

@@ -11,6 +11,7 @@
 //! `focus_next`, `focus_previous`, `focus_request`, `focus_clear`.
 
 use crate::document::{NodeKey, RuntimeDocument};
+use crate::widget_state::{WidgetState, WidgetStateStore};
 use serde::{Deserialize, Serialize};
 
 /// Window-level / widget-level focus transition event. Hosts emit
@@ -207,21 +208,77 @@ impl FocusManager {
 /// 1000-node document with nested frames was effectively quadratic
 /// during a chain rebuild.
 pub fn collect_focus_chain(doc: &RuntimeDocument) -> Vec<NodeKey> {
-    let mut chain = Vec::new();
-    let roots: Vec<NodeKey> = doc.tree.roots.clone();
-    for root in roots {
-        walk(doc, root, &mut chain);
-    }
-    chain
+    collect_focus_chain_impl(doc, None)
 }
 
-fn walk(doc: &RuntimeDocument, key: NodeKey, out: &mut Vec<NodeKey>) {
-    if is_focusable(doc, key) {
-        out.push(key);
+/// Collect the focus chain using live widget state for tab selection.
+///
+/// The document-only public entry point above is used while a runtime is being
+/// constructed. Once widget state exists, layout/spatial rebuilds use this
+/// variant so changing a tab immediately removes the inactive panel from the
+/// keyboard ring as well as from pointer hit-testing.
+pub(crate) fn collect_focus_chain_with_states(
+    doc: &RuntimeDocument,
+    states: &WidgetStateStore,
+) -> Vec<NodeKey> {
+    collect_focus_chain_impl(doc, Some(states))
+}
+
+fn collect_focus_chain_impl(
+    doc: &RuntimeDocument,
+    states: Option<&WidgetStateStore>,
+) -> Vec<NodeKey> {
+    active_tree_nodes(doc, states)
+        .into_iter()
+        .filter(|&key| is_focusable(doc, key))
+        .collect()
+}
+
+/// DFS pre-order containing only the currently active child subtree of each
+/// tabs container. The tabs node itself remains in the result. A stale/missing
+/// value selects the first declared tab, while an empty tab list exposes no
+/// panel subtree.
+pub(crate) fn active_tree_nodes(
+    doc: &RuntimeDocument,
+    states: Option<&WidgetStateStore>,
+) -> Vec<NodeKey> {
+    let mut out = Vec::with_capacity(doc.tree.nodes.len());
+    for &root in &doc.tree.roots {
+        walk_active(doc, root, states, &mut out);
     }
-    let children: Vec<NodeKey> = doc.tree.nodes[key].children.clone();
-    for child in children {
-        walk(doc, child, out);
+    out
+}
+
+fn walk_active(
+    doc: &RuntimeDocument,
+    key: NodeKey,
+    states: Option<&WidgetStateStore>,
+    out: &mut Vec<NodeKey>,
+) {
+    out.push(key);
+    let node = &doc.tree.nodes[key];
+    if let jian_ops_schema::node::PenNode::Tabs(tabs) = &node.schema {
+        let selected = states
+            .and_then(|store| match store.get(&tabs.base.id) {
+                Some(WidgetState::Tabs { active, .. }) => Some(active.as_deref()),
+                _ => None,
+            })
+            .unwrap_or(tabs.value.as_deref());
+        let index = crate::widget_state::resolve_tab_index(
+            tabs.tabs
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(|tab| Some(tab.value.as_str())),
+            selected,
+        );
+        if let Some(child) = index.and_then(|index| node.children.get(index)).copied() {
+            walk_active(doc, child, states, out);
+        }
+        return;
+    }
+    for &child in &node.children {
+        walk_active(doc, child, states, out);
     }
 }
 
@@ -457,6 +514,82 @@ mod tests {
             .map(|k| crate::document::tree::node_schema_id(&rt_doc.tree.nodes[*k].schema))
             .collect();
         assert_eq!(ids, vec!["ti", "sw", "sl", "tb"]);
+    }
+
+    #[test]
+    fn tabs_focus_chain_only_walks_the_active_panel() {
+        use crate::document::loader;
+        use jian_ops_schema::document::PenDocument;
+        let doc: PenDocument = serde_json::from_str(
+            r#"{
+              "version":"1.1","formatVersion":"1.1",
+              "children":[
+                { "type":"tabs","id":"tabs","value":"second",
+                  "tabs":[
+                    {"value":"first","label":"First"},
+                    {"value":"second","label":"Second"}
+                  ],
+                  "children":[
+                    {"type":"frame","id":"first-panel","children":[
+                      {"type":"rectangle","id":"first-action",
+                       "gestures":{"focusable":true}}
+                    ]},
+                    {"type":"frame","id":"second-panel","children":[
+                      {"type":"rectangle","id":"second-action",
+                       "gestures":{"focusable":true}}
+                    ]}
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let state = std::rc::Rc::new(crate::state::StateGraph::new(std::rc::Rc::new(
+            crate::signal::scheduler::Scheduler::new(),
+        )));
+        let rt_doc = loader::build(doc, &state).unwrap();
+        let ids: Vec<&str> = collect_focus_chain(&rt_doc)
+            .iter()
+            .map(|key| crate::document::tree::node_schema_id(&rt_doc.tree.nodes[*key].schema))
+            .collect();
+        assert_eq!(ids, vec!["tabs", "second-action"]);
+    }
+
+    #[test]
+    fn tabs_focus_chain_falls_back_to_first_and_empty_tabs_are_safe() {
+        use crate::document::loader;
+        use jian_ops_schema::document::PenDocument;
+        let doc: PenDocument = serde_json::from_str(
+            r#"{
+              "version":"1.1","formatVersion":"1.1",
+              "children":[
+                { "type":"tabs","id":"fallback","value":"stale",
+                  "tabs":[{"value":"first","label":"First"}],
+                  "children":[
+                    {"type":"rectangle","id":"first-action",
+                     "gestures":{"focusable":true}},
+                    {"type":"rectangle","id":"orphan-action",
+                     "gestures":{"focusable":true}}
+                  ]
+                },
+                { "type":"tabs","id":"empty","tabs":[],"children":[
+                    {"type":"rectangle","id":"hidden-action",
+                     "gestures":{"focusable":true}}
+                  ]
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        let state = std::rc::Rc::new(crate::state::StateGraph::new(std::rc::Rc::new(
+            crate::signal::scheduler::Scheduler::new(),
+        )));
+        let rt_doc = loader::build(doc, &state).unwrap();
+        let ids: Vec<&str> = collect_focus_chain(&rt_doc)
+            .iter()
+            .map(|key| crate::document::tree::node_schema_id(&rt_doc.tree.nodes[*key].schema))
+            .collect();
+        assert_eq!(ids, vec!["fallback", "first-action", "empty"]);
     }
 
     #[test]
