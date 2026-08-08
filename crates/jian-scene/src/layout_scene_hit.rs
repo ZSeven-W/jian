@@ -99,7 +99,9 @@ fn hit_test_walk(node: &SceneNode, point: Point2D, zoom: f32) -> Option<String> 
     }
     let bounds = node.aggregate_bounds();
     let local = point_in_node_space(node, point, bounds);
-    for child in &node.children {
+    // `visible_children` — not `children` — so hit-test and paint share one
+    // rule for which of a tabs node's overlapping panels is live.
+    for child in node.visible_children() {
         if let Some(hit) = hit_test_walk(child, local, zoom) {
             return Some(hit);
         }
@@ -132,7 +134,8 @@ fn hit_test_path_walk<'a>(
     let bounds = node.aggregate_bounds();
     let local = point_in_node_space(node, point, bounds);
     path.push(node.id.as_str());
-    for child in &node.children {
+    // Same painted-subtree rule as `hit_test_walk`.
+    for child in node.visible_children() {
         if hit_test_path_walk(child, local, zoom, path) {
             return true;
         }
@@ -465,6 +468,69 @@ mod tests {
         assert_eq!(
             scene.node_path_at_doc_point(Point2D::new(20.0, 20.0), 1.0),
             path(&["visible-root", "visible-leaf"])
+        );
+    }
+
+    /// A tabs frame with two fully overlapping panels — the shape jian
+    /// compiles a `layout: none` / single-cell grid into. Only the panel the
+    /// painter draws may be hittable.
+    fn tabs_scene(active: Option<&str>) -> LayoutScene {
+        let mut tabs = leaf("tabs", NodeKind::Frame, Rect::xywh(0.0, 0.0, 200.0, 200.0));
+        tabs.widget = Some(crate::layout_scene::SceneWidget {
+            kind: "tabs".into(),
+            value_str: active.map(str::to_owned),
+            options: vec![
+                crate::layout_scene::SceneWidgetOption {
+                    value: "overview".into(),
+                    label: "Overview".into(),
+                },
+                crate::layout_scene::SceneWidgetOption {
+                    value: "details".into(),
+                    label: "Details".into(),
+                },
+            ],
+            ..Default::default()
+        });
+        tabs.children = vec![
+            leaf(
+                "overview-panel",
+                NodeKind::Frame,
+                Rect::xywh(0.0, 40.0, 200.0, 160.0),
+            ),
+            leaf(
+                "details-panel",
+                NodeKind::Frame,
+                Rect::xywh(0.0, 40.0, 200.0, 160.0),
+            ),
+        ];
+        one_page(vec![tabs])
+    }
+
+    #[test]
+    fn tabs_hit_test_only_reaches_the_active_panel() {
+        let point = Point2D::new(100.0, 120.0);
+
+        // Missing / stale values deterministically select the first panel.
+        for active in [None, Some("nope")] {
+            let scene = tabs_scene(active);
+            assert_eq!(
+                scene.node_at_doc_point(point, 1.0).as_deref(),
+                Some("overview-panel"),
+                "unresolved active value must fall back to the first panel"
+            );
+        }
+
+        let scene = tabs_scene(Some("details"));
+        assert_eq!(
+            scene.node_at_doc_point(point, 1.0).as_deref(),
+            Some("details-panel"),
+            "the second tab's panel is on top of the first — the hit must \
+             follow the active value, not document order"
+        );
+        assert_eq!(
+            scene.node_path_at_doc_point(point, 1.0),
+            path(&["tabs", "details-panel"]),
+            "the path walk must apply the same active-panel rule"
         );
     }
 

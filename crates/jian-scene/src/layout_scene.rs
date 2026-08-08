@@ -728,7 +728,37 @@ pub struct SceneWidgetOption {
     pub label: String,
 }
 
+impl SceneWidget {
+    /// Resolve the active tab option by authored/live value. Missing or
+    /// stale values deterministically fall back to the first tab/panel,
+    /// mirroring jian-core's `render::scene::active_tab_index`.
+    pub fn active_tab_index(&self) -> usize {
+        self.value_str
+            .as_deref()
+            .and_then(|value| self.options.iter().position(|tab| tab.value == value))
+            .unwrap_or(0)
+    }
+}
+
 impl SceneNode {
+    /// Children that participate in paint **and** hit-test.
+    ///
+    /// `tabs` is the only first-class widget whose children are alternative
+    /// panels rather than ordinary descendants (`tabs[i]` maps to
+    /// `children[i]`), and a tabs frame compiles to a single-cell grid where
+    /// every panel overlaps the others. Painter and hit-test must therefore
+    /// share this one rule: without it, clicking visible content on the second
+    /// tab selects the first tab's panel, which was never drawn.
+    pub fn visible_children(&self) -> &[SceneNode] {
+        let Some(widget) = self.widget.as_ref().filter(|widget| widget.kind == "tabs") else {
+            return &self.children;
+        };
+        self.children
+            .get(widget.active_tab_index())
+            .map(std::slice::from_ref)
+            .unwrap_or_default()
+    }
+
     /// Depth-first search for the node with `id` in this subtree
     /// (self included). Mirrors `SceneNode::find`.
     pub fn find(&self, id: &str) -> Option<&SceneNode> {
