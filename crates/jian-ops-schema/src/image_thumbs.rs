@@ -302,6 +302,18 @@ fn take_present_from_document(root: &mut Value) -> Option<ThumbMap> {
 ///
 /// Normal document loads never call this; it is an explicit baseline seam
 /// for tests and diagnostic sessions.
+/// Restore a previously captured registry, discarding whatever is active.
+///
+/// The counterpart to [`capture_snapshot`], for a caller that must undo an
+/// activation: a collaboration session can install a document (activating its
+/// thumbnails) and then have the edit rejected and rolled back, which leaves
+/// the refused document's thumbnails resolving live ids. Rolling the document
+/// back does not roll these back, because the old document's pending seed was
+/// consumed by its own activation and re-activating it is a no-op.
+pub fn restore_snapshot(snapshot: ImageThumbSnapshot) {
+    replace_from_load(snapshot.0);
+}
+
 pub fn clear_registry() {
     #[cfg(test)]
     return with_test_serialized(clear_registry_inner);
