@@ -7,10 +7,15 @@
 //! and onto the layout-resolved [`LayoutScene`], so the hit-test
 //! reads the same resolved geometry the painter walks.
 //!
-//! Hit semantics are preserved bit-for-bit from `document/walkers.rs`:
+//! Hit semantics carry over from `document/walkers.rs`:
 //! top-most-first z-order (`children[0]` is frontmost), per-node rotation inverse-transform, the
 //! tighter Ellipse / Polygon / Line geometry, the locked-node
 //! body-opts-out-children-stay rule, and the hidden-subtree skip.
+//!
+//! One rule is newer: a Frame / Group that paints no body of its own is
+//! not selectable across its empty area (see [`paints_body`]). Painted
+//! containers are unchanged, and a top-level frame stays reachable
+//! through its canvas name label, which hit-tests ahead of this walk.
 
 use crate::layout_scene::NodeKind;
 use crate::layout_scene::{regular_polygon_points, LayoutScene, SceneNode};
@@ -253,6 +258,16 @@ fn point_in_node(node: &SceneNode, local: Point2D, bounds: Rect, zoom: f32) -> b
         // A filled closed path is also hittable across its interior.
         return node.path_closed && node.fill.is_some() && point_in_polygon(local, points);
     }
+    // A container that paints nothing does not claim its own body. This
+    // runs after the child walk in both walkers, so descendants stay
+    // hittable — only the empty body opts out, the same shape as the
+    // locked-node rule. Without it a full-bleed transparent decoration
+    // layer (the `layout: none` overlay idiom: sparse tape / punch-hole
+    // art in a `fill_container` wrapper) is an invisible solid board that
+    // swallows every click over the content behind it.
+    if matches!(node.kind, NodeKind::Frame | NodeKind::Group) && !paints_body(node) {
+        return false;
+    }
     // Non-line kinds need real positive area on both axes.
     if bounds.size.x <= 0.0 || bounds.size.y <= 0.0 {
         return false;
@@ -311,6 +326,18 @@ fn point_in_node(node: &SceneNode, local: Point2D, bounds: Rect, zoom: f32) -> b
     }
 }
 
+/// Whether a container draws anything of its own. Children are not
+/// consulted — a container whose only ink comes from its descendants
+/// still has an empty body, and those descendants are hit-tested on
+/// their own geometry.
+fn paints_body(node: &SceneNode) -> bool {
+    node.fill.is_some()
+        || !node.fill_layers.is_empty()
+        || node.stroke.is_some()
+        || node.image_src.is_some()
+        || !node.effects.is_empty()
+}
+
 fn path_hit_points(node: &SceneNode) -> PathPoints<'_> {
     flatten_path_points(node)
 }
@@ -358,6 +385,14 @@ mod tests {
     fn leaf(id: &str, kind: NodeKind, bounds: Rect) -> SceneNode {
         let mut n = SceneNode::leaf(id, kind);
         n.bounds = bounds;
+        n
+    }
+
+    /// A Frame that paints a body, so it is selectable across its whole
+    /// rect rather than opting out through `paints_body`.
+    fn filled(id: &str, bounds: Rect) -> SceneNode {
+        let mut n = leaf(id, NodeKind::Frame, bounds);
+        n.fill = Some(jian_widgets::Color::rgb_u8(0x11, 0x22, 0x33));
         n
     }
 
@@ -491,19 +526,118 @@ mod tests {
             ],
             ..Default::default()
         });
+        // The panels carry a fill because this test is about which panel
+        // the walk routes to, not about whether an empty container claims
+        // its own body — an unfilled panel would opt out via `paints_body`
+        // and mask the routing this asserts.
         tabs.children = vec![
-            leaf(
-                "overview-panel",
-                NodeKind::Frame,
-                Rect::xywh(0.0, 40.0, 200.0, 160.0),
-            ),
-            leaf(
-                "details-panel",
-                NodeKind::Frame,
-                Rect::xywh(0.0, 40.0, 200.0, 160.0),
-            ),
+            filled("overview-panel", Rect::xywh(0.0, 40.0, 200.0, 160.0)),
+            filled("details-panel", Rect::xywh(0.0, 40.0, 200.0, 160.0)),
         ];
         one_page(vec![tabs])
+    }
+
+    /// The `layout: none` decoration idiom: a full-bleed wrapper holding
+    /// a few small marks, stacked in front of the content it decorates.
+    /// It paints no body, so its empty area must fall through to the
+    /// content behind rather than swallowing every click in the frame.
+    #[test]
+    fn a_full_bleed_transparent_decoration_layer_does_not_swallow_clicks() {
+        let mut decoration = leaf(
+            "decoration",
+            NodeKind::Group,
+            Rect::xywh(0.0, 0.0, 200.0, 200.0),
+        );
+        decoration.children = vec![leaf(
+            "tape",
+            NodeKind::Rect,
+            Rect::xywh(0.0, 0.0, 20.0, 20.0),
+        )];
+        let mut content = leaf(
+            "content",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 200.0, 200.0),
+        );
+        content.children = vec![leaf(
+            "headline",
+            NodeKind::Text,
+            Rect::xywh(50.0, 100.0, 100.0, 40.0),
+        )];
+        let mut root = filled("board", Rect::xywh(0.0, 0.0, 200.0, 200.0));
+        root.children = vec![decoration, content];
+        let scene = one_page(vec![root]);
+
+        // Over the text: the decoration is frontmost and its rect covers
+        // this point, but only the text is painted here.
+        assert_eq!(
+            scene
+                .node_at_doc_point(Point2D::new(100.0, 120.0), 1.0)
+                .as_deref(),
+            Some("headline"),
+            "a transparent decoration layer must not intercept the content below it"
+        );
+        // The path walk agrees, so canvas drill-down and text editing —
+        // which both read the hit path — can reach the text node.
+        assert_eq!(
+            scene.node_path_at_doc_point(Point2D::new(100.0, 120.0), 1.0),
+            path(&["board", "content", "headline"]),
+        );
+        // The decoration's own marks stay selectable.
+        assert_eq!(
+            scene
+                .node_at_doc_point(Point2D::new(10.0, 10.0), 1.0)
+                .as_deref(),
+            Some("tape"),
+        );
+        // Empty space in both wrappers falls through to the painted root.
+        assert_eq!(
+            scene
+                .node_at_doc_point(Point2D::new(180.0, 180.0), 1.0)
+                .as_deref(),
+            Some("board"),
+        );
+    }
+
+    #[test]
+    fn a_painted_container_still_claims_its_whole_body() {
+        let mut card = filled("card", Rect::xywh(0.0, 0.0, 100.0, 100.0));
+        card.children = vec![leaf(
+            "label",
+            NodeKind::Text,
+            Rect::xywh(10.0, 10.0, 20.0, 20.0),
+        )];
+        let scene = one_page(vec![card]);
+        assert_eq!(
+            scene
+                .node_at_doc_point(Point2D::new(80.0, 80.0), 1.0)
+                .as_deref(),
+            Some("card"),
+            "a filled card is selectable across its padding, not just on its children"
+        );
+    }
+
+    /// A stroke-only outline box paints ink without a fill, so it keeps
+    /// its body — `paints_body` is about ink, not about `fill` alone.
+    #[test]
+    fn a_stroke_only_container_keeps_its_body() {
+        let mut outlined = leaf(
+            "outlined",
+            NodeKind::Frame,
+            Rect::xywh(0.0, 0.0, 100.0, 100.0),
+        );
+        outlined.stroke = Some(crate::layout_scene::SceneStroke {
+            color: jian_widgets::Color::rgb_u8(0, 0, 0),
+            width: 2.0,
+            sides: None,
+            align: crate::layout_scene::SceneStrokeAlign::Center,
+        });
+        let scene = one_page(vec![outlined]);
+        assert_eq!(
+            scene
+                .node_at_doc_point(Point2D::new(50.0, 50.0), 1.0)
+                .as_deref(),
+            Some("outlined"),
+        );
     }
 
     #[test]
