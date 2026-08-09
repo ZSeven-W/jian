@@ -49,11 +49,33 @@ impl LayoutScene {
     /// Hidden subtrees are omitted entirely. Rotation and flips are resolved
     /// at every ancestor exactly as in the single-id hit-test.
     pub fn node_path_at_doc_point(&self, point: Point2D, zoom: f32) -> Option<Vec<String>> {
+        self.node_path_at_doc_point_impl(point, zoom, false)
+    }
+
+    /// Like [`Self::node_path_at_doc_point`], but an unpainted container body
+    /// still terminates the path. Clicks skip an empty decoration shell so it
+    /// cannot swallow the content behind it; an image dropped onto an empty
+    /// placeholder box wants exactly that box, so the drop-target resolver
+    /// opts back in here rather than falling through to a fresh insertion.
+    pub fn node_path_at_doc_point_for_fill(
+        &self,
+        point: Point2D,
+        zoom: f32,
+    ) -> Option<Vec<String>> {
+        self.node_path_at_doc_point_impl(point, zoom, true)
+    }
+
+    fn node_path_at_doc_point_impl(
+        &self,
+        point: Point2D,
+        zoom: f32,
+        include_empty_body: bool,
+    ) -> Option<Vec<String>> {
         let zoom = zoom.max(0.0001);
         let page = self.active_page()?;
         let mut path = Vec::new();
         for child in &page.children {
-            if hit_test_path_walk(child, point, zoom, &mut path) {
+            if hit_test_path_walk(child, point, zoom, &mut path, include_empty_body) {
                 return Some(path.into_iter().map(str::to_owned).collect());
             }
             debug_assert!(path.is_empty());
@@ -118,7 +140,8 @@ fn hit_test_walk(node: &SceneNode, point: Point2D, zoom: f32) -> Option<String> 
     if node.locked {
         return None;
     }
-    if point_in_node(node, local, bounds, zoom) {
+    // Clicks never terminate on an unpainted container body.
+    if point_in_node(node, local, bounds, zoom, false) {
         return Some(node.id.clone());
     }
     None
@@ -132,6 +155,7 @@ fn hit_test_path_walk<'a>(
     point: Point2D,
     zoom: f32,
     path: &mut Vec<&'a str>,
+    include_empty_body: bool,
 ) -> bool {
     if node.hidden {
         return false;
@@ -141,11 +165,11 @@ fn hit_test_path_walk<'a>(
     path.push(node.id.as_str());
     // Same painted-subtree rule as `hit_test_walk`.
     for child in node.visible_children() {
-        if hit_test_path_walk(child, local, zoom, path) {
+        if hit_test_path_walk(child, local, zoom, path, include_empty_body) {
             return true;
         }
     }
-    if !node.locked && point_in_node(node, local, bounds, zoom) {
+    if !node.locked && point_in_node(node, local, bounds, zoom, include_empty_body) {
         return true;
     }
     path.pop();
@@ -219,7 +243,13 @@ fn rotation_pivot(node: &SceneNode, bounds: Rect) -> Option<Point2D> {
 /// Per-NodeKind hit-test. Frames / Groups / Rects / Text / Other
 /// use the axis-aligned bounds; Ellipse / Polygon / Line use tighter
 /// geometry so the click area matches what the painter draws.
-fn point_in_node(node: &SceneNode, local: Point2D, bounds: Rect, zoom: f32) -> bool {
+fn point_in_node(
+    node: &SceneNode,
+    local: Point2D,
+    bounds: Rect,
+    zoom: f32,
+    include_empty_body: bool,
+) -> bool {
     // Lines get a dedicated path: horizontal / vertical segments
     // have a zero-dimension bounds rect, and negative-size bounds
     // collapse the aggregate to `Rect::ZERO`, so the Line path reads
@@ -265,7 +295,10 @@ fn point_in_node(node: &SceneNode, local: Point2D, bounds: Rect, zoom: f32) -> b
     // layer (the `layout: none` overlay idiom: sparse tape / punch-hole
     // art in a `fill_container` wrapper) is an invisible solid board that
     // swallows every click over the content behind it.
-    if matches!(node.kind, NodeKind::Frame | NodeKind::Group) && !paints_body(node) {
+    if !include_empty_body
+        && matches!(node.kind, NodeKind::Frame | NodeKind::Group)
+        && !paints_body(node)
+    {
         return false;
     }
     // Non-line kinds need real positive area on both axes.
