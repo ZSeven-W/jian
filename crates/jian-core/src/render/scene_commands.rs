@@ -277,6 +277,7 @@ fn layer_effects(json: &Value) -> Vec<LayerEffect> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn subtree_content_bounds(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,

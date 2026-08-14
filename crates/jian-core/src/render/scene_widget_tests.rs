@@ -281,7 +281,7 @@ fn tabs_layout_and_both_collectors_use_only_the_active_panel() {
         .iter()
         .filter_map(|command| match command {
             crate::render::ScenePaintCommand::Draw(op) => Some(op),
-            crate::render::ScenePaintCommand::RichText { .. } | _ => None,
+            _ => None,
         })
         .collect();
     assert!(structured_draws.iter().any(|op| geometry_paint(op)

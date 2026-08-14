@@ -13,7 +13,7 @@
 //! body-opts-out-children-stay rule, and the hidden-subtree skip.
 //!
 //! One rule is newer: a Frame / Group that paints no body of its own is
-//! not selectable across its empty area (see [`paints_body`]). Painted
+//! not selectable across its empty area (see `paints_body`). Painted
 //! containers are unchanged, and a top-level frame stays reachable
 //! through its canvas name label, which hit-tests ahead of this walk.
 

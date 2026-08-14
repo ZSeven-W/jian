@@ -654,10 +654,7 @@ mod tests {
         struct RejectWrites;
         impl std::io::Write for RejectWrites {
             fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "intentional failure",
-                ))
+                Err(std::io::Error::other("intentional failure"))
             }
 
             fn flush(&mut self) -> std::io::Result<()> {
