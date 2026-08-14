@@ -23,7 +23,9 @@
 
 use crate::geometry::{point, rect, Point};
 use crate::render::text::{resolve_text, RichDrawList, RichTextPlan};
-use crate::render::widget_style::{resolve_authored_widget_visual, with_visual_opacity};
+use crate::render::widget_style::{
+    resolve_authored_widget_visual, with_visual_opacity, AuthoredWidgetVisual,
+};
 use crate::render::{
     BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
     PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
@@ -827,12 +829,13 @@ fn emit_text_input(
         .and_then(|v| v.as_u64())
         .map(|n| n as u16)
         .unwrap_or(400);
-    // Value, placeholder, and caret share the authored-widget contrast
-    // policy used by the canvas painter.
+    // Authored surfaces use the contrast-derived widget foreground;
+    // unstyled inputs keep the legacy dark ink palette.
+    let (ink, muted_ink, caret_ink) = input_ink_palette(visual);
     let text_color = if is_placeholder {
-        with_visual_opacity(visual.muted_foreground, opacity)
+        with_visual_opacity(muted_ink, opacity)
     } else {
-        with_visual_opacity(visual.foreground, opacity)
+        with_visual_opacity(ink, opacity)
     };
 
     let pad_x = 6.0_f32;
@@ -869,7 +872,7 @@ fn emit_text_input(
         out.push(DrawOp::Rect {
             rect: rect(caret_x, caret_top, 1.0, font_size),
             paint: Paint {
-                fill: Some(visual.foreground),
+                fill: Some(caret_ink),
                 stroke: None,
                 opacity,
             },
@@ -902,7 +905,7 @@ fn emit_text_input(
     out.push(DrawOp::Rect {
         rect: rect(caret_x, caret_top, 1.0, caret_height),
         paint: Paint {
-            fill: Some(visual.foreground),
+            fill: Some(caret_ink),
             stroke: None,
             opacity,
         },
@@ -933,6 +936,28 @@ fn clamp_visible_lines(json: &Value, lines: &[String]) -> Vec<String> {
     match cap {
         Some(n) if lines.len() > n => lines[lines.len() - n..].to_vec(),
         _ => lines.to_vec(),
+    }
+}
+
+/// Value, placeholder, and caret ink for a text-input node.
+///
+/// An authored surface keeps the contrast-derived widget foreground
+/// (white on dark fills, black on light fills). An unstyled input has
+/// no surface of its own and paints directly on the light canvas, so it
+/// keeps the legacy dark-ink palette of the pre-widget-style renderer.
+fn input_ink_palette(visual: AuthoredWidgetVisual) -> (Color, Color, Color) {
+    if visual.surface.is_some() {
+        (
+            visual.foreground,
+            visual.muted_foreground,
+            visual.foreground,
+        )
+    } else {
+        (
+            Color::rgb(0x11, 0x11, 0x11),
+            Color::rgba(0x66, 0x66, 0x66, 0xff),
+            Color::rgba(0x33, 0x33, 0x33, 0xff),
+        )
     }
 }
 
@@ -1006,6 +1031,7 @@ pub(crate) fn emit_live_text_input(
         r.min_x() + pad_x + s[..b].chars().count() as f32 * char_w
     };
 
+    let (ink, muted_ink, caret_ink) = input_ink_palette(visual);
     let live = st.text();
     // Platform preedit replaces its composing region in the same effective
     // text exposed by the native IME boundary.
@@ -1030,9 +1056,9 @@ pub(crate) fn emit_live_text_input(
         let line_height = font_size * 1.3;
         let max_width = (r.size.width - pad_x * 2.0).max(0.0);
         let color = if is_placeholder {
-            with_visual_opacity(visual.muted_foreground, opacity)
+            with_visual_opacity(muted_ink, opacity)
         } else {
-            with_visual_opacity(visual.foreground, opacity)
+            with_visual_opacity(ink, opacity)
         };
         for (i, line) in visible.iter().enumerate() {
             if line.is_empty() {
@@ -1060,7 +1086,7 @@ pub(crate) fn emit_live_text_input(
             out.push(DrawOp::Rect {
                 rect: rect(cx, cy, 1.0, font_size),
                 paint: Paint {
-                    fill: Some(visual.foreground),
+                    fill: Some(caret_ink),
                     stroke: None,
                     opacity,
                 },
@@ -1132,9 +1158,9 @@ pub(crate) fn emit_live_text_input(
     // --- text run ---
     if !text.is_empty() {
         let color = if is_placeholder {
-            with_visual_opacity(visual.muted_foreground, opacity)
+            with_visual_opacity(muted_ink, opacity)
         } else {
-            with_visual_opacity(visual.foreground, opacity)
+            with_visual_opacity(ink, opacity)
         };
         out.push(DrawOp::Text(TextRun {
             content: text,
@@ -1159,7 +1185,7 @@ pub(crate) fn emit_live_text_input(
         out.push(DrawOp::Rect {
             rect: rect(caret_x, text_top, 1.0, font_size),
             paint: Paint {
-                fill: Some(visual.foreground),
+                fill: Some(caret_ink),
                 stroke: None,
                 opacity,
             },

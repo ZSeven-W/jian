@@ -650,11 +650,11 @@ fn static_text_inputs_share_authored_and_transparent_widget_colors() {
     assert_eq!(unstyled.len(), 2, "transparent input emits no surface op");
     assert!(matches!(
         &unstyled[0],
-        DrawOp::Text(run) if run.color == Color::rgba(0x9c, 0xa3, 0xaf, 0xa6)
+        DrawOp::Text(run) if run.color == Color::rgba(0x66, 0x66, 0x66, 0xff)
     ));
     assert_eq!(
         rect_paint(&unstyled[1]).fill,
-        Some(Color::rgb(0x9c, 0xa3, 0xaf))
+        Some(Color::rgb(0x33, 0x33, 0x33))
     );
 }
 
