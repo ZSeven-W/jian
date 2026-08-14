@@ -6292,7 +6292,7 @@
           }
         },
         {
-          "description": "Progress indicator. Display-only (not focusable/keyboard-driven): `value` is read from the state graph via `bindings.value`. `max` defaults to 100; `indeterminate` shows an animated unknown-progress state and ignores `value`.",
+          "description": "Progress indicator. Display-only (not focusable/keyboard-driven): `value` is read from the state graph via `bindings.value`. `max` defaults to 100; `indeterminate` shows a deterministic unknown-progress state and ignores `value`. Hosts may animate that marker, while static and headless renderers intentionally emit the same stable frame.",
           "type": "object",
           "required": [
             "id",
