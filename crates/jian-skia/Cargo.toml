@@ -73,5 +73,5 @@ jian-host-desktop = { path = "../jian-host-desktop" }
 
 # Android EGL surface (behind `gl`): static-linked against the system
 # libEGL/libGLESv2 (no pkg-config on the NDK; links emitted by build.rs).
-[target.'cfg(target_os = "android")'.dependencies]
+[target.'cfg(any(target_os = "android", all(target_os = "linux", target_env = "ohos")))'.dependencies]
 khronos-egl = { version = "6", features = ["static", "no-pkg-config"], optional = true }

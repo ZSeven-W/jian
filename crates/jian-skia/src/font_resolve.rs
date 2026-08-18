@@ -365,9 +365,28 @@ impl FontResolver {
         {
             return Some(resolved(typeface, weight, italic));
         }
-        self.system_mgr
-            .match_family_style_character("", style, &[], c as i32)
-            .map(|typeface| resolved(typeface, weight, italic))
+        if let Some(typeface) =
+            self.system_mgr
+                .match_family_style_character("", style, &[], c as i32)
+        {
+            return Some(resolved(typeface, weight, italic));
+        }
+        // Last resort: scan every imported family for glyph coverage. On
+        // platforms without a character-aware system font manager (OHOS ships
+        // no fontconfig/Android-style manager, so `match_family_style_character`
+        // is always empty there), a registered system font such as
+        // HarmonyOS Sans SC is the only source of CJK glyphs even though no
+        // authored family names it.
+        if let Some(imported) = &*imported_mgr {
+            for family in imported_names.values() {
+                if let Some(typeface) =
+                    family_typeface_covering(imported, &imported_names, family, style, c)
+                {
+                    return Some(resolved(typeface, weight, italic));
+                }
+            }
+        }
+        None
     }
 }
 

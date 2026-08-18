@@ -42,7 +42,7 @@ mod raster;
 
 #[cfg(all(target_os = "windows", feature = "d3d"))]
 pub mod d3d;
-#[cfg(all(target_os = "android", feature = "gl"))]
+#[cfg(all(any(target_os = "android", target_env = "ohos"), feature = "gl"))]
 pub mod egl_android;
 #[cfg(all(target_os = "linux", feature = "gl"))]
 pub mod gl;
