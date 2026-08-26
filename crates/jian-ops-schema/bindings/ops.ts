@@ -41,7 +41,21 @@ aspAllowedOrigins: Array<string> | null,
  */
 updater: { kind: string; [key: string]: unknown } | null, };
 
-export type AppLifecycleHooks = { onLaunch: Array<Action> | null, onResume: Array<Action> | null, onBackground: Array<Action> | null, onTerminate: Array<Action> | null, };
+export type AppLifecycleHooks = { onLaunch: Array<Action> | null, onResume: Array<Action> | null, onBackground: Array<Action> | null, onTerminate: Array<Action> | null,
+/**
+ * Event hooks disabled for this lifecycle scope
+ * (`["onUnmount", ...]`). Order is preserved exactly as
+ * authored; the schema layer never dedups or rewrites it.
+ */
+disabledEvents: Array<string> | null,
+/**
+ * Explicit hook evaluation order (`["onMount", "onUnmount", ...]`).
+ * Order is preserved exactly as authored; the schema layer
+ * never dedups or rewrites it.
+ */
+interactionOrder: Array<string> | null, } & ({ [key in string]?: JsonValue });
+
+export type AxisLock = "auto" | "horizontal" | "vertical";
 
 export type BlendMode = "normal" | "darken" | "multiply" | "screen" | "overlay" | "lighten" | "difference" | "hue" | "saturation" | "color" | "luminosity" | "soft_light" | "color_dodge" | "color_burn" | "hard_light" | "exclusion";
 
@@ -159,7 +173,16 @@ blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWid
  * `onBlur`) apply only to input-kind nodes. `on_key` is keyboard, `on_reach_end`
  * is list-scroll-end, etc.
  */
-export type EventHandlers = { onTap: Array<Action> | null, onDoubleTap: Array<Action> | null, onLongPress: Array<Action> | null, onPanStart: Array<Action> | null, onPanUpdate: Array<Action> | null, onPanEnd: Array<Action> | null, onScaleStart: Array<Action> | null, onScaleUpdate: Array<Action> | null, onScaleEnd: Array<Action> | null, onRotateStart: Array<Action> | null, onRotateUpdate: Array<Action> | null, onRotateEnd: Array<Action> | null, onHoverEnter: Array<Action> | null, onHoverLeave: Array<Action> | null, onChange: Array<Action> | null, onSubmit: Array<Action> | null, onFocus: Array<Action> | null, onBlur: Array<Action> | null, onKey: Array<Action> | null, onScroll: Array<Action> | null, onReachEnd: Array<Action> | null, };
+export type EventHandlers = { onTap: Array<Action> | null, onDoubleTap: Array<Action> | null, onLongPress: Array<Action> | null, onPanStart: Array<Action> | null, onPanUpdate: Array<Action> | null, onPanEnd: Array<Action> | null, onScaleStart: Array<Action> | null, onScaleUpdate: Array<Action> | null, onScaleEnd: Array<Action> | null, onRotateStart: Array<Action> | null, onRotateUpdate: Array<Action> | null, onRotateEnd: Array<Action> | null, onHoverEnter: Array<Action> | null, onHoverLeave: Array<Action> | null, onPressStart: Array<Action> | null, onPressEnd: Array<Action> | null, onPressCancel: Array<Action> | null, onSwipe: Array<Action> | null, onContextMenu: Array<Action> | null,
+/**
+ * Raw pointer escape-hatch: fired for pointer Down/Move/Up when the
+ * node (or an ancestor) declares `gestures.rawPointer`.
+ * `SemanticEvent::RawPointer` maps here via
+ * `gesture::semantic::handler_key`; the runtime was already able to
+ * execute it dynamically (it survives round-trip through `extra`),
+ * this field makes it typed so AOT covers it too.
+ */
+onRawPointer: Array<Action> | null, onChange: Array<Action> | null, onSubmit: Array<Action> | null, onFocus: Array<Action> | null, onBlur: Array<Action> | null, onKey: Array<Action> | null, onScroll: Array<Action> | null, onReachEnd: Array<Action> | null, } & ({ [key in string]?: JsonValue });
 
 /**
  * A Tier 1 expression source — represented as a raw string.
@@ -223,7 +246,39 @@ longPressDuration: number | null,
  * `None` — falls back to the role heuristic (`Button` / `Link`
  * / `Input` are auto-included; everything else is opt-in).
  */
-focusable: boolean | null, };
+focusable: boolean | null,
+/**
+ * Double-tap detection window in ms (default 300).
+ */
+doubleTapTimeout: number | null,
+/**
+ * Max distance between two taps to still count as a double-tap (px).
+ */
+doubleTapSlop: number | null,
+/**
+ * Minimum travel distance for a swipe to claim (px).
+ */
+swipeMinDistance: number | null,
+/**
+ * Minimum velocity for a swipe to claim (px/s).
+ */
+swipeMinVelocity: number | null,
+/**
+ * Axis constraint applied when judging a swipe.
+ */
+axisLock: AxisLock | null,
+/**
+ * Event hooks disabled on this node (`["onHoverEnter", ...]`).
+ * Order is preserved exactly as authored; the schema layer never
+ * dedups or rewrites the list.
+ */
+disabledEvents: Array<string> | null,
+/**
+ * Explicit handler evaluation order (`["onSwipe", "onTap", ...]`).
+ * Order is preserved exactly as authored; the schema layer never
+ * dedups or rewrites the list.
+ */
+interactionOrder: Array<string> | null, } & ({ [key in string]?: JsonValue });
 
 export type GradientStop = { offset: number, color: string, };
 
@@ -341,7 +396,19 @@ export type MeshVertexStop = { row: number, col: number, color: string, };
  */
 export type NavigationRoute = { "push": string } | { "replace": string } | { "pop": null };
 
-export type NodeLifecycleHooks = { onMount: Array<Action> | null, onUnmount: Array<Action> | null, };
+export type NodeLifecycleHooks = { onMount: Array<Action> | null, onUnmount: Array<Action> | null,
+/**
+ * Event hooks disabled for this lifecycle scope
+ * (`["onUnmount", ...]`). Order is preserved exactly as
+ * authored; the schema layer never dedups or rewrites it.
+ */
+disabledEvents: Array<string> | null,
+/**
+ * Explicit hook evaluation order (`["onMount", "onUnmount", ...]`).
+ * Order is preserved exactly as authored; the schema layer
+ * never dedups or rewrites it.
+ */
+interactionOrder: Array<string> | null, } & ({ [key in string]?: JsonValue });
 
 /**
  * Numeric input with optional +/- steppers. Precise complement to
@@ -380,7 +447,18 @@ export type Orientation = "portrait" | "landscape" | "auto";
 
 export type Padding = number | [number, number] | [number, number, number, number] | string;
 
-export type PageLifecycleHooks = { onEnter: Array<Action> | null, onLeave: Array<Action> | null, onForeground: Array<Action> | null, onBackground: Array<Action> | null, };
+export type PageLifecycleHooks = { onEnter: Array<Action> | null, onLeave: Array<Action> | null, onForeground: Array<Action> | null, onBackground: Array<Action> | null,
+/**
+ * Event hooks disabled for this lifecycle scope
+ * (`["onTerminate", ...]`). Order is preserved exactly as
+ * authored; the schema layer never dedups or rewrites it.
+ */
+disabledEvents: Array<string> | null,
+/**
+ * Explicit hook evaluation order. Order is preserved exactly
+ * as authored; the schema layer never dedups or rewrites it.
+ */
+interactionOrder: Array<string> | null, } & ({ [key in string]?: JsonValue });
 
 export type PathFillRule = "nonzero" | "evenodd";
 
@@ -482,8 +560,9 @@ export type PrimitiveType = "int" | "float" | "number" | "string" | "bool" | "ar
 /**
  * Progress indicator. Display-only (not focusable/keyboard-driven):
  * `value` is read from the state graph via `bindings.value`. `max`
- * defaults to 100; `indeterminate` shows an animated unknown-progress
- * state and ignores `value`.
+ * defaults to 100; `indeterminate` shows a deterministic unknown-progress
+ * state and ignores `value`. Hosts may animate that marker, while static and
+ * headless renderers intentionally emit the same stable frame.
  */
 export type ProgressNode = { width: SizingBehavior | null, height: SizingBehavior | null, value: NumberOrExpression | null, max: number | null, indeterminate: boolean | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, cornerRadius: CornerRadius | null, states: WidgetStates | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, constraints: Constraints | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null, flipX: boolean | null, flipY: boolean | null,
 /**

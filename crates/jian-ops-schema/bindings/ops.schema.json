@@ -7416,6 +7416,67 @@
             "additionalProperties": true
           }
         },
+        "onPressStart": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onPressEnd": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onPressCancel": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onSwipe": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onContextMenu": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "onRawPointer": {
+          "description": "Raw pointer escape-hatch: fired for pointer Down/Move/Up when the node (or an ancestor) declares `gestures.rawPointer`. `SemanticEvent::RawPointer` maps here via `gesture::semantic::handler_key`; the runtime was already able to execute it dynamically (it survives round-trip through `extra`), this field makes it typed so AOT covers it too.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
         "onChange": {
           "type": [
             "array",
@@ -7486,7 +7547,8 @@
             "additionalProperties": true
           }
         }
-      }
+      },
+      "additionalProperties": true
     },
     "NodeLifecycleHooks": {
       "type": "object",
@@ -7510,8 +7572,29 @@
             "type": "object",
             "additionalProperties": true
           }
+        },
+        "disabledEvents": {
+          "description": "Event hooks disabled for this lifecycle scope (`[\"onUnmount\", ...]`). Order is preserved exactly as authored; the schema layer never dedups or rewrites it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "interactionOrder": {
+          "description": "Explicit hook evaluation order (`[\"onMount\", \"onUnmount\", ...]`). Order is preserved exactly as authored; the schema layer never dedups or rewrites it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "additionalProperties": true
     },
     "SemanticsMeta": {
       "type": "object",
@@ -7694,8 +7777,73 @@
             "boolean",
             "null"
           ]
+        },
+        "doubleTapTimeout": {
+          "description": "Double-tap detection window in ms (default 300).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "doubleTapSlop": {
+          "description": "Max distance between two taps to still count as a double-tap (px).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "swipeMinDistance": {
+          "description": "Minimum travel distance for a swipe to claim (px).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "swipeMinVelocity": {
+          "description": "Minimum velocity for a swipe to claim (px/s).",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "axisLock": {
+          "description": "Axis constraint applied when judging a swipe.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AxisLock"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disabledEvents": {
+          "description": "Event hooks disabled on this node (`[\"onHoverEnter\", ...]`). Order is preserved exactly as authored; the schema layer never dedups or rewrites the list.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "interactionOrder": {
+          "description": "Explicit handler evaluation order (`[\"onSwipe\", \"onTap\", ...]`). Order is preserved exactly as authored; the schema layer never dedups or rewrites the list.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "additionalProperties": true
     },
     "ScrollBehavior": {
       "type": "string",
@@ -7703,6 +7851,31 @@
         "auto",
         "contain",
         "none"
+      ]
+    },
+    "AxisLock": {
+      "oneOf": [
+        {
+          "description": "No axis constraint — the swipe direction is judged freely.",
+          "type": "string",
+          "enum": [
+            "auto"
+          ]
+        },
+        {
+          "description": "Horizontal movement locks the vertical axis.",
+          "type": "string",
+          "enum": [
+            "horizontal"
+          ]
+        },
+        {
+          "description": "Vertical movement locks the horizontal axis.",
+          "type": "string",
+          "enum": [
+            "vertical"
+          ]
+        }
       ]
     },
     "NavigationRoute": {
@@ -9098,8 +9271,29 @@
             "type": "object",
             "additionalProperties": true
           }
+        },
+        "disabledEvents": {
+          "description": "Event hooks disabled for this lifecycle scope (`[\"onTerminate\", ...]`). Order is preserved exactly as authored; the schema layer never dedups or rewrites it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "interactionOrder": {
+          "description": "Explicit hook evaluation order. Order is preserved exactly as authored; the schema layer never dedups or rewrites it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "additionalProperties": true
     },
     "AppConfig": {
       "type": "object",
@@ -9378,8 +9572,29 @@
             "type": "object",
             "additionalProperties": true
           }
+        },
+        "disabledEvents": {
+          "description": "Event hooks disabled for this lifecycle scope (`[\"onUnmount\", ...]`). Order is preserved exactly as authored; the schema layer never dedups or rewrites it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "interactionOrder": {
+          "description": "Explicit hook evaluation order (`[\"onMount\", \"onUnmount\", ...]`). Order is preserved exactly as authored; the schema layer never dedups or rewrites it.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "additionalProperties": true
     },
     "LogicModuleRef": {
       "type": "object",

@@ -610,3 +610,73 @@ fn projected_screen_root_is_viewport_sized() {
     assert_eq!((rect.size.width, rect.size.height), (320.0, 480.0));
     assert!(runtime.layout.is_origin_normalized(root));
 }
+
+/// Raw-pointer escape hatch end-to-end: a pointer Down inside a
+/// `gestures.rawPointer` subtree routes as `SemanticEvent::RawPointer`
+/// and the dispatcher must resolve and execute the authored
+/// `onRawPointer` ActionList (gesture event → dispatcher → expression
+/// VM → state write). R1 Blocker 1 runtime regression — `semantic.rs`
+/// already maps `RawPointer` → `onRawPointer`, so this pins the whole
+/// execution path independent of AOT coverage.
+#[test]
+fn raw_pointer_handler_executes_end_to_end() {
+    use crate::geometry::point;
+    use crate::gesture::pointer::{PointerEvent, PointerPhase};
+    let mut rt = Runtime::new();
+    rt.load_str(
+        r#"{
+              "version":"0.8.0",
+              "state":{ "raws": { "type":"int", "default":0 } },
+              "children":[
+                { "type":"frame","id":"pad","x":0,"y":0,"width":200,"height":200,
+                  "gestures":{ "rawPointer":true },
+                  "events":{ "onRawPointer": [ { "set": { "$app.raws": "$state.raws + 1" } } ] }
+                }
+              ]
+            }"#,
+    )
+    .unwrap();
+    rt.build_layout((400.0, 300.0)).unwrap();
+    rt.rebuild_spatial();
+
+    // Down inside the rawPointer subtree → one `RawPointer` semantic
+    // event, and the handler's `set` writes the state immediately.
+    let emitted = rt.dispatch_pointer(PointerEvent::simple(
+        0,
+        PointerPhase::Down,
+        point(50.0, 50.0),
+    ));
+    assert_eq!(emitted.len(), 1, "raw subtree must emit exactly RawPointer");
+    assert!(matches!(
+        emitted[0],
+        SemanticEvent::RawPointer {
+            phase: PointerPhase::Down,
+            ..
+        }
+    ));
+    assert_eq!(
+        rt.state.app_get("raws").and_then(|v| v.as_i64()).unwrap(),
+        1,
+        "onRawPointer ActionList must execute on the Down phase"
+    );
+
+    // The same pointer's subsequent Move keeps flowing to the raw root
+    // (no arena re-arming) and fires the handler again.
+    let emitted = rt.dispatch_pointer(PointerEvent::simple(
+        0,
+        PointerPhase::Move,
+        point(60.0, 60.0),
+    ));
+    assert!(matches!(
+        emitted[0],
+        SemanticEvent::RawPointer {
+            phase: PointerPhase::Move,
+            ..
+        }
+    ));
+    assert_eq!(
+        rt.state.app_get("raws").and_then(|v| v.as_i64()).unwrap(),
+        2,
+        "onRawPointer ActionList must execute on Move phases too"
+    );
+}

@@ -1,6 +1,79 @@
 use crate::expression::Expression;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
+
+/// Flattened bag of unknown/future interaction keys.
+///
+/// serde treats it like the map it wraps (`#[serde(transparent)]`), so
+/// the enclosing struct's `#[serde(flatten)]` field hoists every key
+/// into the parent object and unknown keys survive round-trip verbatim.
+///
+/// ts-rs refuses to flatten a plain map (`"{ [key in string]?: JsonValue }
+/// cannot be flattened"`), so the manual `TS` impl below reuses ts-rs's
+/// own map rendering as `inline_flattened`. The generated TypeScript for
+/// the enclosing struct therefore becomes
+/// `{ <known fields> } & ({ [key in string]?: JsonValue })` — known
+/// fields stay precise AND arbitrary future keys stay expressible.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct ExtraJson(pub BTreeMap<String, serde_json::Value>);
+
+impl Deref for ExtraJson {
+    type Target = BTreeMap<String, serde_json::Value>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for ExtraJson {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+// ts-rs's derived `TS` cannot be used on a transparent newtype in a
+// flattened position (the map impl panics on `inline_flattened`), so the
+// trait is implemented by hand, reusing the map's own TypeScript
+// rendering `{ [key in string]?: JsonValue }`.
+//
+// The rendering is wrapped in parens: ts-rs merges `{ A } & { B }` into a
+// single object literal, which is invalid for a *mapped* type member
+// (`{ x: T, [key in string]?: V }` does not parse). The parentheses keep
+// the intersection shape `{ known: ... } & ({ [key in string]?: JsonValue })`,
+// which is valid TypeScript and keeps known fields independent of the
+// index signature.
+#[cfg(feature = "export-ts")]
+impl ts_rs::TS for ExtraJson {
+    type WithoutGenerics = Self;
+
+    fn name() -> String {
+        <BTreeMap<String, serde_json::Value> as ts_rs::TS>::name()
+    }
+
+    fn inline() -> String {
+        <Self as ts_rs::TS>::name()
+    }
+
+    fn inline_flattened() -> String {
+        format!("({})", <Self as ts_rs::TS>::name())
+    }
+
+    fn decl() -> String {
+        panic!("ExtraJson cannot be declared")
+    }
+
+    fn decl_concrete() -> String {
+        panic!("ExtraJson cannot be declared")
+    }
+
+    fn visit_dependencies(v: &mut impl ts_rs::TypeVisitor)
+    where
+        Self: 'static,
+    {
+        v.visit::<serde_json::Value>();
+    }
+}
 
 /// A single Action is a 1-key object: `{ "<action_name>": <body> }`.
 ///
@@ -67,6 +140,24 @@ pub struct EventHandlers {
     pub on_hover_enter: Option<ActionList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_hover_leave: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_press_start: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_press_end: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_press_cancel: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_swipe: Option<ActionList>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_context_menu: Option<ActionList>,
+    /// Raw pointer escape-hatch: fired for pointer Down/Move/Up when the
+    /// node (or an ancestor) declares `gestures.rawPointer`.
+    /// `SemanticEvent::RawPointer` maps here via
+    /// `gesture::semantic::handler_key`; the runtime was already able to
+    /// execute it dynamically (it survives round-trip through `extra`),
+    /// this field makes it typed so AOT covers it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_raw_pointer: Option<ActionList>,
 
     // Input-node events
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,6 +176,14 @@ pub struct EventHandlers {
     pub on_scroll: Option<ActionList>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_reach_end: Option<ActionList>,
+
+    /// Future/unknown hook keys (e.g. `onFutureGesture`). Preserved
+    /// verbatim on round-trip; known hooks win on key collision. The
+    /// runtime never executes unknown hooks — an older runtime passes
+    /// them through untouched. Exported to TypeScript as
+    /// `{ [key in string]?: JsonValue }` alongside the known fields.
+    #[serde(default, flatten)]
+    pub extra: ExtraJson,
 }
 
 /// `bindings` is a map from property-name (with optional `bind:` prefix for two-way)
@@ -134,5 +233,92 @@ mod tests {
         let b: Bindings = serde_json::from_str(json).unwrap();
         assert_eq!(b.len(), 2);
         assert!(b.contains_key("bind:value"));
+    }
+
+    #[test]
+    fn rich_event_hooks_and_future_fields_round_trip() {
+        let input = serde_json::json!({
+            "onPressStart": [{"set":{"$app.down":"true"}}],
+            "onPressEnd": [{"set":{"$app.down":"false"}}],
+            "onPressCancel": [{"set":{"$app.cancelled":"true"}}],
+            "onSwipe": [{"set":{"$app.direction":"$event.direction"}}],
+            "onContextMenu": [{"toast":"`Context`"}],
+            "onFutureGesture": [{"futureAction":{"value":1}}]
+        });
+        let decoded: EventHandlers = serde_json::from_value(input.clone()).unwrap();
+        let output = serde_json::to_value(&decoded).unwrap();
+        assert_eq!(output, input);
+        // The unknown hook lands in `extra` and is never shadowed by
+        // a known field.
+        let future = decoded
+            .extra
+            .get("onFutureGesture")
+            .and_then(|v| v.get(0))
+            .and_then(|v| v.get("futureAction"))
+            .and_then(|v| v.get("value"))
+            .and_then(|v| v.as_i64());
+        assert_eq!(future, Some(1));
+    }
+
+    #[test]
+    fn known_action_future_body_round_trip() {
+        // `Action` is a raw 1-key body map; a future field appended to a
+        // known action's body must survive deserialize/serialize.
+        let input = serde_json::json!({
+            "onTap": [{"set":{"$app.down":"true","futureCool":{"x":1}}}],
+            "onPressCancel": [{"delay":{"ms":10,"futureMs":"$app.t"}}]
+        });
+        let decoded: EventHandlers = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), input);
+    }
+
+    #[test]
+    fn legacy_event_handlers_serialize_unchanged() {
+        // Old empty object: no new fields may leak into the output.
+        assert_eq!(
+            serde_json::to_value(EventHandlers::default()).unwrap(),
+            serde_json::json!({})
+        );
+        // Old fixture: only the authored key survives.
+        let input = serde_json::json!({
+            "onTap": [{"set":{"$state.count":"$state.count + 1"}}],
+            "onLongPress": [{"openMenu":"context"}]
+        });
+        let decoded: EventHandlers = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), input);
+    }
+
+    #[test]
+    fn raw_pointer_handler_round_trips() {
+        // R1 Blocker 1: `onRawPointer` is a first-class typed hook now —
+        // it must deserialize into the `on_raw_pointer` field (not linger
+        // in `extra`) and serialize back verbatim.
+        let input = serde_json::json!({
+            "onRawPointer": [ { "set": { "$app.raws": "$state.raws + 1" } } ]
+        });
+        let decoded: EventHandlers = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(
+            decoded.on_raw_pointer.as_ref().map(ActionList::len),
+            Some(1)
+        );
+        assert!(decoded.extra.is_empty(), "known hook leaked into extra");
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), input);
+    }
+
+    #[test]
+    fn extra_json_is_transparent_on_the_wire() {
+        // `ExtraJson` is a serde-transparent newtype over the map, so
+        // it serializes as the bare object (no `0` key, no wrapping).
+        let input = serde_json::json!({ "onFutureGesture": [{ "futureAction": { "v": 1 } }] });
+        let decoded: ExtraJson = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), input);
+        // And it stays a plain map from Rust through `Deref`.
+        assert_eq!(
+            decoded
+                .get("onFutureGesture")
+                .and_then(|v| v.get(0))
+                .and_then(|v| v.get("futureAction")),
+            Some(&serde_json::json!({ "v": 1 }))
+        );
     }
 }

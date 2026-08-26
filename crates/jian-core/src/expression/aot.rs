@@ -177,21 +177,30 @@ pub fn warm_cache_from_document(doc: &PenDocument, cache: &ExpressionCache) -> u
     if let Some(lifecycle) = doc.lifecycle.as_ref() {
         walk_app_lifecycle(lifecycle, cache, &mut compiled);
     }
-    if let Some(pages) = doc.pages.as_ref() {
-        for page in pages {
-            if let Some(lifecycle) = page.lifecycle.as_ref() {
-                walk_page_lifecycle(lifecycle, cache, &mut compiled);
+    // Single pass over `pages`: every page's lifecycle hooks AND its
+    // node tree are walked here, so nothing below is visited twice.
+    // (Pre-fix shape walked all pages' lifecycle hooks but only
+    // `pages[0].children` — the multi-page AOT gap.)
+    match doc.pages.as_ref() {
+        Some(pages) if !pages.is_empty() => {
+            for page in pages {
+                if let Some(lifecycle) = page.lifecycle.as_ref() {
+                    walk_page_lifecycle(lifecycle, cache, &mut compiled);
+                }
+                walk_children(&page.children, cache, &mut compiled);
             }
         }
-    }
-    let roots: &[PenNode] = match (&doc.pages, &doc.children) {
-        (Some(pages), _) if !pages.is_empty() => &pages[0].children,
-        _ => doc.children.as_slice(),
-    };
-    for node in roots {
-        walk_node(node, cache, &mut compiled);
+        // Documents without pages keep walking the top-level `children`
+        // (legacy single-page shape).
+        _ => walk_children(doc.children.as_slice(), cache, &mut compiled),
     }
     compiled
+}
+
+fn walk_children(roots: &[PenNode], cache: &ExpressionCache, compiled: &mut usize) {
+    for node in roots {
+        walk_node(node, cache, compiled);
+    }
 }
 
 fn walk_app_lifecycle(hooks: &AppLifecycleHooks, cache: &ExpressionCache, compiled: &mut usize) {
@@ -329,14 +338,14 @@ fn walk_bindings(bindings: &Bindings, cache: &ExpressionCache, compiled: &mut us
     }
 }
 
-/// All 21 typed event hooks on `EventHandlers`. Returning a
+/// All 27 typed event hooks on `EventHandlers`. Returning a
 /// fixed-size array (rather than serde-iterating) keeps this
 /// walker compile-checked: adding a new hook to `EventHandlers`
 /// without updating this list would silently miss it for AOT.
 /// `event_handler_lists_match_struct_field_count` test pins the
 /// count so the omission is caught at test time, not at runtime
 /// on a real pack.
-fn event_handler_lists(events: &EventHandlers) -> [Option<&ActionList>; 21] {
+fn event_handler_lists(events: &EventHandlers) -> [Option<&ActionList>; 27] {
     [
         events.on_tap.as_ref(),
         events.on_double_tap.as_ref(),
@@ -352,6 +361,12 @@ fn event_handler_lists(events: &EventHandlers) -> [Option<&ActionList>; 21] {
         events.on_rotate_end.as_ref(),
         events.on_hover_enter.as_ref(),
         events.on_hover_leave.as_ref(),
+        events.on_press_start.as_ref(),
+        events.on_press_end.as_ref(),
+        events.on_press_cancel.as_ref(),
+        events.on_swipe.as_ref(),
+        events.on_context_menu.as_ref(),
+        events.on_raw_pointer.as_ref(),
         events.on_change.as_ref(),
         events.on_submit.as_ref(),
         events.on_focus.as_ref(),
@@ -471,454 +486,9 @@ pub fn chunks_to_snapshot(chunks: &BTreeMap<String, Chunk>) -> ExpressionsSnapsh
     }
 }
 
+// Inline tests moved out to keep this file under the 800-line limit;
+// the sibling module is registered through a path attribute so the
+// exhaustive-walker tests stay adjacent to the code they pin.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::expression::Expression;
-    use jian_ops_schema::load_str;
-
-    #[test]
-    fn warm_cache_picks_up_literal_expressions_without_dollar_or_backtick() {
-        // Codex round 3 CONCERN: gate-free walker captures
-        // parser-valid literal expressions that earlier
-        // `$`/backtick gating dropped. `true`, `42`, and
-        // string literals all compile; navigation paths like
-        // `"detail"` (a bare identifier) parse as PushScopeRef
-        // and lazy-resolve at runtime.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "lit",
-          "app": { "name": "Lit", "version": "1", "id": "lit" },
-          "children": [
-            { "type": "rectangle", "id": "r",
-              "x": 0, "y": 0, "width": 10, "height": 10,
-              "bindings": { "x": "42", "y": "true" } }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let _ = warm_cache_from_document(&doc, &cache);
-        let dump = cache.dump();
-        assert!(
-            dump.contains_key("42"),
-            "literal `42` missing from dump: {:?}",
-            dump.keys().collect::<Vec<_>>()
-        );
-        assert!(
-            dump.contains_key("true"),
-            "literal `true` missing from dump: {:?}",
-            dump.keys().collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn event_handler_lists_match_struct_field_count() {
-        // Codex round 4 NIT + round 5 CONCERN: exhaustive
-        // destructure of `EventHandlers` so any future field
-        // addition forces a compile error in this test (missing
-        // pattern). Without exhaustive matching, a new
-        // `on_long_press_2` field would not break compilation
-        // but `event_handler_lists` would silently miss it.
-        let dummy: jian_ops_schema::events::ActionList = vec![];
-        let handlers = jian_ops_schema::events::EventHandlers {
-            on_tap: Some(dummy.clone()),
-            on_double_tap: Some(dummy.clone()),
-            on_long_press: Some(dummy.clone()),
-            on_pan_start: Some(dummy.clone()),
-            on_pan_update: Some(dummy.clone()),
-            on_pan_end: Some(dummy.clone()),
-            on_scale_start: Some(dummy.clone()),
-            on_scale_update: Some(dummy.clone()),
-            on_scale_end: Some(dummy.clone()),
-            on_rotate_start: Some(dummy.clone()),
-            on_rotate_update: Some(dummy.clone()),
-            on_rotate_end: Some(dummy.clone()),
-            on_hover_enter: Some(dummy.clone()),
-            on_hover_leave: Some(dummy.clone()),
-            on_change: Some(dummy.clone()),
-            on_submit: Some(dummy.clone()),
-            on_focus: Some(dummy.clone()),
-            on_blur: Some(dummy.clone()),
-            on_key: Some(dummy.clone()),
-            on_scroll: Some(dummy.clone()),
-            on_reach_end: Some(dummy),
-        };
-        // Exhaustive destructure: rust enforces every field is
-        // bound by name. Adding a new field to `EventHandlers`
-        // without updating this pattern triggers a "missing
-        // field" compile error here, forcing the contributor to
-        // also update `event_handler_lists` above.
-        let jian_ops_schema::events::EventHandlers {
-            on_tap,
-            on_double_tap,
-            on_long_press,
-            on_pan_start,
-            on_pan_update,
-            on_pan_end,
-            on_scale_start,
-            on_scale_update,
-            on_scale_end,
-            on_rotate_start,
-            on_rotate_update,
-            on_rotate_end,
-            on_hover_enter,
-            on_hover_leave,
-            on_change,
-            on_submit,
-            on_focus,
-            on_blur,
-            on_key,
-            on_scroll,
-            on_reach_end,
-        } = handlers.clone();
-        let bound = [
-            on_tap.is_some(),
-            on_double_tap.is_some(),
-            on_long_press.is_some(),
-            on_pan_start.is_some(),
-            on_pan_update.is_some(),
-            on_pan_end.is_some(),
-            on_scale_start.is_some(),
-            on_scale_update.is_some(),
-            on_scale_end.is_some(),
-            on_rotate_start.is_some(),
-            on_rotate_update.is_some(),
-            on_rotate_end.is_some(),
-            on_hover_enter.is_some(),
-            on_hover_leave.is_some(),
-            on_change.is_some(),
-            on_submit.is_some(),
-            on_focus.is_some(),
-            on_blur.is_some(),
-            on_key.is_some(),
-            on_scroll.is_some(),
-            on_reach_end.is_some(),
-        ];
-        assert_eq!(bound.iter().filter(|x| **x).count(), 21);
-
-        let lists = event_handler_lists(&handlers);
-        assert_eq!(
-            lists.iter().filter(|o| o.is_some()).count(),
-            21,
-            "if EventHandlers grew an `on_*` field, update event_handler_lists()"
-        );
-    }
-
-    #[test]
-    fn warm_cache_picks_up_lifecycle_expressions() {
-        // Codex round 4 CONCERN: app/page/node lifecycle hooks
-        // must contribute to AOT coverage. Author writes
-        // `onLaunch: [{ set: { ... } }]` — the set value is
-        // expression-typed and must land in the cache.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "lc",
-          "app": { "name": "LC", "version": "1", "id": "lc" },
-          "state": { "launched": { "type": "bool", "default": false } },
-          "lifecycle": {
-            "onLaunch": [ { "set": { "$app.launched": "$app.launched || true" } } ]
-          },
-          "children": []
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let _ = warm_cache_from_document(&doc, &cache);
-        assert!(
-            cache.dump().contains_key("$app.launched || true"),
-            "app lifecycle expression missing from cache: {:?}",
-            cache.dump().keys().collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn warm_cache_drops_bare_identifier_chunks() {
-        // Codex round 2 CONCERN: schema string-typed leaves like
-        // node ids (`"root"`), type enums (`"int"`), and style
-        // enums (`"solid"`) parse as bare scope refs without `$`.
-        // The post-compile filter must drop them so they don't
-        // pollute the AOT snapshot.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "ids",
-          "app": { "name": "Ids", "version": "1", "id": "ids" },
-          "state": { "n": { "type": "int", "default": 0 } },
-          "children": [
-            { "type": "rectangle", "id": "root",
-              "x": 0, "y": 0, "width": 10, "height": 10,
-              "bindings": { "x": "$app.n + 1" } }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let _ = warm_cache_from_document(&doc, &cache);
-        let dump = cache.dump();
-        assert!(
-            dump.contains_key("$app.n + 1"),
-            "valid expression must be cached: {:?}",
-            dump.keys().collect::<Vec<_>>()
-        );
-        // None of the bare ids / enum values should land.
-        for junk in ["root", "ids", "Ids", "int", "rectangle"] {
-            assert!(
-                !dump.contains_key(junk),
-                "bare-id `{junk}` must NOT be cached: {:?}",
-                dump.keys().collect::<Vec<_>>()
-            );
-        }
-    }
-
-    #[test]
-    fn warm_cache_skips_object_keys() {
-        // Codex round 2 CONCERN: tests must catch a future
-        // regression where the walker accidentally walks object
-        // keys. The fixture has `set: { "$app.count": "..." }`;
-        // the key `"$app.count"` is a scope-target string the
-        // runtime never compiles as a Tier-1 chunk, and the
-        // walker must not treat it as one.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "keys",
-          "app": { "name": "Keys", "version": "1", "id": "keys" },
-          "state": { "count": { "type": "int", "default": 0 } },
-          "children": [
-            { "type": "rectangle", "id": "btn",
-              "x": 0, "y": 0, "width": 10, "height": 10,
-              "events": { "onTap": [ { "set": { "$app.count": "$app.count + 1" } } ] } }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let _ = warm_cache_from_document(&doc, &cache);
-        let dump = cache.dump();
-        assert!(
-            dump.contains_key("$app.count + 1"),
-            "set value must be cached"
-        );
-        // The set KEY `"$app.count"` is a `$`-prefixed string
-        // and DOES pass `is_trivial_bare_id_chunk` (passes the
-        // filter — `$` prefix means "keep"). So if the walker
-        // walked keys, this assertion would FAIL. The walker
-        // skipping keys means `"$app.count"` arrives only via
-        // its appearance INSIDE the `set` value's RHS string —
-        // which IS the substring `$app.count` of `$app.count + 1`,
-        // not an independent string-leaf in the JSON tree. So
-        // the cache should NOT contain `$app.count` as a separate
-        // key.
-        assert!(
-            !dump.contains_key("$app.count"),
-            "set object key `$app.count` leaked into cache: {:?}",
-            dump.keys().collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn warm_cache_picks_up_binding_and_action_expressions() {
-        // A doc with both a binding (`$app.count + 1` in a
-        // `bindings.content` slot) AND an action expression
-        // (`$app.count + 1` in onTap.set body). Both should
-        // dedupe to the same single source in the cache.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "warm",
-          "app": { "name": "Warm", "version": "1", "id": "warm" },
-          "state": { "count": { "type": "int", "default": 0 } },
-          "children": [
-            { "type": "frame", "id": "root", "width": 320, "height": 240, "x": 0, "y": 0,
-              "children": [
-                { "type": "text", "id": "label",
-                  "x": 16, "y": 16, "width": 200, "height": 32,
-                  "content": "0",
-                  "bindings": { "content": "$app.count + 1" } },
-                { "type": "rectangle", "id": "btn",
-                  "x": 16, "y": 64, "width": 100, "height": 40,
-                  "events": { "onTap": [ { "set": { "$app.count": "$app.count + 1" } } ] } }
-              ]
-            }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let count = warm_cache_from_document(&doc, &cache);
-
-        // The same source string `$app.count + 1` shows up twice:
-        // once as a binding value, once as the `set` action's
-        // value. The cache dedupes by source, so exactly one
-        // entry for that source. Other parser-valid string-typed
-        // schema fields (e.g. an `id`, the `state` `type` enum)
-        // can also compile and land in the cache — assertion is
-        // "the binding+action shared source IS present", not
-        // "exactly one entry total". Object KEYS (`"$app.count"`
-        // in the set body) are not walked — they're scope
-        // targets in the action constructor, never compiled as
-        // Tier-1 expressions.
-        let dump = cache.dump();
-        assert!(
-            dump.contains_key("$app.count + 1"),
-            "binding+action shared source missing from dump: {:?}",
-            dump.keys().collect::<Vec<_>>()
-        );
-        // The walker counts every successful compile-or-cache-hit;
-        // first sighting compiles, the second is a cache hit.
-        // `count` reports compiles+hits — both >= 1 for the
-        // shared source, total >= 2.
-        assert!(count >= 2, "expected ≥2 walker visits, got {count}");
-    }
-
-    #[test]
-    fn warm_cache_drops_unparseable_strings() {
-        // Strings that look like text content / hex colors /
-        // SVG path data fail to parse as Tier-1 expressions
-        // and must NOT enter the cache. The gate-free walker
-        // tries each one but `cache::compile_error_not_cached`
-        // pins that errored compiles don't insert.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "plain",
-          "app": { "name": "Plain", "version": "1", "id": "plain" },
-          "children": [
-            { "type": "text", "id": "label",
-              "x": 16, "y": 16, "width": 200, "height": 32,
-              "content": "Hello world!" }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let _ = warm_cache_from_document(&doc, &cache);
-        // `Hello world!` parses as `Hello` followed by garbage —
-        // a parse error. Cache must not contain it.
-        assert!(
-            !cache.dump().contains_key("Hello world!"),
-            "unparseable text content leaked into cache"
-        );
-    }
-
-    #[test]
-    fn warm_cache_failure_does_not_block_peer_success() {
-        // Codex round 3 CONCERN: pin that a gate-passing parse
-        // failure beside a valid expression in the same doc
-        // doesn't poison the walker — the valid peer must still
-        // land in the cache.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "mix",
-          "app": { "name": "Mix", "version": "1", "id": "mix" },
-          "state": { "n": { "type": "int", "default": 0 } },
-          "children": [
-            { "type": "rectangle", "id": "good", "x": 0, "y": 0, "width": 10, "height": 10,
-              "bindings": { "x": "$app.n + 1" } },
-            { "type": "rectangle", "id": "bad", "x": 0, "y": 20, "width": 10, "height": 10,
-              "bindings": { "x": "$app.n +" } }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let _ = warm_cache_from_document(&doc, &cache);
-        let dump = cache.dump();
-        assert!(
-            dump.contains_key("$app.n + 1"),
-            "valid peer expression missing from dump: {:?}",
-            dump.keys().collect::<Vec<_>>()
-        );
-        assert!(
-            !dump.contains_key("$app.n +"),
-            "errored expression leaked into cache"
-        );
-    }
-
-    #[test]
-    fn warm_cache_compile_failures_are_silent() {
-        // A doc with a `$`-bearing string that fails parse (e.g.
-        // a malformed expression). The walker must not panic;
-        // the cache must not retain the failed source.
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "bad",
-          "app": { "name": "Bad", "version": "1", "id": "bad" },
-          "children": [
-            { "type": "rectangle", "id": "r",
-              "x": 0, "y": 0, "width": 10, "height": 10,
-              "bindings": { "x": "$app.x +" } }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let _ = warm_cache_from_document(&doc, &cache);
-        // The failing `$app.x +` source MUST NOT appear in the
-        // cache (matches `super::cache::tests::compile_error_not_
-        // cached` invariant).
-        assert!(!cache.dump().contains_key("$app.x +"));
-    }
-
-    #[test]
-    fn warm_cache_dedupes_repeated_sources() {
-        // Same expression `$app.n` appears 3× across nodes —
-        // BTreeMap-keyed by source so the cache holds exactly one
-        // entry for that source (other parser-valid strings in
-        // the doc — node ids, enum values — can also compile and
-        // land independently; the dedup invariant is per-source).
-        let src = r##"{
-          "formatVersion": "1.0",
-          "version": "1.0.0",
-          "id": "dedup",
-          "app": { "name": "Dedup", "version": "1", "id": "dedup" },
-          "state": { "n": { "type": "int", "default": 0 } },
-          "children": [
-            { "type": "rectangle", "id": "a", "x": 0, "y": 0, "width": 10, "height": 10,
-              "bindings": { "x": "$app.n" } },
-            { "type": "rectangle", "id": "b", "x": 0, "y": 20, "width": 10, "height": 10,
-              "bindings": { "x": "$app.n" } },
-            { "type": "rectangle", "id": "c", "x": 0, "y": 40, "width": 10, "height": 10,
-              "bindings": { "x": "$app.n" } }
-          ]
-        }"##;
-        let doc = load_str(src).expect("parse fixture").value;
-        let cache = ExpressionCache::new();
-        let count = warm_cache_from_document(&doc, &cache);
-        let dump = cache.dump();
-        // 3 sightings of `$app.n` deduped to 1 entry; first
-        // compile succeeds, next two are cache hits.
-        assert!(dump.contains_key("$app.n"));
-        // Walker count >= 3 (3 visits to `$app.n` plus any
-        // other parser-valid string visits).
-        assert!(count >= 3, "expected ≥3 walker visits, got {count}");
-    }
-
-    #[test]
-    fn round_trip_compiled_expression_through_snapshot() {
-        // Take a real compiled expression, snapshot it, decode back,
-        // confirm bit-for-bit equality of the chunk.
-        let expr = Expression::compile("$app.count + 1").expect("compile");
-        let mut chunks = BTreeMap::new();
-        chunks.insert(expr.source.clone(), expr.chunk.clone());
-        let snap = chunks_to_snapshot(&chunks);
-        let bytes = snap.write_bytes().expect("encode");
-        let back = jian_ops_schema::pack::ExpressionsSnapshot::read_bytes(&bytes).expect("decode");
-        let restored = snapshot_to_chunks(&back);
-        let restored_chunk = restored.get(&expr.source).expect("source preserved");
-        assert_eq!(restored_chunk.ops, expr.chunk.ops);
-        assert_eq!(restored_chunk.strings, expr.chunk.strings);
-        assert_eq!(restored_chunk.scope_paths, expr.chunk.scope_paths);
-    }
-
-    #[test]
-    fn round_trip_preserves_string_pool() {
-        // Template expressions intern strings; round-trip must
-        // preserve them as-is for `PushString(idx)` to resolve to
-        // the same byte sequence.
-        let expr = Expression::compile("\"hello \" + $app.name").expect("compile");
-        let mut chunks = BTreeMap::new();
-        chunks.insert(expr.source.clone(), expr.chunk.clone());
-        let snap = chunks_to_snapshot(&chunks);
-        let restored = snapshot_to_chunks(&snap);
-        let r = restored.get(&expr.source).unwrap();
-        assert_eq!(r.strings, expr.chunk.strings);
-    }
-}
+#[path = "aot_tests.rs"]
+mod aot_tests;
