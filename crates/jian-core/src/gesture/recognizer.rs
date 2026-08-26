@@ -131,6 +131,14 @@ pub trait Recognizer {
     /// WITHOUT emitting or claiming. Default: no-op.
     fn witness_pointer(&mut self, _event: &PointerEvent) {}
 
+    /// Router refresh hook: called immediately before each pointer event
+    /// is fed to this recognizer, with the CURRENT state-aware
+    /// `gestures.disabled` predicate. Recognizers that captured a
+    /// handler-owner node + config at Down time invalidate their session
+    /// here when that owner became dynamically disabled mid-gesture.
+    /// Default: no-op.
+    fn refresh_node_disabled(&mut self, _node_disabled: &dyn Fn(NodeKey) -> bool) {}
+
     /// Called once per frame by the host adapter; enables time-based
     /// recognizers (LongPress, double-tap timeout) to wake up.
     fn tick(&mut self, _now_ms: u64, _arena: &mut ArenaHandle<'_>) {}

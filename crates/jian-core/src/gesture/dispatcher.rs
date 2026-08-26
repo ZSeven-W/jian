@@ -48,6 +48,37 @@ pub(crate) fn resolve_handler(
     None
 }
 
+/// Owner-anchored `onSwipe` resolution for a claimed Swipe.
+///
+/// A Swipe's recognizer target is its CAPTURED handler owner (the node
+/// that supplied the qualifying thresholds), not a generic hit target —
+/// so the bubbling walk of [`resolve_handler`] must never apply to it:
+/// after a same-batch `PressCancel` action dynamically disables the
+/// captured owner, a generic bubble would re-bind the claimed Swipe to
+/// the next *enabled* ancestor handler (the parent's), executing a
+/// handler whose thresholds never qualified.
+///
+/// Resolution is anchored EXACTLY at `event.node()`: the owner must
+/// still exist, still declare an enabled (nonempty, not
+/// `disabledEvents`-slated, not dynamically disabled) `onSwipe`.
+/// Otherwise the Swipe is dropped — never re-resolved to an ancestor.
+/// Other semantics (Tap/Press/Pan/…) keep [`resolve_handler`] bubbling.
+pub(crate) fn resolve_swipe_owner(
+    doc: &RuntimeDocument,
+    event: &SemanticEvent,
+    node_disabled: impl Fn(NodeKey) -> bool,
+) -> Option<(NodeKey, serde_json::Value)> {
+    let key = event.node();
+    let data = doc.tree.nodes.get(key)?;
+    if !config::node_declares_handler(doc, key, event.handler_key())
+        || config::node_disables_handler(doc, key, event.handler_key())
+        || node_disabled(key)
+    {
+        return None;
+    }
+    extract_handler(&data.schema, event.handler_key()).map(|list| (key, list))
+}
+
 /// Pull `events.<handler>` off a PenNode. Because the schema types are
 /// per-variant, we round-trip through JSON.
 fn extract_handler(n: &jian_ops_schema::node::PenNode, handler: &str) -> Option<serde_json::Value> {

@@ -86,7 +86,19 @@ impl Runtime {
             let node_disabled = |key: crate::document::NodeKey| {
                 node_gestures_disabled(document, state_ref, expr_cache_ref, &page_id, key)
             };
-            let resolved = dispatcher::resolve_handler(document, event, &node_disabled);
+            // A claimed Swipe is owner-anchored: `resolve_swipe_owner`
+            // never bubbles to an ancestor, because the thresholds that
+            // qualified the claim belonged to the captured owner — and a
+            // same-batch PressCancel action may have just disabled it
+            // (see also the batch re-validation in
+            // `dispatch_pointer_events`). Every other semantic keeps the
+            // general bubbled resolution.
+            let resolved = match event {
+                SemanticEvent::Swipe { .. } => {
+                    dispatcher::resolve_swipe_owner(document, event, &node_disabled)
+                }
+                _ => dispatcher::resolve_handler(document, event, &node_disabled),
+            };
             let handler_owner = resolved.as_ref().map(|(owner, _)| *owner);
             // The ActionContext node id follows the resolved handler
             // owner (bubbling target), NOT the hit node — `$self` writes

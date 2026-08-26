@@ -30,4 +30,6 @@ pub use pointer::{
     WheelEvent,
 };
 pub use recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
-pub use semantic::{GestureFacts, PointerFacts, SemanticEvent, SemanticEventEnvelope};
+pub use semantic::{
+    GestureFacts, PointerFacts, SemanticEvent, SemanticEventEnvelope, SwipeDirection,
+};

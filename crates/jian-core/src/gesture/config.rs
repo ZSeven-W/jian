@@ -11,11 +11,23 @@
 //! here, where the router needs them.
 
 use crate::document::{NodeKey, RuntimeDocument};
+use jian_ops_schema::gestures::AxisLock;
 
 pub const DEFAULT_DRAG_THRESHOLD_PX: f32 = 8.0;
 pub const DEFAULT_LONG_PRESS_MS: u64 = 500;
 pub const DEFAULT_DOUBLE_TAP_TIMEOUT_MS: u64 = 300;
 pub const DEFAULT_DOUBLE_TAP_SLOP_PX: f32 = 16.0;
+/// Shared default minimum travel distance for a Swipe to claim
+/// (logical px, PROJECTED onto the judged axis — `|dx|` for a
+/// horizontal swipe, `|dy|` for a vertical one). Swipe has no Flutter
+/// analogue in the existing recognizer set; 48px is the round-number
+/// "clear directional stroke" threshold and matches the schema
+/// doc-comment default.
+pub const DEFAULT_SWIPE_MIN_DISTANCE_PX: f32 = 48.0;
+/// Shared default minimum velocity for a Swipe to claim (logical px/s,
+/// the component on the judged axis, with the same sign as the judged
+/// direction). Short slow drags must not register as directional flicks.
+pub const DEFAULT_SWIPE_MIN_VELOCITY_PX_PER_SECOND: f32 = 320.0;
 
 /// Runtime-relevant `gestures` configuration of one node.
 #[derive(Debug, Clone, Copy, Default)]
@@ -24,6 +36,9 @@ pub struct GestureConfig {
     pub long_press_duration: Option<u64>,
     pub double_tap_timeout: Option<u64>,
     pub double_tap_slop: Option<f32>,
+    pub swipe_min_distance: Option<f32>,
+    pub swipe_min_velocity: Option<f32>,
+    pub axis_lock: Option<AxisLock>,
 }
 
 impl GestureConfig {
@@ -43,6 +58,20 @@ impl GestureConfig {
     /// Effective double-tap slop (`doubleTapSlop` or default).
     pub fn effective_double_tap_slop(&self) -> f32 {
         self.double_tap_slop.unwrap_or(DEFAULT_DOUBLE_TAP_SLOP_PX)
+    }
+    /// Effective swipe minimum distance (`swipeMinDistance` or default).
+    pub fn effective_swipe_min_distance(&self) -> f32 {
+        self.swipe_min_distance
+            .unwrap_or(DEFAULT_SWIPE_MIN_DISTANCE_PX)
+    }
+    /// Effective swipe minimum velocity (`swipeMinVelocity` or default).
+    pub fn effective_swipe_min_velocity(&self) -> f32 {
+        self.swipe_min_velocity
+            .unwrap_or(DEFAULT_SWIPE_MIN_VELOCITY_PX_PER_SECOND)
+    }
+    /// Effective axis lock (`axisLock` or the `Auto` default).
+    pub fn effective_axis_lock(&self) -> AxisLock {
+        self.axis_lock.unwrap_or(AxisLock::Auto)
     }
 }
 
@@ -86,6 +115,17 @@ pub fn gesture_config(doc: &RuntimeDocument, key: NodeKey) -> GestureConfig {
             .get("doubleTapSlop")
             .and_then(|v| v.as_f64())
             .map(|v| v as f32),
+        swipe_min_distance: g
+            .get("swipeMinDistance")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32),
+        swipe_min_velocity: g
+            .get("swipeMinVelocity")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32),
+        axis_lock: g
+            .get("axisLock")
+            .and_then(|v| serde_json::from_value::<AxisLock>(v.clone()).ok()),
     }
 }
 
@@ -167,10 +207,7 @@ pub fn chain_owner_with(
 ) -> Option<NodeKey> {
     let mut node = Some(from);
     for _ in 0..=doc.tree.nodes.len() {
-        let key = match node {
-            Some(key) => key,
-            None => return None,
-        };
+        let key = node?;
         if node_declares_handler(doc, key, handler)
             && !node_disables_handler(doc, key, handler)
             && !node_disabled(key)
@@ -209,10 +246,7 @@ pub fn chain_pan_owner_with(
 ) -> Option<NodeKey> {
     let mut node = Some(from);
     for _ in 0..=doc.tree.nodes.len() {
-        let key = match node {
-            Some(key) => key,
-            None => return None,
-        };
+        let key = node?;
         let owns = PAN_HANDLER_KEYS.iter().any(|handler| {
             node_declares_handler(doc, key, handler)
                 && !node_disables_handler(doc, key, handler)
@@ -229,4 +263,40 @@ pub fn chain_pan_owner_with(
 /// Static-only variant of [`chain_pan_owner_with`].
 pub fn chain_pan_owner(doc: &RuntimeDocument, from: NodeKey) -> Option<NodeKey> {
     chain_pan_owner_with(doc, from, &|_| false)
+}
+
+/// Handler keys that constitute a Swipe gesture owner declaration.
+/// The handler name is singular — a swipe is a discrete one-shot event,
+/// not a start/update/end trio like Pan.
+pub const SWIPE_HANDLER_KEYS: [&str; 1] = ["onSwipe"];
+
+/// Nearest node on the ancestor chain of `from` (inclusive) that owns an
+/// enabled nonempty `onSwipe` handler. Same skip rules as
+/// [`chain_pan_owner_with`] (empty/null declarations, `disabledEvents`
+/// and `gestures.disabled` do not count) — the nearest enabled owner
+/// provides the Swipe recognizer's configuration and semantic node.
+pub fn chain_swipe_owner_with(
+    doc: &RuntimeDocument,
+    from: NodeKey,
+    node_disabled: &dyn Fn(NodeKey) -> bool,
+) -> Option<NodeKey> {
+    let mut node = Some(from);
+    for _ in 0..=doc.tree.nodes.len() {
+        let key = node?;
+        let owns = SWIPE_HANDLER_KEYS.iter().any(|handler| {
+            node_declares_handler(doc, key, handler)
+                && !node_disables_handler(doc, key, handler)
+                && !node_disabled(key)
+        });
+        if owns {
+            return Some(key);
+        }
+        node = doc.tree.nodes.get(key).and_then(|n| n.parent);
+    }
+    None
+}
+
+/// Static-only variant of [`chain_swipe_owner_with`].
+pub fn chain_swipe_owner(doc: &RuntimeDocument, from: NodeKey) -> Option<NodeKey> {
+    chain_swipe_owner_with(doc, from, &|_| false)
 }

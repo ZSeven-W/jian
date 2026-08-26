@@ -554,13 +554,16 @@ fn authored_thresholds_change_behavior() {
     let c = node_center(&rt, "btn");
 
     // 15px move is under the authored dragThreshold (30) — no Pan claim.
+    // Timestamps stay BELOW the authored 100ms LongPress deadline so
+    // timer-before-current arbitration (R2B) does not fire the LongPress
+    // before the Pan threshold is judged — isolated threshold test.
     let _ = rt.dispatch_pointer(mouse(1, PointerPhase::Down, c, 0));
-    let small = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 15.0, c.y), 100));
+    let small = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 15.0, c.y), 90));
     assert!(small.is_empty(), "got {small:?}");
     // 35px move crosses the authored threshold.
-    let big = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 35.0, c.y), 200));
+    let big = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 35.0, c.y), 95));
     assert_eq!(names(&big), ["onPanStart"]);
-    let _ = rt.dispatch_pointer(mouse(1, PointerPhase::Up, point(c.x + 35.0, c.y), 300));
+    let _ = rt.dispatch_pointer(mouse(1, PointerPhase::Up, point(c.x + 35.0, c.y), 120));
 
     // Authored longPressDuration = 100: 120ms tick fires, 80ms does not.
     let _ = rt.dispatch_pointer(mouse(2, PointerPhase::Down, c, 400));

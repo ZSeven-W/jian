@@ -15,6 +15,28 @@ use super::pointer::{Modifiers, MouseButtons, PointerEvent, PointerId, PointerKi
 use crate::document::NodeKey;
 use crate::geometry::Point;
 
+/// Direction of a completed swipe, judged from the total displacement of
+/// the pointer from its initiating Down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwipeDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl SwipeDirection {
+    /// Wire/payload value: `"left"`, `"right"`, `"up"`, `"down"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SwipeDirection::Left => "left",
+            SwipeDirection::Right => "right",
+            SwipeDirection::Up => "up",
+            SwipeDirection::Down => "down",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemanticEvent {
     Tap {
@@ -41,6 +63,25 @@ pub enum SemanticEvent {
     },
     PanEnd {
         node: NodeKey,
+        velocity: Point,
+    },
+    /// A completed swipe: the pointer traveled the configured
+    /// `swipeMinDistance` (or the shared default) along the judged
+    /// primary axis — the axis the direction came from — at
+    /// `swipeMinVelocity` (or the shared default) on that SAME axis,
+    /// with the same sign as the direction. Emitted exactly once, at the
+    /// claiming Move — there is no update stream.
+    Swipe {
+        node: NodeKey,
+        direction: SwipeDirection,
+        /// PROJECTED total travel from the initiating Down onto the
+        /// judged primary axis (`|dx|` for horizontal, `|dy|` for
+        /// vertical) — the exact quantity the distance gate checked,
+        /// NOT the Euclidean vector length. Logical px.
+        distance: f32,
+        /// Factual full segment velocity at the claiming Move (logical
+        /// px/s, both components). Only the gate looks at the single
+        /// axis component; the payload keeps the whole vector.
         velocity: Point,
     },
     ScaleStart {
@@ -126,6 +167,7 @@ impl SemanticEvent {
             | Self::PanStart { node, .. }
             | Self::PanUpdate { node, .. }
             | Self::PanEnd { node, .. }
+            | Self::Swipe { node, .. }
             | Self::ScaleStart { node, .. }
             | Self::ScaleUpdate { node, .. }
             | Self::ScaleEnd { node }
@@ -156,6 +198,7 @@ impl SemanticEvent {
             Self::PanStart { .. } => "onPanStart",
             Self::PanUpdate { .. } => "onPanUpdate",
             Self::PanEnd { .. } => "onPanEnd",
+            Self::Swipe { .. } => "onSwipe",
             Self::ScaleStart { .. } => "onScaleStart",
             Self::ScaleUpdate { .. } => "onScaleUpdate",
             Self::ScaleEnd { .. } => "onScaleEnd",
@@ -272,8 +315,9 @@ fn single_button(buttons: MouseButtons) -> Option<MouseButtons> {
 /// The `SemanticEvent` variants keep their existing fields (source
 /// compatible), while the envelope carries the complete factual set the
 /// design §5.3 demands — e.g. Pan gets start/current/delta/translation/
-/// velocity instead of only `delta`/`velocity`, and Scale/Rotate get
-/// absolute + per-frame delta values alongside their existing fields.
+/// velocity instead of only `delta`/`velocity`, Scale/Rotate get
+/// absolute + per-frame delta values alongside their existing fields,
+/// and Swipe gets direction/distance/velocity.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct GestureFacts {
     /// LongPress: authored/effective duration.
@@ -288,6 +332,15 @@ pub struct GestureFacts {
     pub pan_translation: Option<Point>,
     /// Pan: velocity in logical px/s.
     pub pan_velocity: Option<Point>,
+    /// Swipe: direction string (`"left"`/`"right"`/`"up"`/`"down"`).
+    pub swipe_direction: Option<String>,
+    /// Swipe: PROJECTED total travel from the initiating Down onto the
+    /// judged primary axis (the gated quantity; NOT the Euclidean
+    /// vector length). Logical px.
+    pub swipe_distance: Option<f32>,
+    /// Swipe: factual full segment velocity at the claiming Move
+    /// (logical px/s, both components).
+    pub swipe_velocity: Option<Point>,
     /// Scale: absolute scale ratio vs. the gesture's initial baseline.
     pub scale: Option<f32>,
     /// Scale: per-frame absolute difference from the previous event.
@@ -420,6 +473,19 @@ impl SemanticEventEnvelope {
                     if let Some(value) = value {
                         obj.insert(key.into(), point_json(value));
                     }
+                }
+            }
+            SemanticEvent::Swipe { .. } => {
+                // Payload values ride the gesture facts (the one
+                // payload path reads facts, never reconstructs them).
+                if let Some(direction) = &gesture.swipe_direction {
+                    obj.insert("direction".into(), serde_json::json!(direction));
+                }
+                if let Some(distance) = gesture.swipe_distance {
+                    obj.insert("distance".into(), serde_json::json!(distance));
+                }
+                if let Some(velocity) = gesture.swipe_velocity {
+                    obj.insert("velocity".into(), point_json(velocity));
                 }
             }
             SemanticEvent::ScaleStart { .. }

@@ -16,10 +16,17 @@
 //! matching second Tap yields only `DoubleTap` (no first- or second-Tap).
 //! Chains without `onDoubleTap` deliver Taps immediately (legacy single-
 //! tap behavior, which built-in widget activation depends on). The
-//! pending-Tap state machine lives in [`router_tap`]; the runtime flushes
-//! due actions via the internal [`Self::dispatch_current`] path, so a due
-//! Tap is delivered BEFORE the current event's slider side effects,
-//! disabled-predicate evaluation, hover semantics and arena routing.
+//! pending-Tap state machine lives in [`router_tap`]; the runtime drives
+//! due timers first (`tick_enveloped` at the incoming event's timestamp,
+//! then the internal [`Self::dispatch_current`] path), so a due LongPress
+//! or deferred Tap is delivered BEFORE the current event's slider side
+//! effects, disabled-predicate evaluation, hover semantics and arena
+//! routing — and the public dispatch entry points do the same. A
+//! host-sent `Cancel` is the per-pointer exception: it ticks EVERY other
+//! active arena first (a due LongPress belonging to a different pointer
+//! still wins timer-before-current), but skips the canceling pointer's
+//! OWN arena — the cancel is the terminal authority for its pointer (no
+//! LongPress/ContextMenu claim off it); a due pending Tap still flushes.
 //!
 //! # Multi-pointer recognizers (Scale / Rotate)
 //!
@@ -42,7 +49,7 @@ use super::raw::find_raw_root;
 use super::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
 use super::recognizers::{
     HoverRecognizer, LongPressRecognizer, PanRecognizer, PressRecognizer, RotateRecognizer,
-    ScaleRecognizer, TapRecognizer,
+    ScaleRecognizer, SwipeRecognizer, TapRecognizer,
 };
 use super::router_tap::{apply_tap_deferral, PendingTap};
 use super::semantic::{PointerFacts, SemanticEvent, SemanticEventEnvelope};
@@ -166,14 +173,28 @@ impl PointerRouter {
     /// installation, DoubleTap owner/deferral, ContextMenu owner,
     /// Scale/Rotate handler detection) consults it.
     ///
-    /// Static/public path: a due pending Tap is flushed BEFORE both Hover
-    /// semantics and the current event are processed — a deferred Tap must
-    /// never observe the current event's side effects, and input at the
-    /// exact deadline must never pair into a DoubleTap. The runtime pointer
-    /// path uses [`Self::dispatch_current`] after its own flush + due
-    /// delivery, so the Tap action runs before any current slider,
-    /// disabled-predicate, hover or arena decision (and the Router never
-    /// flushes the same pending Tap twice).
+    /// Timer-before-current: pointer input at `t` drives EVERY gesture
+    /// deadline `<= t` first — `tick_enveloped` advances arena timers
+    /// (LongPress / touch ContextMenu) and flushes a buffered deferred
+    /// Tap — so a due timer semantic is returned BEFORE both Hover
+    /// semantics and the current event's arena routing, and input at the
+    /// exact deadline can never pair into a DoubleTap or claim a Swipe
+    /// past a LongPress deadline. The runtime pointer path uses
+    /// [`Self::dispatch_current`] after its own tick + due delivery, so
+    /// the due actions run before any current slider, disabled-predicate,
+    /// hover or arena decision (and the Router never flushes the same
+    /// pending Tap twice).
+    ///
+    /// One exception, shared with the runtime path: a host-sent
+    /// `PointerPhase::Cancel` ticks the OTHER active arenas (per-pointer
+    /// isolation — a due LongPress / touch ContextMenu belonging to a
+    /// different pointer still wins timer-before-current) but skips the
+    /// canceling pointer's OWN arena. The cancel is the terminal
+    /// authority for its pointer, so a due LongPress / touch ContextMenu
+    /// deadline on it loses to the cancel; only a due pending Tap still
+    /// flushes. The current Cancel is dispatched immediately, so
+    /// ownership ends with PressCancel exactly once and no
+    /// LongPress/ContextMenu.
     pub(crate) fn dispatch_enveloped_with(
         &mut self,
         event: PointerEvent,
@@ -181,7 +202,11 @@ impl PointerRouter {
         spatial: &SpatialIndex,
         node_disabled: &dyn Fn(NodeKey) -> bool,
     ) -> Vec<SemanticEventEnvelope> {
-        let mut due = self.flush_pending_tap(event.t_ms);
+        let mut due = if matches!(event.phase, PointerPhase::Cancel) {
+            self.tick_enveloped_except(event.id.0, event.t_ms)
+        } else {
+            self.tick_enveloped(event.t_ms)
+        };
         let mut current = self.dispatch_current(event, doc, spatial, node_disabled);
         due.append(&mut current);
         due
@@ -276,6 +301,14 @@ impl PointerRouter {
             // the move.
             self.dispatch_multi(&event, &mut out);
             if let Some(arena) = self.arenas.get_mut(&pid) {
+                // Refresh state-aware disabled bindings BEFORE the event
+                // is fed: a Swipe session that captured its owner at Down
+                // cancels itself here when that owner became dynamically
+                // disabled mid-gesture, so the captured child thresholds
+                // can never claim for a parent handler.
+                for recognizer in arena.members_mut() {
+                    recognizer.refresh_node_disabled(node_disabled);
+                }
                 arena.dispatch(&event, doc);
                 out.extend(arena.drain_envelopes());
             }
@@ -498,24 +531,38 @@ impl PointerRouter {
         // per-ancestor Tap recognizers only shadow each other.
         members.push(Box::new(TapRecognizer::new(self.alloc_id(), top)));
 
-        // Handler/owner-aware Pan: the single Pan recognizer targets the
-        // NEAREST node on the hit chain owning any enabled pan handler
-        // (onPanStart/onPanUpdate/onPanEnd — nonempty, not
-        // `disabledEvents`-listed, `gestures.disabled` not truthy), with
-        // THAT owner's authored `dragThreshold` — a nearer child owning
-        // only onPanUpdate must win over a farther ancestor owning
-        // onPanStart, so the child's threshold governs and its node is
-        // the semantic target (delivery bubbles the phases). With no
-        // enabled pan handler, the legacy eager semantic recognizer is
-        // installed at the topmost hit with default thresholds (its
-        // semantic is dropped by the dispatcher).
+        // Pan-over-Swipe installation (R2B): along the enabled hit chain,
+        // ANY nonempty Pan hook wins — Pan is installed and Swipe is NOT.
+        // Only with no enabled Pan owner AND an enabled onSwipe owner is
+        // one Swipe recognizer installed at that owner's node/config
+        // (instead of the legacy eager Pan), and when neither exists the
+        // R2A legacy eager Pan recognizer is preserved at the topmost hit.
         let pan_owner = config::chain_pan_owner_with(doc, top, node_disabled);
-        let pan_node = pan_owner.unwrap_or(top);
-        let pan_cfg = config::gesture_config(doc, pan_node);
-        members.push(Box::new(
-            PanRecognizer::new(self.alloc_id(), pan_node)
-                .with_threshold(pan_cfg.effective_drag_threshold()),
-        ));
+        let swipe_owner = config::chain_swipe_owner_with(doc, top, node_disabled);
+        if let Some(pan_node) = pan_owner {
+            let pan_cfg = config::gesture_config(doc, pan_node);
+            members.push(Box::new(
+                PanRecognizer::new(self.alloc_id(), pan_node)
+                    .with_threshold(pan_cfg.effective_drag_threshold()),
+            ));
+        } else if let Some(swipe_node) = swipe_owner {
+            let swipe_cfg = config::gesture_config(doc, swipe_node);
+            members.push(Box::new(
+                SwipeRecognizer::new(self.alloc_id(), swipe_node)
+                    .with_min_distance(swipe_cfg.effective_swipe_min_distance())
+                    .with_min_velocity(swipe_cfg.effective_swipe_min_velocity())
+                    .with_axis_lock(swipe_cfg.effective_axis_lock()),
+            ));
+        } else {
+            // Legacy eager Pan: semantic is dropped by the dispatcher when
+            // no handler exists — preserves the pre-existing semantic
+            // stream for hosts that inspect it.
+            let pan_cfg = config::gesture_config(doc, top);
+            members.push(Box::new(
+                PanRecognizer::new(self.alloc_id(), top)
+                    .with_threshold(pan_cfg.effective_drag_threshold()),
+            ));
+        }
 
         // Owner-aware LongPress / ContextMenu fallback (at most one):
         // an explicit enabled onLongPress wins; otherwise a touch
@@ -563,8 +610,36 @@ impl PointerRouter {
     /// Envelope-returning tick. A buffered Tap whose deadline `now_ms` has
     /// passed is emitted exactly once here, even with no new input.
     pub fn tick_enveloped(&mut self, now_ms: u64) -> Vec<SemanticEventEnvelope> {
+        self.tick_enveloped_except_impl(None, now_ms)
+    }
+
+    /// Envelope-returning tick with PER-POINTER isolation: every arena is
+    /// driven EXCEPT the arena of `skip_pid`. Used when a host-sent
+    /// `Cancel` arrives — the cancel is the terminal authority for its
+    /// pointer, so its OWN arena must not claim a timer off the cancel
+    /// (no LongPress / touch ContextMenu), but overdue timers belonging
+    /// to OTHER active arenas still run timer-before-current, and a due
+    /// pending Tap still flushes (exactly once — the flusher never runs
+    /// twice for one cancel, because it is called from here only and the
+    /// current-event path never flushes).
+    pub fn tick_enveloped_except(
+        &mut self,
+        skip_pid: u32,
+        now_ms: u64,
+    ) -> Vec<SemanticEventEnvelope> {
+        self.tick_enveloped_except_impl(Some(skip_pid), now_ms)
+    }
+
+    fn tick_enveloped_except_impl(
+        &mut self,
+        skip_pid: Option<u32>,
+        now_ms: u64,
+    ) -> Vec<SemanticEventEnvelope> {
         let mut out = Vec::new();
-        for arena in self.arenas.values_mut() {
+        for (pid, arena) in self.arenas.iter_mut() {
+            if skip_pid == Some(*pid) {
+                continue;
+            }
             arena.tick(now_ms);
             out.extend(arena.drain_envelopes());
         }

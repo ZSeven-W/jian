@@ -575,18 +575,22 @@ fn ancestor_authored_pan_threshold_and_long_press_win_over_hit_child() {
     let root_key = rt.document.as_ref().unwrap().tree.get("root").unwrap();
 
     // 15px move: under the parent's authored 30px threshold → no Pan claim.
+    // Every timestamp stays BELOW the authored 100ms LongPress deadline:
+    // timer-before-current arbitration (R2B) would otherwise fire the
+    // LongPress at the first deadline-crossing event before the Pan
+    // threshold is judged — this test isolates the threshold, not timers.
     let _ = rt.dispatch_pointer(mouse(1, PointerPhase::Down, c, 0));
-    let small = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 15.0, c.y), 100));
+    let small = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 15.0, c.y), 90));
     assert!(small.is_empty(), "got {small:?}");
     // 35px: crosses the authored threshold; semantic targets the OWNER.
-    let big = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 35.0, c.y), 200));
+    let big = rt.dispatch_pointer(mouse(1, PointerPhase::Move, point(c.x + 35.0, c.y), 95));
     assert_eq!(names(&big), ["onPanStart"], "got {big:?}");
     assert_eq!(
         big[0].node(),
         root_key,
         "Pan semantic target is the handler owner, not the hit child"
     );
-    let _ = rt.dispatch_pointer(mouse(1, PointerPhase::Up, point(c.x + 35.0, c.y), 300));
+    let _ = rt.dispatch_pointer(mouse(1, PointerPhase::Up, point(c.x + 35.0, c.y), 120));
     assert_eq!(rt.state.app_get("pans").unwrap().as_i64(), Some(1));
 
     // Authored longPressDuration 100 on the owner, hit child again.

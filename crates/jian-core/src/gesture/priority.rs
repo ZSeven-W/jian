@@ -8,7 +8,7 @@ use crate::document::RuntimeDocument;
 pub fn rank(r: &dyn Recognizer, doc: &RuntimeDocument) -> (u32, u32) {
     let depth = depth_of(doc, r.node());
     let kind_priority = match r.kind() {
-        "Pan" | "Scroll" => 5,
+        "Pan" | "Scroll" | "Swipe" => 5,
         "Scale" | "Rotate" => 4,
         "LongPress" => 3,
         "Tap" | "DoubleTap" => 2,

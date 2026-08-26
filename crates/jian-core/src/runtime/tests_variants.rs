@@ -132,6 +132,41 @@ fn pending_long_press_is_dropped_when_tick_occurs_during_freeze() {
     assert_eq!(runtime.state.app_get("long").unwrap().as_i64(), Some(0));
 }
 
+/// Pointer input DURING the freeze preserves the R2A rule too: only a
+/// pending deferred Tap may flush — arena timers (LongPress) stay inert,
+/// so a Move at t=800 after the 500ms deadline never claims inside the
+/// parked swap, and the current event is rejected before any arbitration.
+#[test]
+fn pointer_event_during_freeze_flushes_only_pending_tap_and_never_claims_timers() {
+    use crate::gesture::pointer::PointerPhase;
+    let mut runtime = variant_runtime();
+    runtime.build_layout((300.0, 200.0)).unwrap();
+    runtime.rebuild_spatial();
+    let key = runtime
+        .document
+        .as_ref()
+        .unwrap()
+        .tree
+        .get("field")
+        .unwrap();
+    let rect = runtime.layout.node_rect(key).unwrap();
+    let at = crate::geometry::point(rect.min_x() + 1.0, rect.min_y() + 1.0);
+    runtime.dispatch_pointer(PointerEvent::simple(1, PointerPhase::Down, at));
+    freeze_variant_runtime(&mut runtime);
+
+    // A Move past the LongPress deadline: the frozen pointer path flushes
+    // only pending-Tap state and rejects the current event — no LongPress
+    // claim, no arena dispatch at all.
+    let emitted = runtime.dispatch_pointer(PointerEvent::simple_at(
+        1,
+        PointerPhase::Move,
+        at,
+        800,
+    ));
+    assert!(emitted.is_empty());
+    assert_eq!(runtime.state.app_get("long").unwrap().as_i64(), Some(0));
+}
+
 #[test]
 fn transactional_variant_switch_updates_page_context() {
     let mut runtime = variant_runtime();

@@ -1,4 +1,5 @@
 use super::Runtime;
+use crate::gesture::pointer::PointerPhase;
 use crate::gesture::{PointerEvent, SemanticEvent, SemanticEventEnvelope};
 
 impl Runtime {
@@ -51,32 +52,77 @@ impl Runtime {
     /// [`Self::dispatch_pointer`], but each `SemanticEventEnvelope` keeps
     /// the factual `PointerFacts` captured at recognition time.
     ///
-    /// Ordering contract (due Tap precedence):
-    /// 1. a due pending Tap is flushed at `event.t_ms` and
-    /// 2. its actions are delivered IMMEDIATELY — before any current
-    ///    event's slider side effects, `gestures.disabled` predicate
-    ///    evaluation, hover semantics or arena routing;
+    /// Ordering contract (timer-before-current):
+    /// 1. pointer input at `t` drives EVERY gesture deadline `<= t` first:
+    ///    `gestures.tick_enveloped(t)` is called (arena timers — LongPress
+    ///    / touch ContextMenu — plus a buffered deferred Tap), and
+    /// 2. every due envelope's actions are delivered IMMEDIATELY — before
+    ///    any current event's slider side effects, `gestures.disabled`
+    ///    predicate evaluation, hover semantics or arena routing;
     /// 3. `document` / `input_frozen` are re-checked AFTER the due actions
     ///    (a due action may navigate or park input) — the current event is
     ///    rejected when either holds, but the due delivery itself never
-    ///    depends on the freeze (matching `tick`'s frozen flush);
-    /// 4. the current event is processed;
-    /// 5. due envelopes are returned BEFORE current envelopes.
+    ///    depends on the freeze while input is unfrozen;
+    /// 4. while input IS frozen at entry, R2A behavior is preserved: only
+    ///    the pending deferred Tap is flushed (a parked variant swap must
+    ///    not let arena timers claim), still before any current rejection;
+    /// 5. the current event is processed;
+    /// 6. due envelopes are returned BEFORE current envelopes.
+    ///
+    /// One exception, which applies to BOTH the frozen and unfrozen
+    /// branches: a host-sent `Cancel` ticks EVERY OTHER active arena
+    /// (per-pointer isolation — a due LongPress / touch ContextMenu
+    /// belonging to a different pointer still wins timer-before-current)
+    /// but skips the canceling pointer's OWN arena. The cancel itself is
+    /// the terminal authority for its pointer, so a LongPress / touch
+    /// ContextMenu deadline that would otherwise claim at the cancel's
+    /// timestamp loses to it — the current Cancel is dispatched
+    /// immediately so ownership ends with PressCancel exactly once and
+    /// no LongPress/ContextMenu for the canceled pointer. An
+    /// already-derived due pending Tap (a completed, unrelated pointer)
+    /// still flushes.
     ///
     /// The `gestures.disabled` predicate is state-aware here: the runtime
     /// pointer path supplies it to the router so dynamically disabled
     /// handlers participate in arbitration/config decisions (DoubleTap
-    /// deferral, owner detection, Pan/LongPress/ContextMenu thresholds)
-    /// and in delivery (handler skip, built-in activation, `$self` scope).
+    /// deferral, owner detection, Pan/Swipe/LongPress/ContextMenu
+    /// thresholds) and in delivery (handler skip, built-in activation,
+    /// `$self` scope), and so a captured Swipe session whose owner became
+    /// disabled mid-gesture cancels itself.
+    ///
+    /// Same-batch Swipe ownership: when one raw-event batch contains
+    /// `[PressCancel, Swipe]` (the arena rejects the press and accepts
+    /// the claim on the same Move), the envelopes are delivered in batch
+    /// order — the PressCancel action runs FIRST. The Swipe is then
+    /// re-validated against its CAPTURED handler owner with the
+    /// post-action state (the PressCancel may have disabled it), and the
+    /// claim is dropped from BOTH the returned batch and delivery when
+    /// the owner no longer provides an enabled `onSwipe` — never
+    /// re-resolved to an ancestor handler, whose thresholds never
+    /// qualified. Ordering is therefore exactly: PressCancel action,
+    /// then attempted Swipe validation; state is never frozen before the
+    /// PressCancel action.
     pub fn dispatch_pointer_events(&mut self, event: PointerEvent) -> Vec<SemanticEventEnvelope> {
         self.note_time(event.t_ms);
-        // (1)+(2) Flush a due pending Tap at this event's timestamp and
-        // deliver its actions before ANY current side effect. The deadline
-        // is order-independent: whether the host calls `tick(deadline)`
+        // (1)+(2) Drive due timers at this event's timestamp and deliver
+        // their actions before ANY current side effect. The deadline is
+        // order-independent: whether the host calls `tick(deadline)`
         // first or dispatches the next input at the deadline first, the
-        // deferred Tap surfaces as a single Tap before the current
-        // processing observes anything.
-        let mut due = self.gestures.flush_pending_tap(event.t_ms);
+        // due LongPress/ContextMenu/Tap surfaces before the current
+        // processing observes anything. While frozen, arena timers stay
+        // inert (R2A): only the already-derived deferred Tap is flushed.
+        // The Cancel exception above applies with per-pointer isolation:
+        // a host-sent Cancel ticks every arena EXCEPT the canceling
+        // pointer's own (a due LongPress/ContextMenu on another pointer
+        // still fires; the canceled pointer's timer must not claim off
+        // the cancel) and flushes a due pending Tap.
+        let mut due = if self.input_frozen() {
+            self.gestures.flush_pending_tap(event.t_ms)
+        } else if matches!(event.phase, PointerPhase::Cancel) {
+            self.gestures.tick_enveloped_except(event.id.0, event.t_ms)
+        } else {
+            self.gestures.tick_enveloped(event.t_ms)
+        };
         for ev in &due {
             self.deliver_enveloped(ev);
         }
@@ -116,12 +162,59 @@ impl Runtime {
         };
         // ONE semantic-delivery path (widget activation included) runs for
         // both pointer dispatch and `tick`; activation is inside it.
-        for ev in &emitted {
-            self.deliver_enveloped(ev);
+        //
+        // Same-batch Swipe owner re-validation: the arena can derive
+        // `[PressCancel, Swipe]` in a SINGLE raw-event batch (the Move
+        // that claims). Envelopes are delivered in batch order, so a
+        // PressCancel action that dynamically disables the Swipe's
+        // captured owner (e.g. the child disables its own
+        // `gestures.disabled` from `onPressCancel`) has ALREADY run by
+        // the time the Swipe envelope is considered. The Swipe is then
+        // re-validated against that CAPTURED owner — not the arena-build
+        // snapshot, not an ancestor search — and dropped from the
+        // host-visible batch when the owner no longer provides an enabled
+        // `onSwipe`; a parent whose thresholds never qualified must never
+        // receive it. `deliver_enveloped` applies the same owner-anchored
+        // rule as its own backstop.
+        let mut current = Vec::with_capacity(emitted.len());
+        for ev in emitted {
+            if matches!(ev.event, SemanticEvent::Swipe { .. }) && !self.swipe_owner_enabled(&ev) {
+                continue;
+            }
+            self.deliver_enveloped(&ev);
+            current.push(ev);
         }
         // (5) Due envelopes first, then current envelopes.
-        due.extend(emitted);
+        due.extend(current);
         due
+    }
+
+    /// Re-evaluate a claimed Swipe against its CAPTURED handler owner at
+    /// delivery time: the owner must still exist, declare an enabled
+    /// (nonempty, not `disabledEvents`-slated, not dynamically disabled)
+    /// `onSwipe`. Uses the same owner-anchored resolution as
+    /// [`super::async_runtime`]'s delivery — the runtime pointer path
+    /// calls it BETWEEN envelopes of one batch, after the batch's prior
+    /// actions ran, so a same-batch `PressCancel` that disabled the
+    /// owner makes this return `false` and the claim is dropped.
+    fn swipe_owner_enabled(&self, ev: &SemanticEventEnvelope) -> bool {
+        use crate::gesture::dispatcher;
+        let Some(doc) = self.document.as_ref() else {
+            return false;
+        };
+        let state_ref = &self.state;
+        let expr_cache_ref = &self.expr_cache;
+        let page_id = self.active_page_key.clone();
+        let node_disabled = |key: crate::document::NodeKey| {
+            super::async_runtime::node_gestures_disabled(
+                doc,
+                state_ref,
+                expr_cache_ref,
+                &page_id,
+                key,
+            )
+        };
+        dispatcher::resolve_swipe_owner(doc, &ev.event, &node_disabled).is_some()
     }
 
     /// Pointer-phase driven slider scrubbing. On `Down` over a slider,
