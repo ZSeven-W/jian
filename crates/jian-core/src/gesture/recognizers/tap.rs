@@ -1,9 +1,9 @@
 //! TapRecognizer + DoubleTapRecognizer.
 
 use crate::document::NodeKey;
-use crate::gesture::pointer::{PointerEvent, PointerPhase};
+use crate::gesture::pointer::{MouseButtons, PointerEvent, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
-use crate::gesture::semantic::SemanticEvent;
+use crate::gesture::semantic::{PointerFacts, SemanticEvent, SemanticEventEnvelope};
 
 pub struct TapRecognizer {
     id: RecognizerId,
@@ -11,8 +11,15 @@ pub struct TapRecognizer {
     state: RecognizerState,
     down_position: Option<crate::geometry::Point>,
     down_time_ms: Option<u64>,
+    /// The initiating Down's provable single button (absent when the Down
+    /// was button-less or ambiguous) — retained on the Tap's facts while
+    /// phase/position/timestamp/buttons stay from the triggering Up.
+    down_button: Option<MouseButtons>,
     slop_px: f32,
     timeout_ms: u64,
+    /// Claim-time Tap, emitted from `accept` AFTER losers were rejected
+    /// (so a Press cancellation precedes the Tap).
+    pending_claim: Option<SemanticEventEnvelope>,
 }
 
 impl TapRecognizer {
@@ -23,8 +30,10 @@ impl TapRecognizer {
             state: RecognizerState::Possible,
             down_position: None,
             down_time_ms: None,
+            down_button: None,
             slop_px: 8.0,
             timeout_ms: 500,
+            pending_claim: None,
         }
     }
 }
@@ -46,12 +55,13 @@ impl Recognizer for TapRecognizer {
     fn handle_pointer(
         &mut self,
         event: &PointerEvent,
-        arena: &mut ArenaHandle<'_>,
+        _arena: &mut ArenaHandle<'_>,
     ) -> RecognizerState {
         match event.phase {
             PointerPhase::Down => {
                 self.down_position = Some(event.position);
                 self.down_time_ms = Some(event.t_ms);
+                self.down_button = PointerFacts::from_event(event).button;
                 self.state = RecognizerState::Possible;
             }
             PointerPhase::Move => {
@@ -69,9 +79,18 @@ impl Recognizer for TapRecognizer {
                 }
                 if let (Some(dt), Some(_dp)) = (self.down_time_ms, self.down_position) {
                     if event.t_ms.saturating_sub(dt) <= self.timeout_ms {
-                        arena.emit(SemanticEvent::Tap {
-                            node: self.node,
-                            position: event.position,
+                        // Claim-time event is emitted from `accept` so the
+                        // arena can order it after loser cancellations.
+                        self.pending_claim = Some(SemanticEventEnvelope {
+                            event: SemanticEvent::Tap {
+                                node: self.node,
+                                position: event.position,
+                            },
+                            pointer_facts: Some(
+                                PointerFacts::from_event(event)
+                                    .with_initiating_button(self.down_button),
+                            ),
+                            gesture: Default::default(),
                         });
                         self.state = RecognizerState::Claimed;
                     } else {
@@ -87,8 +106,11 @@ impl Recognizer for TapRecognizer {
         self.state
     }
 
-    fn accept(&mut self, _: &mut ArenaHandle<'_>) {
+    fn accept(&mut self, arena: &mut ArenaHandle<'_>) {
         self.state = RecognizerState::Claimed;
+        if let Some(claim) = self.pending_claim.take() {
+            *arena.pending_semantic = Some(claim);
+        }
     }
     fn reject(&mut self) {
         self.state = RecognizerState::Rejected;
@@ -102,6 +124,10 @@ pub struct DoubleTapRecognizer {
     first_up: Option<(u64, crate::geometry::Point)>,
     down_time_ms: Option<u64>,
     down_position: Option<crate::geometry::Point>,
+    /// Provable single button of the CURRENT tap's initiating Down —
+    /// retained on the DoubleTap facts while phase/position/timestamp/
+    /// buttons stay from the triggering Up.
+    down_button: Option<MouseButtons>,
     slop_px: f32,
     gap_ms: u64,
 }
@@ -115,6 +141,7 @@ impl DoubleTapRecognizer {
             first_up: None,
             down_time_ms: None,
             down_position: None,
+            down_button: None,
             slop_px: 16.0,
             gap_ms: 300,
         }
@@ -144,6 +171,7 @@ impl Recognizer for DoubleTapRecognizer {
             PointerPhase::Down => {
                 self.down_time_ms = Some(event.t_ms);
                 self.down_position = Some(event.position);
+                self.down_button = PointerFacts::from_event(event).button;
                 if let Some((t, p)) = self.first_up {
                     let dt = event.t_ms.saturating_sub(t);
                     let dx = event.position.x - p.x;
@@ -158,10 +186,13 @@ impl Recognizer for DoubleTapRecognizer {
             PointerPhase::Up => {
                 if let Some((_, _)) = self.first_up {
                     // Second up → double tap.
-                    arena.emit(SemanticEvent::DoubleTap {
-                        node: self.node,
-                        position: event.position,
-                    });
+                    arena.emit_with_facts(
+                        SemanticEvent::DoubleTap {
+                            node: self.node,
+                            position: event.position,
+                        },
+                        PointerFacts::from_event(event).with_initiating_button(self.down_button),
+                    );
                     self.state = RecognizerState::Claimed;
                     self.first_up = None;
                 } else {
@@ -212,7 +243,16 @@ mod tests {
         assert_eq!(r.state(), RecognizerState::Possible);
         let _ = r.handle_pointer(&event(0, PointerPhase::Up, 10.5, 10.5), &mut h);
         assert_eq!(r.state(), RecognizerState::Claimed);
-        assert!(matches!(pending, Some(SemanticEvent::Tap { .. })));
+        // The claim event is emitted from `accept`, not from the Up.
+        assert!(pending.is_none());
+        let mut h2 = ArenaHandle {
+            pending_semantic: &mut pending,
+        };
+        r.accept(&mut h2);
+        assert!(matches!(
+            pending.map(|e| e.event),
+            Some(SemanticEvent::Tap { .. })
+        ));
     }
 
     #[test]

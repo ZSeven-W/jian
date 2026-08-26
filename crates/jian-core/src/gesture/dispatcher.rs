@@ -7,23 +7,41 @@
 //! Tap on the text *inside* a button gets silently dropped because
 //! the text node has no `events.onTap` even though the button does.
 //! Bubbling fires at most one handler per event.
+//!
+//! Handler configuration is honored here: a node whose
+//! `gestures.disabledEvents` lists the event key, or whose
+//! `gestures.disabled` expression evaluates truthy, is skipped and
+//! bubbling continues to an eligible ancestor. `interactionOrder` is
+//! authoring presentation only and is not consulted.
 
+use super::config;
 use super::semantic::SemanticEvent;
-use crate::document::RuntimeDocument;
+use crate::document::{NodeKey, RuntimeDocument};
 
 /// Resolve the JSON `events.<handler_key>` ActionList for the event's
-/// target node OR any ancestor up to the root, and execute the first
-/// match. Returns the outcome (result + warnings). Empty Ok when no
-/// node in the chain declares a handler.
+/// target node OR any ancestor up to the root, skipping nodes that
+/// statically disable the handler (`disabledEvents`) or whose
+/// `gestures.disabled` expression evaluates truthy (`node_disabled`).
+/// Returns `(handler_owner, list)` — the owner node is the layout
+/// target for node-local payload coordinates. `None` when no node in
+/// the chain declares the handler.
 pub(crate) fn resolve_handler(
     doc: &RuntimeDocument,
     event: &SemanticEvent,
-) -> Option<serde_json::Value> {
+    node_disabled: impl Fn(NodeKey) -> bool,
+) -> Option<(NodeKey, serde_json::Value)> {
     let mut node_key = Some(event.node());
     for _ in 0..=doc.tree.nodes.len() {
-        let data = doc.tree.nodes.get(node_key?)?;
-        if let Some(list) = extract_handler(&data.schema, event.handler_key()) {
-            return Some(list);
+        let key = node_key?;
+        let data = doc.tree.nodes.get(key)?;
+        let declares = config::node_declares_handler(doc, key, event.handler_key());
+        if declares
+            && !config::node_disables_handler(doc, key, event.handler_key())
+            && !node_disabled(key)
+        {
+            if let Some(list) = extract_handler(&data.schema, event.handler_key()) {
+                return Some((key, list));
+            }
         }
         node_key = data.parent;
     }

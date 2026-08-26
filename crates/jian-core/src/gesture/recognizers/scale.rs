@@ -26,7 +26,7 @@ use crate::document::NodeKey;
 use crate::geometry::{point, Point};
 use crate::gesture::pointer::{PointerEvent, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
-use crate::gesture::semantic::SemanticEvent;
+use crate::gesture::semantic::{GestureFacts, PointerFacts, SemanticEvent};
 
 /// Activation threshold. `|scale - 1| > 0.05` to claim. Plan 5 Task 9.
 const SCALE_ACTIVATION: f32 = 0.05;
@@ -48,6 +48,10 @@ pub struct ScaleRecognizer {
     /// Up that drops `pids` from 2 → 1 so a stray third Up doesn't
     /// re-emit.
     ended: bool,
+    /// Last reported scale ratio (for per-frame `deltaScale`).
+    last_scale: Option<f32>,
+    /// Last reported focal point (for end payloads).
+    last_focal: Option<Point>,
 }
 
 impl ScaleRecognizer {
@@ -60,6 +64,8 @@ impl ScaleRecognizer {
             initial: None,
             started: false,
             ended: false,
+            last_scale: None,
+            last_focal: None,
         }
     }
 
@@ -133,17 +139,45 @@ impl Recognizer for ScaleRecognizer {
                     if (scale - 1.0).abs() > SCALE_ACTIVATION {
                         self.started = true;
                         self.state = RecognizerState::Claimed;
-                        arena.emit(SemanticEvent::ScaleStart {
-                            node: self.node,
-                            focal,
-                        });
+                        self.last_scale = Some(scale);
+                        self.last_focal = Some(focal);
+                        let facts = PointerFacts::from_event(event);
+                        arena.emit_with(
+                            SemanticEvent::ScaleStart {
+                                node: self.node,
+                                focal,
+                            },
+                            facts,
+                            GestureFacts {
+                                // The threshold-crossing scale itself, with
+                                // the per-frame delta vs. the gesture's
+                                // initial baseline (scale − 1).
+                                scale: Some(scale),
+                                delta_scale: Some(scale - 1.0),
+                                focal: Some(focal),
+                                ..Default::default()
+                            },
+                        );
                     }
                 } else {
-                    arena.emit(SemanticEvent::ScaleUpdate {
-                        node: self.node,
-                        scale,
-                        focal,
-                    });
+                    let delta_scale = self.last_scale.map(|prev| scale - prev);
+                    self.last_scale = Some(scale);
+                    self.last_focal = Some(focal);
+                    let facts = PointerFacts::from_event(event);
+                    arena.emit_with(
+                        SemanticEvent::ScaleUpdate {
+                            node: self.node,
+                            scale,
+                            focal,
+                        },
+                        facts,
+                        GestureFacts {
+                            scale: Some(scale),
+                            delta_scale,
+                            focal: Some(focal),
+                            ..Default::default()
+                        },
+                    );
                 }
             }
             PointerPhase::Up | PointerPhase::Cancel => {
@@ -153,7 +187,16 @@ impl Recognizer for ScaleRecognizer {
                 self.pids.retain(|(p, _)| *p != pid);
                 if was_two && self.started && !self.ended {
                     self.ended = true;
-                    arena.emit(SemanticEvent::ScaleEnd { node: self.node });
+                    let facts = PointerFacts::from_event(event);
+                    arena.emit_with(
+                        SemanticEvent::ScaleEnd { node: self.node },
+                        facts,
+                        GestureFacts {
+                            scale: self.last_scale,
+                            focal: self.last_focal,
+                            ..Default::default()
+                        },
+                    );
                 }
                 if self.pids.is_empty() {
                     // Reset for hypothetical re-attach; the router
@@ -163,6 +206,8 @@ impl Recognizer for ScaleRecognizer {
                     self.initial = None;
                     self.started = false;
                     self.ended = false;
+                    self.last_scale = None;
+                    self.last_focal = None;
                 }
             }
             PointerPhase::Hover => {}
@@ -181,6 +226,7 @@ impl Recognizer for ScaleRecognizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gesture::semantic::SemanticEventEnvelope;
     use slotmap::SlotMap;
 
     fn make_key() -> NodeKey {
@@ -189,6 +235,17 @@ mod tests {
     }
 
     fn dispatch(r: &mut ScaleRecognizer, ev: PointerEvent) -> Option<SemanticEvent> {
+        let mut pending = None;
+        let mut h = ArenaHandle {
+            pending_semantic: &mut pending,
+        };
+        let _ = r.handle_pointer(&ev, &mut h);
+        pending.map(|e| e.event)
+    }
+
+    /// Like `dispatch` but keeps the envelope so gesture facts (exact
+    /// scale / deltaScale / focal) can be asserted.
+    fn dispatch_env(r: &mut ScaleRecognizer, ev: PointerEvent) -> Option<SemanticEventEnvelope> {
         let mut pending = None;
         let mut h = ArenaHandle {
             pending_semantic: &mut pending,
@@ -240,6 +297,45 @@ mod tests {
             }
             other => panic!("expected ScaleStart, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn scale_start_carries_actual_crossing_scale() {
+        let node = make_key();
+        let mut r = ScaleRecognizer::new(1, node);
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Down, point(0.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(100.0, 0.0)),
+        );
+        // 6% expansion: dist 100 → 106. The Start carries the actual
+        // threshold-crossing scale (1.06) and deltaScale = scale − 1.
+        let start = dispatch_env(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(106.0, 0.0)),
+        )
+        .expect("ScaleStart envelope");
+        assert!(matches!(start.event, SemanticEvent::ScaleStart { .. }));
+        assert_eq!(start.gesture.scale, Some(1.06));
+        assert!(
+            (start.gesture.delta_scale.unwrap() - 0.06).abs() < 1e-5,
+            "deltaScale = scale − 1, got {:?}",
+            start.gesture.delta_scale
+        );
+        assert_eq!(start.gesture.focal, Some(point(53.0, 0.0)));
+
+        // Update: per-frame delta = scale − last scale (1.2 → 0.14).
+        let update = dispatch_env(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(120.0, 0.0)),
+        )
+        .expect("ScaleUpdate envelope");
+        assert!(matches!(update.event, SemanticEvent::ScaleUpdate { .. }));
+        assert_eq!(update.gesture.scale, Some(1.2));
+        assert!((update.gesture.delta_scale.unwrap() - 0.14).abs() < 1e-5);
     }
 
     #[test]

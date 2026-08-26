@@ -317,19 +317,25 @@ fn replace_document_resets_pointer_router_state() {
     // `last_hover_target` regardless of whether the node carries
     // an `onHover*` handler (handle_hover unconditionally
     // updates `last_hover_target` to the topmost hit).
-    let _enter = rt.dispatch_pointer(PointerEvent::simple(
-        0,
-        PointerPhase::Hover,
-        point(20.0, 20.0),
-    ));
+    // NOTE: hover must be a Mouse/Pen pointer — Touch is contractually
+    // excluded from hover processing (never emits hover actions nor
+    // mutates the hover cache).
+    let mouse_hover = |id: u32, x: f32, y: f32| PointerEvent {
+        id: crate::gesture::PointerId(id),
+        kind: crate::gesture::PointerKind::Mouse,
+        phase: PointerPhase::Hover,
+        position: point(x, y),
+        pressure: 0.0,
+        buttons: Default::default(),
+        modifiers: Default::default(),
+        tilt: None,
+        t_ms: 0,
+    };
+    let _enter = rt.dispatch_pointer(mouse_hover(0, 20.0, 20.0));
     // Sanity: a second hover off the rectangle would normally
     // emit `HoverLeave` for the stamped target — that's the
     // path that goes wrong on hot-reload without the reset.
-    let leave = rt.dispatch_pointer(PointerEvent::simple(
-        0,
-        PointerPhase::Hover,
-        point(500.0, 500.0),
-    ));
+    let leave = rt.dispatch_pointer(mouse_hover(0, 500.0, 500.0));
     assert!(
         leave
             .iter()
@@ -339,11 +345,7 @@ fn replace_document_resets_pointer_router_state() {
     );
 
     // Re-stamp last_hover_target by hovering over the rect again.
-    rt.dispatch_pointer(PointerEvent::simple(
-        0,
-        PointerPhase::Hover,
-        point(20.0, 20.0),
-    ));
+    rt.dispatch_pointer(mouse_hover(0, 20.0, 20.0));
 
     // Hot-reload to a different document.
     rt.replace_document(
@@ -365,11 +367,7 @@ fn replace_document_resets_pointer_router_state() {
     // (against a SlotMap key that may or may not alias a real
     // node in the new tree). Post-fix the router is reset, so
     // the off-target hover emits nothing.
-    let off = rt.dispatch_pointer(PointerEvent::simple(
-        0,
-        PointerPhase::Hover,
-        point(500.0, 500.0),
-    ));
+    let off = rt.dispatch_pointer(mouse_hover(0, 500.0, 500.0));
     assert!(
         !off.iter()
             .any(|e| matches!(e, SemanticEvent::HoverLeave { .. })),

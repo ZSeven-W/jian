@@ -3,7 +3,7 @@
 use crate::document::NodeKey;
 use crate::gesture::pointer::{PointerEvent, PointerKind, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
-use crate::gesture::semantic::SemanticEvent;
+use crate::gesture::semantic::{PointerFacts, SemanticEvent};
 
 pub struct HoverRecognizer {
     id: RecognizerId,
@@ -49,10 +49,13 @@ impl Recognizer for HoverRecognizer {
         match event.phase {
             PointerPhase::Hover => {
                 if !self.inside {
-                    arena.emit(SemanticEvent::HoverEnter {
-                        node: self.node,
-                        position: event.position,
-                    });
+                    arena.emit_with_facts(
+                        SemanticEvent::HoverEnter {
+                            node: self.node,
+                            position: event.position,
+                        },
+                        PointerFacts::from_event(event),
+                    );
                     self.inside = true;
                 }
             }
@@ -61,10 +64,13 @@ impl Recognizer for HoverRecognizer {
             }
             PointerPhase::Cancel => {
                 if self.inside {
-                    arena.emit(SemanticEvent::HoverLeave {
-                        node: self.node,
-                        position: event.position,
-                    });
+                    arena.emit_with_facts(
+                        SemanticEvent::HoverLeave {
+                            node: self.node,
+                            position: event.position,
+                        },
+                        PointerFacts::from_event(event),
+                    );
                     self.inside = false;
                 }
             }

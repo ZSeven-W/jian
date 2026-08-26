@@ -5,16 +5,25 @@
 //! - Each subsequent event is routed to every still-Possible member.
 //! - The first recognizer to return `Claimed` wins; all others are Rejected.
 //! - If pointer-up arrives with no winner, pick by priority (depth, kind).
+//!
+//! # Cancellation plumbing
+//!
+//! `reject` receives an `ArenaHandle` so an active recognizer (Press) can
+//! emit its cancellation instead of silently dropping it. Ordering is
+//! deterministic: losers are rejected before the winner is accepted, and
+//! claim-time events are emitted from `accept` — so for a Pan claim the
+//! stream is `[PressCancel, PanStart]`, and for an unclaimed Up
+//! `[PressEnd, Tap]`.
 
 use super::pointer::{PointerEvent, PointerPhase};
 use super::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
-use super::semantic::SemanticEvent;
+use super::semantic::{SemanticEvent, SemanticEventEnvelope};
 use crate::document::RuntimeDocument;
 
 pub struct Arena {
     members: Vec<Box<dyn Recognizer>>,
     resolved: Option<RecognizerId>,
-    emitted: Vec<SemanticEvent>,
+    emitted: Vec<SemanticEventEnvelope>,
 }
 
 impl Arena {
@@ -36,8 +45,19 @@ impl Arena {
         self.resolved.is_some()
     }
 
-    pub fn drain_emitted(&mut self) -> Vec<SemanticEvent> {
+    /// Envelope-returning drain — used by the router so factual pointer
+    /// metadata stays attached end-to-end.
+    pub fn drain_envelopes(&mut self) -> Vec<SemanticEventEnvelope> {
         std::mem::take(&mut self.emitted)
+    }
+
+    /// Source-compatible drain of the semantic events (facts dropped) —
+    /// kept for external arena users (jian-gallery).
+    pub fn drain_emitted(&mut self) -> Vec<SemanticEvent> {
+        self.drain_envelopes()
+            .into_iter()
+            .map(|envelope| envelope.event)
+            .collect()
     }
 
     /// Feed a pointer event to every still-Possible recognizer. Returns any
@@ -123,7 +143,11 @@ impl Arena {
     fn resolve(&mut self, winner_idx: usize) {
         let winner_id = self.members[winner_idx].id();
         self.resolved = Some(winner_id);
-        // Accept winner + reject the rest.
+        // Reject losers FIRST (each via the handle-aware bridge so active
+        // recognizers emit cancellations), then accept the winner, whose
+        // claim-time event is emitted from `accept`. This yields
+        // `[…cancellations, <winner event>]` in `emitted`.
+        let mut winner_pending = None;
         for (idx, r) in self.members.iter_mut().enumerate() {
             let mut pending = None;
             let mut handle = ArenaHandle {
@@ -131,12 +155,16 @@ impl Arena {
             };
             if idx == winner_idx {
                 r.accept(&mut handle);
-            } else {
-                r.reject();
+                winner_pending = pending;
+            } else if !matches!(r.state(), RecognizerState::Rejected) {
+                r.reject_with_handle(&mut handle);
+                if let Some(ev) = pending {
+                    self.emitted.push(ev);
+                }
             }
-            if let Some(ev) = pending {
-                self.emitted.push(ev);
-            }
+        }
+        if let Some(ev) = winner_pending {
+            self.emitted.push(ev);
         }
     }
 
@@ -160,16 +188,42 @@ impl Arena {
     /// / LongPress on those pointers loses to the multi gesture.
     /// `resolved` gets a synthetic id (u64::MAX) so subsequent
     /// `dispatch` calls take the fast path and feed nothing further.
-    pub fn cancel_all(&mut self) {
+    ///
+    /// Returns the cancellation events produced by the rejection (an
+    /// active Press emits `PressCancel`) so the router can order them
+    /// BEFORE the multi recognizer's claim event.
+    pub fn cancel_all(&mut self) -> Vec<SemanticEventEnvelope> {
+        let mut cancels = Vec::new();
         if self.resolved.is_some() {
-            return;
+            return cancels;
         }
         for r in &mut self.members {
             if !matches!(r.state(), RecognizerState::Rejected) {
-                r.reject();
+                let mut pending = None;
+                let mut handle = ArenaHandle {
+                    pending_semantic: &mut pending,
+                };
+                r.reject_with_handle(&mut handle);
+                if let Some(ev) = pending {
+                    cancels.push(ev);
+                }
             }
         }
         self.resolved = Some(u64::MAX);
+        cancels
+    }
+
+    /// Witness-only feed: refresh factual state (the Press recognizer's
+    /// last-observed `PointerFacts`) with `event` WITHOUT letting any
+    /// recognizer claim. Called by the router before a cross-arena
+    /// multi-pointer claim cancels this arena, so the triggering
+    /// pointer's `PressCancel` carries the current event's facts instead
+    /// of stale ones — and a Pan/Tap cannot win the arena off the back
+    /// of the cancelling event.
+    pub fn witness_press(&mut self, event: &PointerEvent) {
+        for r in &mut self.members {
+            r.witness_pointer(event);
+        }
     }
 
     /// Drive `tick()` on every still-Possible member. If one of them claims
@@ -177,22 +231,20 @@ impl Arena {
     /// arena — accept the winner, reject everyone else — so that the
     /// next pointer event doesn't let a competing recognizer also claim.
     pub fn tick(&mut self, now_ms: u64) {
-        if self.resolved.is_some() {
+        if let Some(winner_id) = self.resolved {
             // Still route ticks to the winner in case it wants to emit
             // follow-up events (e.g. pan velocity). No resolution needed.
-            if let Some(winner_id) = self.resolved {
-                for r in &mut self.members {
-                    if r.id() == winner_id {
-                        let mut pending = None;
-                        let mut handle = ArenaHandle {
-                            pending_semantic: &mut pending,
-                        };
-                        r.tick(now_ms, &mut handle);
-                        if let Some(ev) = pending {
-                            self.emitted.push(ev);
-                        }
-                        break;
+            for r in &mut self.members {
+                if r.id() == winner_id {
+                    let mut pending = None;
+                    let mut handle = ArenaHandle {
+                        pending_semantic: &mut pending,
+                    };
+                    r.tick(now_ms, &mut handle);
+                    if let Some(ev) = pending {
+                        self.emitted.push(ev);
                     }
+                    break;
                 }
             }
             return;

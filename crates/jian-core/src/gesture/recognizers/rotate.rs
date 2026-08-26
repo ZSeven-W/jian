@@ -13,7 +13,7 @@ use crate::document::NodeKey;
 use crate::geometry::Point;
 use crate::gesture::pointer::{PointerEvent, PointerPhase};
 use crate::gesture::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
-use crate::gesture::semantic::SemanticEvent;
+use crate::gesture::semantic::{GestureFacts, PointerFacts, SemanticEvent};
 use std::f32::consts::{PI, TAU};
 
 /// Activation threshold = 5° (`PI / 36`). Plan 5 Task 9 / multi-
@@ -29,6 +29,10 @@ pub struct RotateRecognizer {
     initial_angle: Option<f32>,
     started: bool,
     ended: bool,
+    /// Last reported rotation (radians, for per-frame delta).
+    last_radians: Option<f32>,
+    /// Last reported focal point (midpoint), for end payloads.
+    last_focal: Option<Point>,
 }
 
 impl RotateRecognizer {
@@ -41,11 +45,17 @@ impl RotateRecognizer {
             initial_angle: None,
             started: false,
             ended: false,
+            last_radians: None,
+            last_focal: None,
         }
     }
 
     fn angle(a: Point, b: Point) -> f32 {
         (b.y - a.y).atan2(b.x - a.x)
+    }
+
+    fn midpoint(a: Point, b: Point) -> Point {
+        crate::geometry::point((a.x + b.x) * 0.5, (a.y + b.y) * 0.5)
     }
 
     /// Wrap the unbounded difference back into `(-π, π]` so a small
@@ -106,17 +116,47 @@ impl Recognizer for RotateRecognizer {
                 };
                 let cur = Self::angle(self.pids[0].1, self.pids[1].1);
                 let radians = Self::wrap(cur - initial);
+                let focal = Self::midpoint(self.pids[0].1, self.pids[1].1);
                 if !self.started {
                     if radians.abs() > ROTATE_ACTIVATION {
                         self.started = true;
                         self.state = RecognizerState::Claimed;
-                        arena.emit(SemanticEvent::RotateStart { node: self.node });
+                        self.last_radians = Some(radians);
+                        self.last_focal = Some(focal);
+                        let facts = PointerFacts::from_event(event);
+                        arena.emit_with(
+                            SemanticEvent::RotateStart { node: self.node },
+                            facts,
+                            GestureFacts {
+                                // The threshold-crossing rotation itself;
+                                // delta vs. the initial angle (0) equals it.
+                                rotation: Some(radians),
+                                delta_rotation: Some(radians),
+                                focal: Some(focal),
+                                ..Default::default()
+                            },
+                        );
                     }
                 } else {
-                    arena.emit(SemanticEvent::RotateUpdate {
-                        node: self.node,
-                        radians,
-                    });
+                    // Per-frame delta wraps across the ±π boundary so a
+                    // small rotation near the seam never reads as ~2π.
+                    let delta_rotation = self.last_radians.map(|prev| Self::wrap(radians - prev));
+                    self.last_radians = Some(radians);
+                    self.last_focal = Some(focal);
+                    let facts = PointerFacts::from_event(event);
+                    arena.emit_with(
+                        SemanticEvent::RotateUpdate {
+                            node: self.node,
+                            radians,
+                        },
+                        facts,
+                        GestureFacts {
+                            rotation: Some(radians),
+                            delta_rotation,
+                            focal: Some(focal),
+                            ..Default::default()
+                        },
+                    );
                 }
             }
             PointerPhase::Up | PointerPhase::Cancel => {
@@ -124,12 +164,23 @@ impl Recognizer for RotateRecognizer {
                 self.pids.retain(|(p, _)| *p != pid);
                 if was_two && self.started && !self.ended {
                     self.ended = true;
-                    arena.emit(SemanticEvent::RotateEnd { node: self.node });
+                    let facts = PointerFacts::from_event(event);
+                    arena.emit_with(
+                        SemanticEvent::RotateEnd { node: self.node },
+                        facts,
+                        GestureFacts {
+                            rotation: self.last_radians,
+                            focal: self.last_focal,
+                            ..Default::default()
+                        },
+                    );
                 }
                 if self.pids.is_empty() {
                     self.initial_angle = None;
                     self.started = false;
                     self.ended = false;
+                    self.last_radians = None;
+                    self.last_focal = None;
                 }
             }
             PointerPhase::Hover => {}
@@ -149,6 +200,7 @@ impl Recognizer for RotateRecognizer {
 mod tests {
     use super::*;
     use crate::geometry::point;
+    use crate::gesture::semantic::SemanticEventEnvelope;
     use slotmap::SlotMap;
 
     fn make_key() -> NodeKey {
@@ -157,6 +209,17 @@ mod tests {
     }
 
     fn dispatch(r: &mut RotateRecognizer, ev: PointerEvent) -> Option<SemanticEvent> {
+        let mut pending = None;
+        let mut h = ArenaHandle {
+            pending_semantic: &mut pending,
+        };
+        let _ = r.handle_pointer(&ev, &mut h);
+        pending.map(|e| e.event)
+    }
+
+    /// Like `dispatch` but keeps the envelope so gesture facts can be
+    /// asserted (exact rotation / deltaRotation values).
+    fn dispatch_env(r: &mut RotateRecognizer, ev: PointerEvent) -> Option<SemanticEventEnvelope> {
         let mut pending = None;
         let mut h = ArenaHandle {
             pending_semantic: &mut pending,
@@ -264,6 +327,95 @@ mod tests {
                 "wrap should keep small flips small; got {radians}"
             );
         }
+    }
+
+    #[test]
+    fn rotate_start_carries_actual_crossing_rotation() {
+        let node = make_key();
+        let mut r = RotateRecognizer::new(1, node);
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Down, point(0.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(100.0, 0.0)),
+        );
+        // Crossing Move: b at (100, 10) → atan2(10, 100) ≈ 0.0997 rad.
+        let start = dispatch_env(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(100.0, 10.0)),
+        )
+        .expect("RotateStart envelope");
+        assert!(matches!(start.event, SemanticEvent::RotateStart { .. }));
+        let expected = RotateRecognizer::angle(point(0.0, 0.0), point(100.0, 10.0));
+        let rotation = start.gesture.rotation.expect("rotation");
+        let delta = start.gesture.delta_rotation.expect("deltaRotation");
+        assert!(
+            (rotation - expected).abs() < 1e-4,
+            "rotation must be the threshold-crossing value, got {rotation}"
+        );
+        assert_eq!(delta, rotation, "deltaRotation = rotation at start");
+        // Update after start: delta is the wrapped per-frame difference.
+        let update = dispatch_env(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(100.0, 20.0)),
+        )
+        .expect("RotateUpdate envelope");
+        if let SemanticEvent::RotateUpdate { .. } = update.event {
+            let prev = RotateRecognizer::angle(point(0.0, 0.0), point(100.0, 10.0));
+            let cur = RotateRecognizer::angle(point(0.0, 0.0), point(100.0, 20.0));
+            let delta = update.gesture.delta_rotation.expect("deltaRotation");
+            assert!(
+                (delta - (cur - prev)).abs() < 1e-4,
+                "expected {} got {delta}",
+                cur - prev
+            );
+        } else {
+            panic!("expected RotateUpdate");
+        }
+    }
+
+    /// deltaRotation wraps across the ±π seam: two updates on opposite
+    /// sides of the boundary differ by a tiny angle, so the per-frame
+    /// delta must be tiny — not ~2π.
+    #[test]
+    fn rotate_update_delta_wraps_across_pi_seam() {
+        let node = make_key();
+        let mut r = RotateRecognizer::new(1, node);
+        // Initial angle 0 (a at origin, b at +x).
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Down, point(0.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(100.0, 0.0)),
+        );
+        // b to the -x side slightly above: angle ≈ π − ε (claims, rotation
+        // ≈ +π − ε).
+        let start = dispatch_env(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(-100.0, 1.0)),
+        );
+        assert!(matches!(
+            start.map(|e| e.event),
+            Some(SemanticEvent::RotateStart { .. })
+        ));
+        // b to the -x side slightly below: angle ≈ −π + ε (rotation ≈ −π + ε).
+        let update = dispatch_env(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(-100.0, -1.0)),
+        )
+        .expect("RotateUpdate envelope");
+        let delta = update.gesture.delta_rotation.expect("deltaRotation");
+        assert!(
+            delta.abs() < 0.1,
+            "seam crossing must stay small, got {delta} rad"
+        );
+        // Unwrapped it would be ≈ −2π (+small), so the value is provably
+        // wrapped.
+        assert!(delta.abs() < PI, "delta must be within ±π, got {delta}");
     }
 
     #[test]

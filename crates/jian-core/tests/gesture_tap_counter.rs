@@ -25,12 +25,37 @@ const COUNTER_OP: &str = r##"{
 }"##;
 
 fn make_runtime() -> Runtime {
+    make_runtime_with(COUNTER_OP)
+}
+
+fn make_runtime_with<S: AsRef<str>>(op: S) -> Runtime {
     let mut rt = Runtime::new();
-    rt.load_str(COUNTER_OP).unwrap();
+    rt.load_str(op.as_ref()).unwrap();
     rt.build_layout((800.0, 600.0)).unwrap();
     rt.rebuild_spatial();
     rt
 }
+
+/// Same button as `COUNTER_OP` but declaring BOTH `onTap` and
+/// `onDoubleTap` — the handler-aware deferral fixture.
+const DOUBLE_TAP_OP: &str = r##"{
+  "formatVersion": "1.0",
+  "version": "1.0.0",
+  "state": { "count": { "type": "int", "default": 0 }, "doubles": { "type": "int", "default": 0 } },
+  "children": [
+    {
+      "type": "rectangle",
+      "id": "btn",
+      "width": 200,
+      "height": 100,
+      "fill": [{ "type": "solid", "color": "#1e88e5" }],
+      "events": {
+        "onTap": [ { "set": { "$app.count": "$app.count + 1" } } ],
+        "onDoubleTap": [ { "set": { "$app.doubles": "$app.doubles + 1" } } ]
+      }
+    }
+  ]
+}"##;
 
 #[test]
 fn tap_increments_app_count() {
@@ -100,21 +125,125 @@ fn drag_past_slop_rejects_tap() {
 }
 
 #[test]
-fn double_tap_on_same_spot_fires_double_tap_event() {
+fn double_tap_on_same_spot_fires_only_double_tap() {
+    // Handler-aware contract: with BOTH onTap and onDoubleTap declared,
+    // the first Tap is buffered (no immediate Tap), and a matching second
+    // Tap yields ONLY onDoubleTap — no first- or second-Tap.
+    let mut rt = make_runtime_with(DOUBLE_TAP_OP);
+    let btn = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+    let rect = rt.layout.node_rect(btn).unwrap();
+    let cx = rect.min_x() + rect.size.width / 2.0;
+    let cy = rect.min_y() + rect.size.height / 2.0;
+
+    // First tap: buffered — the semantic stream must NOT deliver a Tap.
+    let _ = rt.dispatch_pointer(PointerEvent::simple_at(
+        3,
+        PointerPhase::Down,
+        jian_core::geometry::point(cx, cy),
+        0,
+    ));
+    let first_up = rt.dispatch_pointer(PointerEvent::simple_at(
+        3,
+        PointerPhase::Up,
+        jian_core::geometry::point(cx, cy),
+        50,
+    ));
+    assert!(
+        first_up.is_empty(),
+        "first Tap must be buffered when onDoubleTap exists, got {first_up:?}"
+    );
+
+    // Second tap immediately (within the 300ms window, same spot).
+    let _ = rt.dispatch_pointer(PointerEvent::simple_at(
+        4,
+        PointerPhase::Down,
+        jian_core::geometry::point(cx + 1.0, cy + 1.0),
+        150,
+    ));
+    let second_up = rt.dispatch_pointer(PointerEvent::simple_at(
+        4,
+        PointerPhase::Up,
+        jian_core::geometry::point(cx + 1.0, cy + 1.0),
+        200,
+    ));
+    assert_eq!(
+        second_up.len(),
+        1,
+        "matching second Tap must yield exactly one event, got {second_up:?}"
+    );
+    assert!(matches!(
+        second_up[0],
+        jian_core::gesture::SemanticEvent::DoubleTap { .. }
+    ));
+    // The buffered first Tap is consumed by the double tap: neither onTap
+    // nor onDoubleTap's counterpart fired a Tap.
+    assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(0));
+    assert_eq!(rt.state.app_get("doubles").unwrap().as_i64(), Some(1));
+
+    // The pending buffer is gone: a later tick flushes nothing.
+    assert!(rt.tick(10_000).is_empty());
+}
+
+#[test]
+fn first_tap_flushes_exactly_once_at_deadline() {
+    // No second Tap → the buffered Tap fires exactly once from
+    // PointerRouter::tick at the authored/default deadline, even with no
+    // new input. Exact-deadline behavior: `deadline - 1` is NOT yet due,
+    // `deadline` IS due (>= — deterministic).
+    let mut rt = make_runtime_with(DOUBLE_TAP_OP);
+    let btn = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
+    let rect = rt.layout.node_rect(btn).unwrap();
+    let cx = rect.min_x() + rect.size.width / 2.0;
+    let cy = rect.min_y() + rect.size.height / 2.0;
+
+    let _ = rt.dispatch_pointer(PointerEvent::simple_at(
+        5,
+        PointerPhase::Down,
+        jian_core::geometry::point(cx, cy),
+        1_000,
+    ));
+    let up = rt.dispatch_pointer(PointerEvent::simple_at(
+        5,
+        PointerPhase::Up,
+        jian_core::geometry::point(cx, cy),
+        1_050,
+    ));
+    assert!(up.is_empty(), "buffered, got {up:?}");
+    let deadline = 1_050 + 300;
+
+    assert!(
+        rt.tick(deadline - 1).is_empty(),
+        "tick one ms before the deadline must not flush"
+    );
+    let flush = rt.tick(deadline);
+    assert_eq!(flush.len(), 1, "deadline must flush exactly one Tap");
+    assert!(matches!(
+        flush[0],
+        jian_core::gesture::SemanticEvent::Tap { .. }
+    ));
+    // Delivered exactly once: the handler ran, and no further tick
+    // re-emits it.
+    assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(1));
+    assert!(rt.tick(deadline + 1_000).is_empty());
+}
+
+#[test]
+fn tap_only_target_dispatches_immediately_and_double_tap_is_not_synthesized() {
+    // Tap-only chain: the Tap dispatches immediately on Up and no
+    // DoubleTap semantic is invented (handler-aware synthesis).
     let mut rt = make_runtime();
     let btn = rt.document.as_ref().unwrap().tree.get("btn").unwrap();
     let rect = rt.layout.node_rect(btn).unwrap();
     let cx = rect.min_x() + rect.size.width / 2.0;
     let cy = rect.min_y() + rect.size.height / 2.0;
 
-    // First tap.
     let _ = rt.dispatch_pointer(PointerEvent::simple(
-        3,
+        6,
         PointerPhase::Down,
         jian_core::geometry::point(cx, cy),
     ));
     let first_up = rt.dispatch_pointer(PointerEvent::simple(
-        3,
+        6,
         PointerPhase::Up,
         jian_core::geometry::point(cx, cy),
     ));
@@ -124,23 +253,29 @@ fn double_tap_on_same_spot_fires_double_tap_event() {
         jian_core::gesture::SemanticEvent::Tap { .. }
     ));
 
-    // Second tap immediately — router tracks Tap history across arenas.
     let _ = rt.dispatch_pointer(PointerEvent::simple(
-        4,
+        7,
         PointerPhase::Down,
         jian_core::geometry::point(cx + 1.0, cy + 1.0),
     ));
     let second_up = rt.dispatch_pointer(PointerEvent::simple(
-        4,
+        7,
         PointerPhase::Up,
         jian_core::geometry::point(cx + 1.0, cy + 1.0),
     ));
-    assert!(second_up
-        .iter()
-        .any(|e| matches!(e, jian_core::gesture::SemanticEvent::Tap { .. })));
-    assert!(second_up
-        .iter()
-        .any(|e| matches!(e, jian_core::gesture::SemanticEvent::DoubleTap { .. })));
+    assert!(
+        second_up
+            .iter()
+            .any(|e| matches!(e, jian_core::gesture::SemanticEvent::Tap { .. })),
+        "second tap on a Tap-only target is an immediate Tap, got {second_up:?}"
+    );
+    assert!(
+        !second_up
+            .iter()
+            .any(|e| matches!(e, jian_core::gesture::SemanticEvent::DoubleTap { .. })),
+        "no onDoubleTap handler → no DoubleTap semantic, got {second_up:?}"
+    );
+    assert_eq!(rt.state.app_get("count").unwrap().as_i64(), Some(2));
 }
 
 #[test]

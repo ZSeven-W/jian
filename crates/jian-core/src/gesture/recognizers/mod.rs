@@ -1,7 +1,7 @@
 //! Recognizer roster.
 //!
 //! - **Single-pointer (live)**: Tap / DoubleTap / LongPress / Pan /
-//!   Hover.
+//!   Press / Hover.
 //! - **Wheel (live)**: handled outside the arena via
 //!   `Runtime::dispatch_wheel`.
 //! - **Multi-pointer (live)**: `ScaleRecognizer` and
@@ -15,6 +15,7 @@
 pub mod hover;
 pub mod long_press;
 pub mod pan;
+pub mod press;
 pub mod rotate;
 pub mod scale;
 pub mod tap;
@@ -22,6 +23,7 @@ pub mod tap;
 pub use hover::HoverRecognizer;
 pub use long_press::LongPressRecognizer;
 pub use pan::PanRecognizer;
+pub use press::PressRecognizer;
 pub use rotate::RotateRecognizer;
 pub use scale::ScaleRecognizer;
 pub use tap::{DoubleTapRecognizer, TapRecognizer};

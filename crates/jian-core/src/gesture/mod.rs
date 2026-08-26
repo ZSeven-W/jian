@@ -1,6 +1,7 @@
 //! Gesture Arena — Flutter-style pointer event pipeline and recognizer arbitration.
 
 pub mod arena;
+pub mod config;
 pub mod dispatcher;
 pub mod focus;
 pub mod hit;
@@ -13,6 +14,8 @@ pub mod recognizer;
 pub mod recognizers;
 pub mod router;
 pub mod semantic;
+
+mod router_tap;
 
 pub use focus::{collect_focus_chain, FocusChange, FocusEvent, FocusManager};
 pub use raw::find_raw_root;
@@ -27,4 +30,4 @@ pub use pointer::{
     WheelEvent,
 };
 pub use recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
-pub use semantic::SemanticEvent;
+pub use semantic::{GestureFacts, PointerFacts, SemanticEvent, SemanticEventEnvelope};
