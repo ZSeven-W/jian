@@ -109,9 +109,19 @@ impl Recognizer for ScaleRecognizer {
                 }
                 self.pids.push((pid, event.position));
                 if self.pids.len() == 2 {
+                    // Regaining the two-finger quorum opens a FRESH
+                    // session (R2B2 2→1→2 contract): new baseline,
+                    // and Start/End symmetry requires a new Possible→
+                    // Claimed edge so the router re-runs preflight and
+                    // a new `ScaleStart` can fire.
                     let a = self.pids[0].1;
                     let b = self.pids[1].1;
                     self.initial = Some((Self::distance(a, b), Self::midpoint(a, b)));
+                    self.state = RecognizerState::Possible;
+                    self.started = false;
+                    self.ended = false;
+                    self.last_scale = None;
+                    self.last_focal = None;
                 }
             }
             PointerPhase::Move => {
@@ -181,11 +191,23 @@ impl Recognizer for ScaleRecognizer {
                 }
             }
             PointerPhase::Up | PointerPhase::Cancel => {
-                // Drop this pointer from the tracker. If we cross the
-                // 2 → 1 boundary AND we'd already started, emit End.
-                let was_two = self.pids.len() == 2;
+                // Only a TRACKED pointer participates in this teardown.
+                // An untracked pointer (never registered because the
+                // transform owns its two-finger quorum) must be a pure
+                // no-op — a third finger's Up may never end someone
+                // else's gesture. R2B2 third-finger contract.
+                if !self.pids.iter().any(|(p, _)| *p == pid) {
+                    return self.state;
+                }
                 self.pids.retain(|(p, _)| *p != pid);
-                if was_two && self.started && !self.ended {
+                if self.started && !self.ended && self.pids.len() < 2 {
+                    // Dropping below the two-finger quorum terminates
+                    // THIS session symmetrically (Start counted one End)
+                    // and arms the next Down pair for a fresh session
+                    // with a freshly sampled baseline. R2B2 2→1→2 fix:
+                    // previously the instance kept `started` true and a
+                    // re-grab emitted Updates with stale deltas and no
+                    // Start.
                     self.ended = true;
                     let facts = PointerFacts::from_event(event);
                     arena.emit_with(
@@ -220,6 +242,9 @@ impl Recognizer for ScaleRecognizer {
     }
     fn reject(&mut self) {
         self.state = RecognizerState::Rejected;
+    }
+    fn has_participant_capacity(&self) -> bool {
+        self.pids.len() < 2
     }
 }
 
@@ -412,5 +437,109 @@ mod tests {
         );
         assert!(ev.is_none());
         assert_eq!(r.state(), RecognizerState::Possible);
+    }
+
+    #[test]
+    fn scale_two_one_two_regrab_is_a_fresh_session() {
+        let node = make_key();
+        let mut r = ScaleRecognizer::new(1, node);
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Down, point(0.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(100.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(120.0, 0.0)),
+        );
+        assert_eq!(r.state(), RecognizerState::Claimed);
+        // Lift to one finger: symmetric End.
+        let end = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Up, point(120.0, 0.0)),
+        );
+        assert!(matches!(end, Some(SemanticEvent::ScaleEnd { .. })));
+        // Single-finger moves are quiet — no stale-delta updates.
+        assert!(dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Move, point(30.0, 0.0))
+        )
+        .is_none());
+        // Regaining quorum resets THIS instance's session bookkeeping
+        // immediately: the router may only treat a later threshold
+        // crossing as a FRESH claim through Possible.
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(300.0, 0.0)),
+        );
+        assert_eq!(
+            r.state(),
+            RecognizerState::Possible,
+            "regained pair must restart from Possible"
+        );
+        // Crossing 5% of the FRESH baseline (slot0=30 → slot1=300 ⇒
+        // 270px) claims anew.
+        let start = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Move, point(-5.0, 0.0)),
+        );
+        match start {
+            // dist 305 / baseline 270 ≈ 1.13 — fresh-crossing scale.
+            Some(SemanticEvent::ScaleStart { .. }) => {}
+            other => panic!("expected a fresh ScaleStart, got {other:?}"),
+        }
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(320.0, 0.0)),
+        );
+        // A subsequent Update reports scale against the NEW baseline
+        // (dist 315 / 270 ≈ 1.167), never the stale pre-lift one.
+        let upd = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Move, point(5.0, 0.0)),
+        );
+        match upd {
+            Some(SemanticEvent::ScaleUpdate { scale, .. }) => {
+                assert!(
+                    (scale - 315.0 / 270.0).abs() < 1e-4,
+                    "stale baseline leaked: {scale}"
+                );
+            }
+            other => panic!("expected ScaleUpdate on fresh session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scale_up_of_an_untracked_pointer_is_a_pure_noop() {
+        let node = make_key();
+        let mut r = ScaleRecognizer::new(1, node);
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Down, point(0.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(100.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(130.0, 0.0)),
+        );
+        // A pointer the recognizer never tracked must not disturb it.
+        let ev = dispatch(
+            &mut r,
+            PointerEvent::simple(9, PointerPhase::Up, point(50.0, 0.0)),
+        );
+        assert!(ev.is_none(), "untracked Up emitted {ev:?}");
+        assert_eq!(r.state(), RecognizerState::Claimed);
+        // The live pair keeps streaming updates afterwards.
+        let upd = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(150.0, 0.0)),
+        );
+        assert!(matches!(upd, Some(SemanticEvent::ScaleUpdate { .. })));
     }
 }

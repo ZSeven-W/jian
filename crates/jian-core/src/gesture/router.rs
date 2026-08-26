@@ -45,6 +45,7 @@ use super::arena::Arena;
 use super::config;
 use super::hit::{hit_test, HitPath};
 use super::pointer::{MouseButtons, PointerEvent, PointerKind, PointerPhase};
+use super::priority::multi_claim_order;
 use super::raw::find_raw_root;
 use super::recognizer::{ArenaHandle, Recognizer, RecognizerId, RecognizerState};
 use super::recognizers::{
@@ -357,15 +358,27 @@ impl PointerRouter {
                 let id = self.find_or_create_multi(node, "Scale", |id| {
                     Box::new(ScaleRecognizer::new(id, node))
                 });
-                self.shared.entry(id).or_default().push(pid);
+                self.append_shared_participant(id, pid);
             }
             if handlers.rotate {
                 let id = self.find_or_create_multi(node, "Rotate", |id| {
                     Box::new(RotateRecognizer::new(id, node))
                 });
-                self.shared.entry(id).or_default().push(pid);
+                self.append_shared_participant(id, pid);
             }
         }
+    }
+
+    /// Append `pid` to a multi team's participant list iff the owning
+    /// recognizer still has capacity. Transforms own at most two fingers
+    /// (R2B2 third-finger contract): a third pointer stays independent —
+    /// it never joins `shared`, so its events can't disturb transform
+    /// bookkeeping and its Up can never fire a spurious End.
+    fn append_shared_participant(&mut self, id: RecognizerId, pid: u32) {
+        if self.multi.get(&id).map(|r| r.has_participant_capacity()) != Some(true) {
+            return;
+        }
+        self.shared.entry(id).or_default().push(pid);
     }
 
     fn find_or_create_multi(
@@ -384,24 +397,50 @@ impl PointerRouter {
     }
 
     /// Feed `event` to every multi-pointer recognizer this pointer
-    /// participates in. If a recognizer claims, broadcast cancellation
-    /// to all per-pointer arenas in its `shared` set — except
-    /// already-resolved arenas, which would mean the multi claim
-    /// arrived too late (Tap / Pan already won that pointer).
+    /// participates in, in the FIXED arbitration order `Scale → Rotate`
+    /// (`super::priority::multi_claim_order`, id tiebreak) — never the
+    /// HashMap layout of `shared`.
     ///
-    /// Cancellations (an active Press emits `PressCancel`) are pushed
-    /// BEFORE the multi recognizer's claim event, so the stream is
-    /// `[PressCancel, ScaleStart]` — cancel first, then the winner's
-    /// semantic event.
+    /// R2B2 contract — evaluate → preflight → one-shot capture:
+    ///
+    /// 1. Every participant is FED first without touching any per-pointer
+    ///    arena, collecting fresh `Possible→Claimed` edges.
+    /// 2. Each fresh claim is preflighted against PRISTINE arena state:
+    ///    any already-resolved participant arena means that claim arrived
+    ///    too late, so it rejects WITHOUT cancelling anything (no partial
+    ///    captures).
+    /// 3. Surviving claims co-win as ONE multi-team: a single capture pass
+    ///    over the union of their participants cancels each unresolved
+    ///    per-pointer arena exactly once (the triggering pointer's arena
+    ///    is witness-fed the current event first), then their Start events
+    ///    emit in the fixed order after all cancellations.
+    ///
+    /// Streams therefore look like `[PressCancel…, ScaleStart, …]`, or
+    /// `[PressCancel…, ScaleStart, RotateStart]` when both transforms win
+    /// together.
     fn dispatch_multi(&mut self, event: &PointerEvent, out: &mut Vec<SemanticEventEnvelope>) {
         let pid = event.id.0;
-        // Snapshot the recognizer ids this pointer feeds so we can
-        // mutate `self.multi` without holding a borrow on `shared`.
-        let rids: Vec<RecognizerId> = self
+        // Snapshot the recognizer ids this pointer feeds in canonical
+        // arbitration order, so we can mutate `self.multi` afterwards
+        // without holding a borrow on `shared`.
+        let mut rids: Vec<RecognizerId> = self
             .shared
             .iter()
             .filter_map(|(rid, pids)| pids.contains(&pid).then_some(*rid))
             .collect();
+        rids.sort_by(|&a, &b| {
+            multi_claim_order(self.multi.get(&a).map(|r| r.kind()))
+                .cmp(&multi_claim_order(self.multi.get(&b).map(|r| r.kind())))
+                .then(a.cmp(&b))
+        });
+
+        // Phase 1 — evaluate every participant BEFORE mutating anything.
+        // The pre-state snapshot ensures only a Possible→Claimed edge
+        // counts as a fresh claim; already-Claimed recognizers keep
+        // emitting Update events in this same phase-1 order.
+        let mut session_events: Vec<SemanticEventEnvelope> = Vec::new();
+        let mut fresh_claims: Vec<(RecognizerId, Vec<u32>, Option<SemanticEventEnvelope>)> =
+            Vec::new();
         for rid in rids {
             let Some(recog) = self.multi.get_mut(&rid) else {
                 continue;
@@ -409,73 +448,104 @@ impl PointerRouter {
             if matches!(recog.state(), RecognizerState::Rejected) {
                 continue;
             }
-            // Snapshot the pre-state so we can detect the
-            // Possible→Claimed transition (vs. already-Claimed
-            // sending Update events). Without this, the too_late
-            // arbitration would re-fire on every Update, where it
-            // *always* sees per-pointer arenas as resolved (they
-            // were cancelled at the original claim) and would reject
-            // a perfectly-valid in-flight gesture.
+            // Snapshot the pre-state so we can detect the Possible→Claimed
+            // transition (vs. already-Claimed sending Update events).
+            // Without this, the too_late arbitration would re-fire on
+            // every Update, where it *always* sees per-pointer arenas as
+            // resolved (they were cancelled at the original claim) and
+            // would reject a perfectly-valid in-flight gesture.
             let prev_state = recog.state();
             let mut pending = None;
             let mut handle = ArenaHandle {
                 pending_semantic: &mut pending,
             };
             let new_state = recog.handle_pointer(event, &mut handle);
-            // Re-borrow-free: clone the participant list before we
-            // mutate per-pointer arenas.
-            let participants: Vec<u32> = self.shared.get(&rid).cloned().unwrap_or_default();
             let claim_transition = matches!(new_state, RecognizerState::Claimed)
                 && !matches!(prev_state, RecognizerState::Claimed);
             if claim_transition {
-                // Plan 5 §B.2: any already-resolved arena means the
-                // multi claim is too late. Reject the recognizer and
-                // SUPPRESS the pending Start event — without this, an
-                // observer would see ScaleStart / RotateStart for a
-                // gesture that immediately rejected, with no matching
-                // End. Codex round 26 Q1.
-                let too_late = participants
-                    .iter()
-                    .any(|p| self.arenas.get(p).map(Arena::is_resolved).unwrap_or(false));
-                if too_late {
-                    let mut none = None;
-                    let mut reject_handle = ArenaHandle {
-                        pending_semantic: &mut none,
-                    };
-                    self.multi
-                        .get_mut(&rid)
-                        .unwrap()
-                        .reject_with_handle(&mut reject_handle);
+                // Clone the participant list before we later mutate
+                // per-pointer arenas (re-borrow-free).
+                let participants = self.shared.get(&rid).cloned().unwrap_or_default();
+                fresh_claims.push((rid, participants, pending));
+            } else {
+                session_events.extend(pending);
+            }
+        }
+
+        if fresh_claims.is_empty() {
+            out.extend(session_events);
+            return;
+        }
+
+        // Phase 2 — PREFLIGHT against pristine arenas (phase 1 cancelled
+        // nothing): plan 5 §B.2's too-late rule plus zero partial-capture.
+        // A claim failing here rejects while NOTHING has been cancelled.
+        // The probe ignores arenas parked by OUR OWN earlier multi
+        // capture (`u64::MAX` sentinel) — those are this team's previous
+        // session, not a committed competitor gesture — so the 2→1→2
+        // re-grab can pass preflight and open a fresh session (R2B2).
+        let mut winners: Vec<(RecognizerId, Vec<u32>, Option<SemanticEventEnvelope>)> =
+            Vec::with_capacity(fresh_claims.len());
+        for (rid, participants, pending) in fresh_claims {
+            let too_late = participants.iter().any(|p| {
+                self.arenas
+                    .get(p)
+                    .map(Arena::is_competitor_resolved)
+                    .unwrap_or(false)
+            });
+            if too_late {
+                // Reject and SUPPRESS the pending Start event — an
+                // observer must never see ScaleStart / RotateStart for a
+                // gesture that immediately rejected, with no matching End.
+                // Codex round 26 Q1.
+                let mut none = None;
+                let mut reject_handle = ArenaHandle {
+                    pending_semantic: &mut none,
+                };
+                if let Some(recog) = self.multi.get_mut(&rid) {
+                    recog.reject_with_handle(&mut reject_handle);
+                }
+                continue;
+            }
+            winners.push((rid, participants, pending));
+        }
+        if winners.is_empty() {
+            out.extend(session_events);
+            return;
+        }
+
+        // ONE-SHOT CAPTURE — the multi gesture wins across its union of
+        // participants; single-pointer Tap / Pan / LongPress / Press on
+        // these pointers lose exactly once each. The triggering pointer's
+        // arena is witness-fed the current Move first so its PressCancel
+        // carries current factual metadata; other participants keep their
+        // latest factual event. Members shared by co-winning claims are
+        // captured once.
+        let mut captured: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut cancels = Vec::new();
+        for (_, participants, _) in &winners {
+            for p in participants {
+                if !captured.insert(*p) {
                     continue;
                 }
-                // Cancel each unresolved per-pointer arena: the multi
-                // gesture wins, single-pointer Tap / Pan / LongPress /
-                // Press on these pointers lose. Collect the
-                // cancellations so they precede the claim event. The
-                // TRIGGERING pointer's arena is witness-fed the current
-                // event first (factual metadata only — no recognizer
-                // may claim off it), so its PressCancel carries the
-                // current Move; other participants keep their latest
-                // factual event.
-                let mut cancels = Vec::new();
-                for p in &participants {
-                    if let Some(arena) = self.arenas.get_mut(p) {
-                        if !arena.is_resolved() {
-                            if *p == pid {
-                                arena.witness_press(event);
-                            }
-                            cancels.extend(arena.cancel_all());
+                if let Some(arena) = self.arenas.get_mut(p) {
+                    if !arena.is_resolved() {
+                        if *p == pid {
+                            arena.witness_press(event);
                         }
+                        cancels.extend(arena.cancel_all());
                     }
                 }
-                out.extend(cancels);
             }
-            // Emit AFTER the too_late check so a rejected claim
-            // doesn't leak its Start payload onto the wire, and after
-            // the cancellations so PressCancel precedes the winner.
-            if let Some(ev) = pending {
-                out.push(ev);
-            }
+        }
+
+        // Emit AFTER the preflight so rejected claims never leak Starts,
+        // in fixed layers: in-flight session updates → capture
+        // cancellations → each winner's claim event in Scale→Rotate order.
+        out.extend(session_events);
+        out.extend(cancels);
+        for (_, _, pending) in winners {
+            out.extend(pending);
         }
     }
 
@@ -484,8 +554,15 @@ impl PointerRouter {
     /// `multi_instances`) so a future Down on a different scale
     /// target re-derives without stale state.
     fn unregister_multi_pointer(&mut self, pid: u32) {
+        // Sorted snapshot so teardown order never depends on HashMap
+        // layout (R2B2 determinism).
+        let mut rids: Vec<RecognizerId> = self.shared.keys().copied().collect();
+        rids.sort_unstable();
         let mut to_drop: Vec<RecognizerId> = Vec::new();
-        for (rid, pids) in self.shared.iter_mut() {
+        for rid in &rids {
+            let Some(pids) = self.shared.get_mut(rid) else {
+                continue;
+            };
             pids.retain(|p| *p != pid);
             if pids.is_empty() {
                 to_drop.push(*rid);
@@ -636,10 +713,17 @@ impl PointerRouter {
         now_ms: u64,
     ) -> Vec<SemanticEventEnvelope> {
         let mut out = Vec::new();
-        for (pid, arena) in self.arenas.iter_mut() {
-            if skip_pid == Some(*pid) {
+        // Sorted pointer order so cross-arena timer settlement never
+        // depends on HashMap iteration layout (R2B2 determinism).
+        let mut pids: Vec<u32> = self.arenas.keys().copied().collect();
+        pids.sort_unstable();
+        for pid in pids {
+            if skip_pid == Some(pid) {
                 continue;
             }
+            let Some(arena) = self.arenas.get_mut(&pid) else {
+                continue;
+            };
             arena.tick(now_ms);
             out.extend(arena.drain_envelopes());
         }

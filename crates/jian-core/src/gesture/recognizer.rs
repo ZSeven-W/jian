@@ -131,6 +131,15 @@ pub trait Recognizer {
     /// WITHOUT emitting or claiming. Default: no-op.
     fn witness_pointer(&mut self, _event: &PointerEvent) {}
 
+    /// Whether this recognizer still accepts another participant pointer.
+    /// Cross-pointer transforms own at most two fingers; the router
+    /// consults this before appending a third so a stray finger stays
+    /// independent (its Up can never fire a spurious transform End).
+    /// Default: unlimited. R2B2 third-finger contract.
+    fn has_participant_capacity(&self) -> bool {
+        true
+    }
+
     /// Router refresh hook: called immediately before each pointer event
     /// is fed to this recognizer, with the CURRENT state-aware
     /// `gestures.disabled` predicate. Recognizers that captured a

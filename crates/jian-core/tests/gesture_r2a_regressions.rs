@@ -466,7 +466,7 @@ fn cancel_disarms_slider_drag_and_later_move_does_not_scrub() {
 
     // Touch Down arms the drag (provable primary contact).
     let _ = rt.dispatch_pointer(touch(1, PointerPhase::Down, left, 0));
-    assert_eq!(slider_state(&rt).1, true, "armed");
+    assert!(slider_state(&rt).1, "armed");
     // Move scrubs to max.
     let _ = rt.dispatch_pointer(touch(1, PointerPhase::Move, far_right, 10));
     assert_eq!(
@@ -477,7 +477,7 @@ fn cancel_disarms_slider_drag_and_later_move_does_not_scrub() {
 
     // Cancel disarms exactly like Up.
     let _ = rt.dispatch_pointer(touch(1, PointerPhase::Cancel, far_right, 20));
-    assert_eq!(slider_state(&rt).1, false, "Cancel must disarm");
+    assert!(!slider_state(&rt).1, "Cancel must disarm");
 
     // A later Move scrubs nothing (no armed slider).
     let _ = rt.dispatch_pointer(touch(2, PointerPhase::Move, point(20.0, 40.0), 30));

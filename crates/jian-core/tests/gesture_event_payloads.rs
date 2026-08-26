@@ -1,13 +1,13 @@
 //! R2A `$event` payload snapshots: exact JSON for pointer facts (global +
 //! node-local coordinates, pointer id/type, phase, provable button,
 //! pressure, modifiers, tilt, timestamp) and gesture facts (Pan
-//! start/current/delta/translation/velocity, Scale/Rotate absolute+delta
-//! + focal), including initiating-button continuity (Tap/Press/Pan keep
-//! the Down's provable button) and Mouse/Pen hover payloads. Payloads are
-//! built by the ONE path used by `runtime/async_runtime.rs` —
-//! `SemanticEventEnvelope::payload` — driven here through
-//! `Runtime::dispatch_pointer_events` so the snapshots cover the real
-//! pipe.
+//! start/current/delta/translation/velocity, Scale/Rotate absolute,
+//! delta, and focal), including initiating-button continuity (Tap /
+//! Press / Pan keep the Down's provable button) and Mouse/Pen hover
+//! payloads. Payloads are built by the ONE path used by
+//! `runtime/async_runtime.rs` — `SemanticEventEnvelope::payload` — driven
+//! here through `Runtime::dispatch_pointer_events` so the snapshots cover
+//! the real pipe.
 
 use jian_core::geometry::{point, Point};
 use jian_core::gesture::{MouseButtons, PointerEvent, PointerId, PointerKind, PointerPhase};

@@ -45,6 +45,16 @@ impl Arena {
         self.resolved.is_some()
     }
 
+    /// True only when a REAL recogniser claimed this arena. `cancel_all`
+    /// parks cross-pointer captures at the `u64::MAX` sentinel instead:
+    /// that state is the multi-team's own bookkeeping, not a competitor
+    /// win, so a later session of the same transform (the 2→1→2 re-grab)
+    /// must never read it as an already-committed gesture. R2B2
+    /// preflight contract.
+    pub fn is_competitor_resolved(&self) -> bool {
+        matches!(self.resolved, Some(id) if id != u64::MAX)
+    }
+
     /// Envelope-returning drain — used by the router so factual pointer
     /// metadata stays attached end-to-end.
     pub fn drain_envelopes(&mut self) -> Vec<SemanticEventEnvelope> {

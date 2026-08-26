@@ -95,9 +95,9 @@ impl Runtime {
             // general bubbled resolution.
             let resolved = match event {
                 SemanticEvent::Swipe { .. } => {
-                    dispatcher::resolve_swipe_owner(document, event, &node_disabled)
+                    dispatcher::resolve_swipe_owner(document, event, node_disabled)
                 }
-                _ => dispatcher::resolve_handler(document, event, &node_disabled),
+                _ => dispatcher::resolve_handler(document, event, node_disabled),
             };
             let handler_owner = resolved.as_ref().map(|(owner, _)| *owner);
             // The ActionContext node id follows the resolved handler

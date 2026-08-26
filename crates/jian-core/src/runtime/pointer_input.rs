@@ -214,7 +214,7 @@ impl Runtime {
                 key,
             )
         };
-        dispatcher::resolve_swipe_owner(doc, &ev.event, &node_disabled).is_some()
+        dispatcher::resolve_swipe_owner(doc, &ev.event, node_disabled).is_some()
     }
 
     /// Pointer-phase driven slider scrubbing. On `Down` over a slider,

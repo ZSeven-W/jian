@@ -18,6 +18,20 @@ pub fn rank(r: &dyn Recognizer, doc: &RuntimeDocument) -> (u32, u32) {
     (depth, kind_priority)
 }
 
+/// Canonical arbitration order among CROSS-POINTER (multi) recognizers
+/// when several participate in one event: Scale always evaluates and
+/// emits before Rotate, with a numeric id tiebreak for future kinds.
+/// R2B2 determinism contract — this replaces the former HashMap
+/// iteration order of `PointerRouter::shared`, which made emission
+/// order vary per process.
+pub fn multi_claim_order(kind: Option<&str>) -> u8 {
+    match kind {
+        Some("Scale") => 0,
+        Some("Rotate") => 1,
+        _ => 2,
+    }
+}
+
 /// Distance from `key` to the document root. Cycle-bounded at the
 /// tree's node count: a longer chain implies a parent cycle (which
 /// shouldn't exist in a healthy `NodeTree` but `NodeData.parent` is

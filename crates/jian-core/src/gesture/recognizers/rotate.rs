@@ -99,7 +99,17 @@ impl Recognizer for RotateRecognizer {
                 }
                 self.pids.push((pid, event.position));
                 if self.pids.len() == 2 {
+                    // Regaining the two-finger quorum opens a FRESH
+                    // session (R2B2 2→1→2 contract): new baseline, and
+                    // Start/End symmetry requires a new Possible→
+                    // Claimed edge so the router re-runs preflight and
+                    // a new `RotateStart` can fire.
                     self.initial_angle = Some(Self::angle(self.pids[0].1, self.pids[1].1));
+                    self.state = RecognizerState::Possible;
+                    self.started = false;
+                    self.ended = false;
+                    self.last_radians = None;
+                    self.last_focal = None;
                 }
             }
             PointerPhase::Move => {
@@ -160,9 +170,21 @@ impl Recognizer for RotateRecognizer {
                 }
             }
             PointerPhase::Up | PointerPhase::Cancel => {
-                let was_two = self.pids.len() == 2;
+                // Only a TRACKED pointer participates in this teardown.
+                // An untracked pointer must be a pure no-op — a third
+                // finger's Up may never end someone else's gesture.
+                // R2B2 third-finger contract.
+                if !self.pids.iter().any(|(p, _)| *p == pid) {
+                    return self.state;
+                }
                 self.pids.retain(|(p, _)| *p != pid);
-                if was_two && self.started && !self.ended {
+                if self.started && !self.ended && self.pids.len() < 2 {
+                    // Dropping below the two-finger quorum terminates
+                    // THIS session symmetrically and arms the next Down
+                    // pair for a fresh session with a freshly sampled
+                    // baseline. R2B2 2→1→2 fix: previously the instance
+                    // kept `started` true and a re-grab emitted Updates
+                    // with stale deltas and no Start.
                     self.ended = true;
                     let facts = PointerFacts::from_event(event);
                     arena.emit_with(
@@ -193,6 +215,9 @@ impl Recognizer for RotateRecognizer {
     }
     fn reject(&mut self) {
         self.state = RecognizerState::Rejected;
+    }
+    fn has_participant_capacity(&self) -> bool {
+        self.pids.len() < 2
     }
 }
 
@@ -439,5 +464,101 @@ mod tests {
             PointerEvent::simple(1, PointerPhase::Up, point(100.0, 50.0)),
         );
         assert!(matches!(ev, Some(SemanticEvent::RotateEnd { .. })));
+    }
+
+    #[test]
+    fn rotate_two_one_two_regrab_is_a_fresh_session() {
+        let node = make_key();
+        let mut r = RotateRecognizer::new(1, node);
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Down, point(0.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(100.0, 0.0)),
+        );
+        // 26.6° twist crosses the π/36 activation gate.
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(100.0, 50.0)),
+        );
+        assert_eq!(r.state(), RecognizerState::Claimed);
+        let end = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Up, point(100.0, 50.0)),
+        );
+        assert!(matches!(end, Some(SemanticEvent::RotateEnd { .. })));
+        // Single-finger moves stay quiet.
+        assert!(dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Move, point(30.0, 0.0))
+        )
+        .is_none());
+        // Regaining quorum resets THIS instance's session bookkeeping
+        // immediately: a later threshold crossing must surface as a
+        // FRESH Possible→Claimed edge with a freshly sampled angle
+        // baseline.
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(0.0, -100.0)),
+        );
+        assert_eq!(
+            r.state(),
+            RecognizerState::Possible,
+            "regained pair must restart from Possible"
+        );
+        // Rotate slot0 far around slot1: ~45° past the new baseline
+        // crosses the gate and emits a fresh Start.
+        let start = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Move, point(70.71, -29.29)),
+        );
+        match start {
+            Some(SemanticEvent::RotateStart { .. }) => {}
+            other => panic!("expected a fresh RotateStart, got {other:?}"),
+        }
+        let upd = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Move, point(100.0, 0.0)),
+        );
+        match upd {
+            Some(SemanticEvent::RotateUpdate { radians, .. }) => {
+                assert!(
+                    radians.abs() <= std::f32::consts::FRAC_PI_2 + 1e-3,
+                    "rotation reported relative to the FRESH baseline, got {radians}"
+                );
+            }
+            other => panic!("expected RotateUpdate on fresh session, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rotate_up_of_an_untracked_pointer_is_a_pure_noop() {
+        let node = make_key();
+        let mut r = RotateRecognizer::new(1, node);
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(0, PointerPhase::Down, point(0.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Down, point(100.0, 0.0)),
+        );
+        let _ = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(100.0, 60.0)),
+        );
+        let ev = dispatch(
+            &mut r,
+            PointerEvent::simple(9, PointerPhase::Up, point(40.0, 0.0)),
+        );
+        assert!(ev.is_none(), "untracked Up emitted {ev:?}");
+        assert_eq!(r.state(), RecognizerState::Claimed);
+        let upd = dispatch(
+            &mut r,
+            PointerEvent::simple(1, PointerPhase::Move, point(100.0, 80.0)),
+        );
+        assert!(matches!(upd, Some(SemanticEvent::RotateUpdate { .. })));
     }
 }
