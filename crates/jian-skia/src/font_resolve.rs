@@ -28,6 +28,11 @@ pub const SYNTHETIC_ITALIC_SKEW: f32 = -0.25;
 
 const BOLD_WEIGHT_MIN: u16 = 600;
 
+/// Faces at or above this real weight never receive synthetic bold —
+/// they already carry visible weight of their own, and stroking them
+/// double-emboldens (most visibly on CJK system-fallback faces).
+const SYNTHETIC_BOLD_FACE_WEIGHT_MAX: u16 = 500;
+
 /// One text segment whose chars all use the same typeface and
 /// synthetic-style branch.
 #[derive(Clone)]
@@ -369,7 +374,18 @@ impl FontResolver {
             self.system_mgr
                 .match_family_style_character("", style, &[], c as i32)
         {
-            return Some(resolved(typeface, weight, italic));
+            // Platform character fallback (CoreText / DirectWrite) may hand
+            // back a face of the right family but the wrong style. Re-match
+            // that family by name with the requested style so e.g. a CJK
+            // weight-700 run resolves to the family's real Semibold face
+            // instead of Regular plus a synthetic-bold stroke.
+            let family = typeface.family_name();
+            let styled = self
+                .system_mgr
+                .match_family_style(&family, style)
+                .filter(|candidate| covers(candidate, c))
+                .unwrap_or(typeface);
+            return Some(resolved(styled, weight, italic));
         }
         // Last resort: scan every imported family for glyph coverage. On
         // platforms without a character-aware system font manager (OHOS ships
@@ -446,7 +462,15 @@ fn canonical_font_family(
 }
 
 fn resolved(typeface: Typeface, weight: u16, italic: bool) -> ResolvedTypeface {
-    let synthetic_bold = weight >= BOLD_WEIGHT_MIN && !typeface.is_bold();
+    // Synthesize bold only over a genuinely light face (the bundled
+    // single-weight Roboto-Regular case). A face the manager already
+    // resolved at Medium/Semibold or heavier — CJK system fallbacks such
+    // as PingFang SC — must NOT get a stroke on top: that double-embolden
+    // smears every CJK headline while Latin text stays clean.
+    let face_weight = *typeface.font_style().weight();
+    let synthetic_bold = weight >= BOLD_WEIGHT_MIN
+        && !typeface.is_bold()
+        && face_weight < i32::from(SYNTHETIC_BOLD_FACE_WEIGHT_MAX);
     let synthetic_italic = italic && !typeface.is_italic();
     ResolvedTypeface {
         typeface,
