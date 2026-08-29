@@ -28,6 +28,29 @@ impl Runtime {
         self.dirty = true;
     }
 
+    /// Install the host's R3 effect sink (replaces the default
+    /// `NullEffectSink`). Every effect-producing action then hands its
+    /// request to `sink`.
+    pub fn set_effect_sink(
+        &mut self,
+        sink: Rc<dyn crate::action::services::effect_sink::EffectSink>,
+    ) {
+        self.effect_sink = sink;
+    }
+
+    /// Install the R3 action policy (e.g. the Preview allowlist). `None`
+    /// restores "every registered action executes".
+    pub fn set_policy(&mut self, policy: Option<Rc<dyn crate::action::policy::ActionPolicy>>) {
+        self.policy = policy;
+    }
+
+    /// Certify fresh user intent for the NEXT synchronous action chain:
+    /// `make_action_ctx` TAKES the id, so the activation applies to that
+    /// chain only and is expired for every later delayed/async chain.
+    pub fn set_activation(&mut self, activation: Option<u64>) {
+        self.pending_activation.set(activation);
+    }
+
     pub fn frame_presented(&mut self) {
         self.dirty = false;
     }

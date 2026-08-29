@@ -12,6 +12,7 @@ pub mod capability;
 pub mod context;
 pub mod error;
 pub mod executor;
+pub mod policy;
 pub mod registry;
 pub mod services;
 pub mod task_queue;
@@ -21,6 +22,7 @@ pub use action_trait::{ActionChain, ActionFactory, ActionImpl, BoxedAction};
 pub use capability::{Capability, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate};
 pub use context::ActionContext;
 pub use executor::{execute_list_async, ExecOutcome};
+pub use policy::{ActionPolicy, AllowListPolicy, PreviewActionPolicy};
 pub use registry::ActionRegistry;
 pub use task_queue::{CompletedTask, TaskClock, TaskQueue};
 

@@ -31,6 +31,9 @@ pub enum ActionError {
         needed: Capability,
     },
 
+    #[error("policy rejected action `{action}`")]
+    PolicyRejected { action: String },
+
     #[error("action aborted")]
     Aborted,
 

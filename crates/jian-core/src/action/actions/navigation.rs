@@ -1,8 +1,9 @@
 //! Navigation actions: push / replace / pop / reset / open_url.
 
 use crate::action::action_trait::{ActionImpl, BoxedAction};
-use crate::action::context::ActionContext;
+use crate::action::context::{ActionContext, EffectRequestContext};
 use crate::action::error::{ActionError, ActionResult};
+use crate::action::services::effect_sink::{EffectOutcome, EffectRequest};
 use crate::capability::Capability;
 use crate::expression::Expression;
 use async_trait::async_trait;
@@ -121,6 +122,28 @@ impl ActionImpl for OpenUrl {
             ctx.warn(w);
         }
         let url = v.as_str().unwrap_or("");
+        // R3: the host sink owns the effect; the legacy platform service
+        // stays the fallback for runtimes without a sink.
+        let ectx = EffectRequestContext {
+            handler: None,
+            node_id: ctx.node_id.clone(),
+            activation: ctx.activation,
+        };
+        let request = EffectRequest::OpenUrl {
+            url: url.to_owned(),
+        };
+        match ctx.effect_sink.request(&ectx, &request) {
+            EffectOutcome::Accepted => return Ok(()),
+            EffectOutcome::Rejected(detail) => {
+                ctx.warn(crate::expression::Diagnostic {
+                    kind: crate::expression::DiagKind::RuntimeWarning,
+                    message: format!("open_url: {detail}"),
+                    span: crate::expression::Span::zero(),
+                });
+                return Ok(());
+            }
+            EffectOutcome::Unsupported => {}
+        }
         if let Err(error) = ctx.platform.open_url(url) {
             ctx.warn(crate::expression::Diagnostic {
                 kind: crate::expression::DiagKind::RuntimeWarning,

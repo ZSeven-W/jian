@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod effect_sink;
 pub mod feedback;
 pub mod network;
 pub mod null_impls;
@@ -7,6 +8,7 @@ pub mod router;
 pub mod storage;
 
 pub use clipboard::ClipboardService;
+pub use effect_sink::{EffectOutcome, EffectRequest, EffectSink, NullEffectSink};
 pub use feedback::{AsyncFeedback, FeedbackLevel, FeedbackSink};
 pub use network::{HttpRequest, HttpResponse, NetworkClient, WebSocketSession};
 pub use null_impls::{

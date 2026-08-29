@@ -153,6 +153,19 @@ pub struct Runtime {
     pub clipboard: Rc<dyn ClipboardService>,
     pub platform: Rc<dyn PlatformService>,
     pub capabilities: Rc<dyn CapabilityGate>,
+    /// R3 effect sink — every effect-producing action hands its request
+    /// here. `NullEffectSink` for non-Preview runtimes; hosts override
+    /// via `set_effect_sink`.
+    pub effect_sink: Rc<dyn crate::action::services::effect_sink::EffectSink>,
+    /// R3 action policy — `None` keeps every registered action
+    /// executable (today's behavior); Preview installs the fixed
+    /// allowlist via `set_policy`.
+    pub policy: Option<Rc<dyn crate::action::policy::ActionPolicy>>,
+    /// Host-certified activation id for the NEXT synchronous action
+    /// chain (set by the dispatching input path, taken by
+    /// `make_action_ctx`, and therefore expired for every later
+    /// delayed/async chain automatically).
+    pending_activation: std::cell::Cell<Option<u64>>,
     /// Audit log attached to the capability gate. `None` for the default
     /// `Runtime::new()` (DummyCapabilityGate has nothing to audit); set
     /// when the runtime is built via `new_from_document`.

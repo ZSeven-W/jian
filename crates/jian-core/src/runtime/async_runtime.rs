@@ -194,6 +194,12 @@ impl Runtime {
             clipboard: self.clipboard.clone(),
             platform: self.platform.clone(),
             capabilities: self.capabilities.clone(),
+            policy: self.policy.clone(),
+            effect_sink: self.effect_sink.clone(),
+            // Take, not peek: the activation certifies exactly ONE
+            // synchronous chain — any delayed/async work spawned later
+            // builds a fresh context and sees `None`.
+            activation: self.pending_activation.take(),
             logic: self.logic.clone(),
             expr_cache: self.expr_cache.clone(),
             cancel: CancellationToken::new(),

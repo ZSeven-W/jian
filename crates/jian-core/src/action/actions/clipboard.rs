@@ -1,8 +1,9 @@
 //! Clipboard actions: authored `copy` and `paste` service calls.
 
 use crate::action::action_trait::{ActionImpl, BoxedAction};
-use crate::action::context::ActionContext;
+use crate::action::context::{ActionContext, EffectRequestContext};
 use crate::action::error::{ActionError, ActionResult};
+use crate::action::services::effect_sink::{EffectOutcome, EffectRequest};
 use crate::capability::Capability;
 use crate::expression::Expression;
 use crate::state::path::StatePath;
@@ -32,6 +33,28 @@ impl ActionImpl for CopyText {
             ctx.warn(warning);
         }
         let text = value.as_str().unwrap_or_default();
+        // R3: the host sink owns the effect; the legacy clipboard service
+        // stays the fallback for runtimes without a sink.
+        let ectx = EffectRequestContext {
+            handler: None,
+            node_id: ctx.node_id.clone(),
+            activation: ctx.activation,
+        };
+        let request = EffectRequest::Copy {
+            text: text.to_owned(),
+        };
+        match ctx.effect_sink.request(&ectx, &request) {
+            EffectOutcome::Accepted => return Ok(()),
+            EffectOutcome::Rejected(detail) => {
+                ctx.warn(crate::expression::Diagnostic {
+                    kind: crate::expression::DiagKind::RuntimeWarning,
+                    message: format!("copy: {detail}"),
+                    span: crate::expression::Span::zero(),
+                });
+                return Ok(());
+            }
+            EffectOutcome::Unsupported => {}
+        }
         ctx.clipboard
             .write_text(text)
             .await
