@@ -175,6 +175,17 @@ impl Runtime {
         .min()
     }
 
+    /// Read-only next-wake query (R4 Canonical PreviewInput): the same
+    /// minimum deadline [`Runtime::pump`] reports as
+    /// `FrameDirective::next_wake_ms` — caret blink, parked IME swap,
+    /// gesture timers (deferred Tap / LongPress), scheduled action tasks,
+    /// and the task clock — WITHOUT pumping. Hosts that own their frame
+    /// loop (OpenPencil's PreviewSession) schedule this deadline and call
+    /// `pump` when it arrives, even with no new input.
+    pub fn next_wake_ms(&self) -> Option<u64> {
+        self.next_runtime_wake_ms()
+    }
+
     fn has_responsive_layout_bindings(&self) -> bool {
         self.document.as_ref().is_some_and(|document| {
             document.schema.is_responsive()

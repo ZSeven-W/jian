@@ -122,6 +122,37 @@ impl PenNode {
             PenNode::Ref(n) => (n.gestures.as_ref(), n.semantics.as_ref()),
         }
     }
+
+    /// Borrow the optional `lifecycle` block from any variant, the same
+    /// typed way `gestures_and_semantics` exposes gestures/semantics.
+    /// Runtime lifecycle dispatch resolves `onMount` / `onUnmount`
+    /// through this accessor instead of round-tripping the node schema
+    /// through `serde_json::to_value`.
+    pub fn lifecycle(&self) -> Option<&crate::lifecycle::NodeLifecycleHooks> {
+        match self {
+            PenNode::Frame(n) => n.lifecycle.as_ref(),
+            PenNode::Group(n) => n.lifecycle.as_ref(),
+            PenNode::Rectangle(n) => n.lifecycle.as_ref(),
+            PenNode::Ellipse(n) => n.lifecycle.as_ref(),
+            PenNode::Line(n) => n.lifecycle.as_ref(),
+            PenNode::Polygon(n) => n.lifecycle.as_ref(),
+            PenNode::Path(n) => n.lifecycle.as_ref(),
+            PenNode::Text(n) => n.lifecycle.as_ref(),
+            PenNode::TextInput(n) => n.lifecycle.as_ref(),
+            PenNode::Image(n) => n.lifecycle.as_ref(),
+            PenNode::IconFont(n) => n.lifecycle.as_ref(),
+            PenNode::TextArea(n) => n.lifecycle.as_ref(),
+            PenNode::Select(n) => n.lifecycle.as_ref(),
+            PenNode::Switch(n) => n.lifecycle.as_ref(),
+            PenNode::Checkbox(n) => n.lifecycle.as_ref(),
+            PenNode::Slider(n) => n.lifecycle.as_ref(),
+            PenNode::RadioGroup(n) => n.lifecycle.as_ref(),
+            PenNode::NumberInput(n) => n.lifecycle.as_ref(),
+            PenNode::Progress(n) => n.lifecycle.as_ref(),
+            PenNode::Tabs(n) => n.lifecycle.as_ref(),
+            PenNode::Ref(n) => n.lifecycle.as_ref(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -60,6 +60,7 @@ mod ime_handshake;
 mod keyboard_input;
 mod layout_runtime;
 mod lifecycle;
+mod lifecycle_dispatch;
 mod pointer_input;
 mod pump;
 mod reload_resources;
@@ -69,6 +70,7 @@ mod variant_swap;
 mod websocket_runtime;
 
 pub use ime_handshake::{ImeConfirmOutcome, ImeControlOp, ImeHost, ImeSnapshot};
+pub use lifecycle_dispatch::LifecycleScope;
 pub use pump::FrameDirective;
 pub use text_input::{EditableInputKind, EditableTextSnapshot};
 pub use variant_swap::{ParkedBuild, SwapState};
