@@ -27,7 +27,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use jian_core::layout::measure::FontStyleKind;
 use skia_safe::textlayout::TypefaceFontProvider;
-use skia_safe::FontMgr;
+use skia_safe::{FontMgr, Typeface};
 
 /// Where a registered blob came from. Imported faces override system
 /// fonts of the same family; bundled faces are a fallback below system.
@@ -321,7 +321,7 @@ pub fn asset_provider() -> Option<TypefaceFontProvider> {
             );
         let mut any = false;
         for blob in ordered {
-            if let Some(tf) = mgr.new_from_data(&blob.bytes, None) {
+            if let Some(tf) = typeface_from_bytes(&mgr, &blob.bytes) {
                 provider.register_typeface(tf, None);
                 any = true;
             }
@@ -349,7 +349,7 @@ fn provider_for(source: FontSource) -> Option<TypefaceFontProvider> {
         let mut provider = TypefaceFontProvider::new();
         let mut any = false;
         for blob in guard.fonts.iter().filter(|f| f.source == source) {
-            if let Some(tf) = mgr.new_from_data(&blob.bytes, None) {
+            if let Some(tf) = typeface_from_bytes(&mgr, &blob.bytes) {
                 provider.register_typeface(tf, None);
                 any = true;
             }
@@ -365,9 +365,54 @@ fn parse_face_meta(bytes: &[u8]) -> Option<(String, FontStyleKind, u16)> {
     // font work (reentrant when called from within a locked build path).
     crate::font_lock::with_font_lock(|| {
         let mgr = FontMgr::new();
-        let typeface = mgr.new_from_data(bytes, None)?;
+        let typeface = typeface_from_bytes(&mgr, bytes)?;
         parse_face_meta_inner(&typeface)
     })
+}
+
+/// Build a typeface from raw bytes, instancing a variable font's default
+/// away from a thin master when needed (see
+/// [`normalize_variable_default_weight`]). Every registry consumer builds
+/// its typefaces through this so paint, measure, and metadata agree.
+fn typeface_from_bytes(mgr: &FontMgr, bytes: &[u8]) -> Option<Typeface> {
+    mgr.new_from_data(bytes, None)
+        .map(normalize_variable_default_weight)
+}
+
+/// Instance a variable font at `wght` 400 when its default instance is not
+/// regular.
+///
+/// Several Google variable fonts (Outfit, Manrope, Space Grotesk, Cormorant
+/// Garamond) place their default instance on the *thinnest* master (`wght`
+/// 100–300). Skia's `new_from_data` yields that default instance, so a
+/// document asking for the family at 400/500 silently rendered and measured
+/// the thin face — synthetic bold only compensates from 600 up. Non-variable
+/// faces and faces whose default already sits at 400 pass through untouched;
+/// a `wght` range that cannot reach 400 is clamped to its nearest bound.
+fn normalize_variable_default_weight(typeface: Typeface) -> Typeface {
+    const WGHT: skia_safe::FourByteTag = skia_safe::FourByteTag::from_chars('w', 'g', 'h', 't');
+    let Some(axes) = typeface.variation_design_parameters() else {
+        return typeface;
+    };
+    let Some(axis) = axes.iter().find(|axis| axis.tag == WGHT) else {
+        return typeface;
+    };
+    let target = 400.0_f32.clamp(axis.min, axis.max);
+    if (axis.def - target).abs() < f32::EPSILON {
+        return typeface;
+    }
+    let coordinates = [skia_safe::font_arguments::variation_position::Coordinate {
+        axis: WGHT,
+        value: target,
+    }];
+    let arguments = skia_safe::FontArguments::new().set_variation_design_position(
+        skia_safe::font_arguments::VariationPosition {
+            coordinates: &coordinates,
+        },
+    );
+    typeface
+        .clone_with_arguments(&arguments)
+        .unwrap_or(typeface)
 }
 
 fn parse_face_meta_inner(typeface: &skia_safe::Typeface) -> Option<(String, FontStyleKind, u16)> {
