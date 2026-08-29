@@ -98,6 +98,15 @@ impl Runtime {
                 self.document_generation,
                 Some(hook.to_owned()),
             )
+            .inspect(|_| {
+                // Same harvest as `dispatch_lifecycle`: the doc comment
+                // above promises the same task path, and a caller that
+                // spawns `onUnmount` then reads state must not observe
+                // the still-mounted values because the `set` writes were
+                // left waiting for the next pump.
+                self.collect_task_outcomes();
+                self.scheduler.flush();
+            })
             .is_ok()
     }
 
