@@ -72,7 +72,12 @@ fn runtime_with_policy(sink: &Rc<RecordingSink>) -> Runtime {
 
 fn run(rt: &mut Runtime, list: serde_json::Value) -> ExecOutcome {
     let registry = rt.actions.clone();
-    let ctx = rt.make_action_ctx();
+    // Model the input path: the dispatcher takes the pending activation
+    // once for the chain it is about to run. `make_action_ctx` itself no
+    // longer takes — a bare context (timer, websocket, lifecycle) must
+    // never spend the user's id.
+    let mut ctx = rt.make_action_ctx();
+    ctx.activation = rt.take_activation();
     let outcome = {
         let registry = registry.borrow();
         futures::executor::block_on(execute_list_async(&registry, &list, &ctx))

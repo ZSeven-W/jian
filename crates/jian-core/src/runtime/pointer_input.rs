@@ -124,7 +124,11 @@ impl Runtime {
             self.gestures.tick_enveloped(event.t_ms)
         };
         for ev in &due {
-            self.deliver_enveloped(ev);
+            // Due envelopes are the tail of a PREVIOUS gesture (a flushed
+            // pending Tap, an expired LongPress). The pending activation
+            // certifies the event being dispatched NOW, so these deliver
+            // uncertified rather than spending it first.
+            self.deliver_enveloped(ev, false);
         }
         // (3) Re-check after the due actions: the current event is gated
         // by the post-due state, not the entry state, while the already-
@@ -181,7 +185,9 @@ impl Runtime {
             if matches!(ev.event, SemanticEvent::Swipe { .. }) && !self.swipe_owner_enabled(&ev) {
                 continue;
             }
-            self.deliver_enveloped(&ev);
+            // Current-input envelopes MAY consume the certification; the
+            // delivery path spends it on the first chain that runs.
+            self.deliver_enveloped(&ev, true);
             current.push(ev);
         }
         // (5) Due envelopes first, then current envelopes.

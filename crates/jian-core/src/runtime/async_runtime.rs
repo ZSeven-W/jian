@@ -28,7 +28,9 @@ impl Runtime {
             self.gestures.tick_enveloped(self.now_ms)
         };
         for event in &emitted {
-            self.deliver_enveloped(event);
+            // Expired timers replay OLD input; certifying them with the
+            // pending id would spend the user's current intent on it.
+            self.deliver_enveloped(event, false);
         }
         emitted.into_iter().map(|e| e.event).collect()
     }
@@ -36,7 +38,7 @@ impl Runtime {
     /// Deliver a plain, non-envelope semantic event (key/scroll/focus)
     /// through the same delivery path.
     pub(super) fn dispatch_semantic(&mut self, event: &SemanticEvent) {
-        self.deliver_enveloped(&SemanticEventEnvelope::plain(event.clone()));
+        self.deliver_enveloped(&SemanticEventEnvelope::plain(event.clone()), true);
     }
 
     /// The ONE semantic-delivery path, shared by pointer dispatch and tick:
@@ -48,7 +50,11 @@ impl Runtime {
     ///    coordinate origin AND the `ActionContext.node_id` all use the
     ///    SAME resolved handler owner: `$self` and `$event.local` are
     ///    relative to the owner, never the hit child.
-    pub(super) fn deliver_enveloped(&mut self, envelope: &SemanticEventEnvelope) {
+    pub(super) fn deliver_enveloped(
+        &mut self,
+        envelope: &SemanticEventEnvelope,
+        may_consume_activation: bool,
+    ) {
         let event = &envelope.event;
         // A (possibly deferred) Tap must still perform built-in widget
         // activation before the authored onTap actions run — unless the
@@ -122,6 +128,13 @@ impl Runtime {
         let (handler_list, payload) = payload;
 
         let mut context = self.make_action_ctx();
+        // The id certifies the input being dispatched NOW, and it is
+        // spent by the FIRST chain that actually runs on that input's
+        // delivery path — a Down whose PressStart resolves no handler
+        // must not burn the id the Up's Tap was certified for.
+        if may_consume_activation && handler_list.is_some() {
+            context.activation = self.take_activation();
+        }
         if let Some(payload) = payload {
             context.event = Some(crate::value::RuntimeValue::from(payload));
         }
@@ -196,10 +209,14 @@ impl Runtime {
             capabilities: self.capabilities.clone(),
             policy: self.policy.clone(),
             effect_sink: self.effect_sink.clone(),
-            // Take, not peek: the activation certifies exactly ONE
-            // synchronous chain — any delayed/async work spawned later
-            // builds a fresh context and sees `None`.
-            activation: self.pending_activation.take(),
+            // Never taken here: `make_action_ctx` also builds contexts
+            // for due timers, websocket pumps and lifecycle hooks, and a
+            // take at this altitude let the FIRST of those burn the id
+            // before the user's own chain was built (a pointer dispatch
+            // delivers due envelopes before the current one). The input
+            // paths inject the id explicitly via [`Runtime::
+            // take_activation`]; everything else honestly carries `None`.
+            activation: None,
             logic: self.logic.clone(),
             expr_cache: self.expr_cache.clone(),
             cancel: CancellationToken::new(),

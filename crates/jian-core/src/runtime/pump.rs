@@ -51,6 +51,13 @@ impl Runtime {
         self.pending_activation.set(activation);
     }
 
+    /// Consume the pending activation for the input being dispatched NOW.
+    /// The input paths call this once per physical event; contexts built
+    /// anywhere else (timers, websockets, lifecycle) never see the id.
+    pub fn take_activation(&self) -> Option<u64> {
+        self.pending_activation.take()
+    }
+
     pub fn frame_presented(&mut self) {
         self.dirty = false;
     }
