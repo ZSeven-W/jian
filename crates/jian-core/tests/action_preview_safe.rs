@@ -260,7 +260,7 @@ fn complete_preview_authorable_vocabulary_is_ordered() {
 }
 
 #[test]
-fn every_authorable_action_except_future_animate_is_constructible() {
+fn every_authorable_action_is_constructible() {
     let runtime = Runtime::new();
     let registry = runtime.actions.borrow();
     let actions = [
@@ -283,6 +283,13 @@ fn every_authorable_action_except_future_animate_is_constructible() {
             "scroll_to",
             json!({ "scroll_to": { "target": "panel", "alignment": "center" } }),
         ),
+        (
+            "animate",
+            json!({ "animate": {
+                "target": "panel", "property": "opacity", "to": 1,
+                "durationMs": 100
+            } }),
+        ),
         ("toast", json!({ "toast": "'saved'" })),
         (
             "alert",
@@ -304,10 +311,6 @@ fn every_authorable_action_except_future_animate_is_constructible() {
     assert_eq!(
         actions.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
         PreviewActionPolicy::ALLOWED
-            .iter()
-            .copied()
-            .filter(|name| *name != "animate")
-            .collect::<Vec<_>>()
     );
     for (name, action) in actions {
         let parsed = registry
@@ -315,10 +318,6 @@ fn every_authorable_action_except_future_animate_is_constructible() {
             .unwrap_or_else(|error| panic!("{action} must be registered: {error}"));
         assert_eq!(parsed.name(), name);
     }
-    assert!(
-        registry.parse_single(&json!({ "animate": {} })).is_err(),
-        "R7, not R5, owns the animate factory"
-    );
     assert!(
         registry.parse_single(&json!({ "sequential": [] })).is_err(),
         "ActionList execution is already sequential; no duplicate factory"

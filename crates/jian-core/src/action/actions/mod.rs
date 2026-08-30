@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+pub mod animate;
 pub mod clipboard;
 pub mod control;
 pub mod feedback;
@@ -93,6 +94,7 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
         Box::new(visibility::factory_toggle_visibility),
     );
     r.register("scroll_to", Box::new(scroll::factory_scroll_to));
+    r.register("animate", Box::new(animate::factory_animate));
 
     // Control (nested — via weak registry upgrade)
     let w = weak.clone();

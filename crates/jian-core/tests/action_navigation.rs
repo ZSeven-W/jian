@@ -71,6 +71,7 @@ fn setup(router: Rc<dyn Router>) -> (Rc<StateGraph>, ActionContext) {
         policy: None,
         effect_sink: std::rc::Rc::new(jian_core::action::services::effect_sink::NullEffectSink),
         ui_mutation_sink: std::rc::Rc::new(jian_core::action::services::NullUiMutationSink),
+        animation_sink: std::rc::Rc::new(jian_core::action::services::NullAnimationSink),
         activation: None,
         logic: Rc::new(jian_core::logic::NullLogicProvider),
         expr_cache: Rc::new(ExpressionCache::new()),

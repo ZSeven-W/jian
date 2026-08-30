@@ -36,10 +36,20 @@ use std::rc::Rc;
 pub type ApplyFn = dyn FnMut(RuntimeValue, Vec<Diagnostic>) + 'static;
 
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum InvalidationKind {
+    #[default]
     None,
     PaintOnly,
     HitTest,
@@ -53,7 +63,7 @@ impl InvalidationKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BindingTarget {
     Content,
     Value,
@@ -64,6 +74,7 @@ pub enum BindingTarget {
     Fill,
     Stroke,
     TextColor,
+    CornerRadius,
     X,
     Y,
     Width,
@@ -87,6 +98,7 @@ impl BindingTarget {
             "fill" | "fills" | "fill[0].color" | "color" => Self::Fill,
             "stroke" => Self::Stroke,
             "textColor" => Self::TextColor,
+            "cornerRadius" => Self::CornerRadius,
             "x" => Self::X,
             "y" => Self::Y,
             "width" => Self::Width,
@@ -106,6 +118,7 @@ impl BindingTarget {
             | Self::Fill
             | Self::Stroke
             | Self::TextColor
+            | Self::CornerRadius
             | Self::Value
             | Self::Checked
             | Self::SelectedValue => InvalidationKind::PaintOnly,

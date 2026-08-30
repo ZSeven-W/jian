@@ -43,6 +43,10 @@ impl Runtime {
         self.ui_mutation_sink = sink;
     }
 
+    pub fn set_animation_sink(&mut self, sink: Rc<dyn crate::action::services::AnimationSink>) {
+        self.animation_sink = sink;
+    }
+
     /// Install the R3 action policy (e.g. the Preview allowlist). `None`
     /// restores "every registered action executes".
     pub fn set_policy(&mut self, policy: Option<Rc<dyn crate::action::policy::ActionPolicy>>) {

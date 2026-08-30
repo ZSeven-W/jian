@@ -7,6 +7,7 @@
 
 pub mod action_trait;
 pub mod actions;
+pub mod animation_registry;
 pub mod cancel;
 pub mod capability;
 pub mod catalog;
@@ -20,6 +21,10 @@ pub mod task_queue;
 pub mod value;
 
 pub use action_trait::{ActionChain, ActionFactory, ActionImpl, BoxedAction};
+pub use animation_registry::{
+    animatable_property_registry, AnimatableProperty, AnimatablePropertyRegistry, AnimationApply,
+    AnimationInterpolate, AnimationRegistryError, AnimationValueType, SHADER_UNIFORM_PREFIX,
+};
 pub use capability::{Capability, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate};
 pub use catalog::{preview_action_descriptors, ActionDescriptor};
 pub use context::ActionContext;

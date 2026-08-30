@@ -344,6 +344,7 @@ mod tests {
             policy: None,
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
             ui_mutation_sink: Rc::new(crate::action::services::NullUiMutationSink),
+            animation_sink: Rc::new(crate::action::services::NullAnimationSink),
             activation: None,
             logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),

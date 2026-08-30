@@ -12,7 +12,7 @@
 //! `rt.dispatch_pointer(event)` and, each frame, `rt.tick(now)`.
 
 use crate::action::services::{
-    AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, PlatformService,
+    AnimationSink, AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, PlatformService,
     Router as RouterSvc, StorageBackend, UiMutationSink,
 };
 use crate::action::{ExecOutcome, SharedRegistry, TaskClock, TaskQueue};
@@ -160,6 +160,9 @@ pub struct Runtime {
     /// R5 typed runtime-node mutation delivery. Preview installs retained
     /// visibility/scroll state; other runtimes keep a diagnostic null sink.
     pub ui_mutation_sink: Rc<dyn UiMutationSink>,
+    /// R7 structured animation requests. Preview installs one bounded
+    /// session timeline; ordinary runtimes keep a diagnostic null sink.
+    pub animation_sink: Rc<dyn AnimationSink>,
     /// R3 action policy — `None` keeps every registered action
     /// executable (today's behavior); Preview installs the fixed
     /// allowlist via `set_policy`.

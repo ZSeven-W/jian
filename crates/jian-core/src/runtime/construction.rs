@@ -1,7 +1,7 @@
 use super::{Runtime, AUDIT_LOG_CAPACITY};
 use crate::action::services::{
-    NullClipboard, NullFeedback, NullNetworkClient, NullPlatform, NullRouter, NullStorageBackend,
-    NullUiMutationSink,
+    NullAnimationSink, NullClipboard, NullFeedback, NullNetworkClient, NullPlatform, NullRouter,
+    NullStorageBackend, NullUiMutationSink,
 };
 use crate::action::{default_registry, TaskClock, TaskQueue};
 use crate::binding::DeferredBindingQueue;
@@ -97,6 +97,7 @@ impl Runtime {
             capabilities: Rc::new(DummyCapabilityGate),
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
             ui_mutation_sink: Rc::new(NullUiMutationSink),
+            animation_sink: Rc::new(NullAnimationSink),
             policy: None,
             pending_activation: std::cell::Cell::new(None),
             audit: None,
@@ -246,6 +247,7 @@ impl Runtime {
             capabilities: gate,
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
             ui_mutation_sink: Rc::new(NullUiMutationSink),
+            animation_sink: Rc::new(NullAnimationSink),
             policy: None,
             pending_activation: std::cell::Cell::new(None),
             audit: Some(audit),

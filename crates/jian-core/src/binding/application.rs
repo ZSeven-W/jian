@@ -100,6 +100,9 @@ pub fn apply_binding_value(
                 set_stroke_color(object, color);
             }
         }
+        BindingTarget::CornerRadius => {
+            insert_number(object, "cornerRadius", value);
+        }
         BindingTarget::X => {
             insert_number(object, "x", value);
             if allow_rect_overrides {

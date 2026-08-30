@@ -1,3 +1,4 @@
+pub mod animation_sink;
 pub mod clipboard;
 pub mod effect_sink;
 pub mod feedback;
@@ -33,3 +34,7 @@ impl std::fmt::Display for ServiceError {
 }
 
 impl std::error::Error for ServiceError {}
+pub use animation_sink::{
+    AnimationDirection, AnimationFillMode, AnimationOutcome, AnimationProperty, AnimationRequest,
+    AnimationSink, Easing, NullAnimationSink,
+};

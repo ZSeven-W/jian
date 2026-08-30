@@ -52,9 +52,8 @@ impl ActionPolicy for AllowListPolicy {
 /// The FIXED Preview allowlist (R3): the safe authorable vocabulary.
 /// `fetch`, every WebSocket action, storage wipe, `notify`, `paste`,
 /// `race`, and `call` are rejected by Preview policy even when their
-/// capabilities are declared. R5 adds `dismiss_keyboard`'s siblings to
-/// both the registry and this list; `animate` has an authorable
-/// descriptor (R5) and receives its runtime factory in R7.
+/// capabilities are declared. R5 adds the safe UI mutations and R7 completes
+/// the vocabulary by registering the structured animate factory.
 pub struct PreviewActionPolicy;
 
 impl PreviewActionPolicy {

@@ -83,6 +83,9 @@ pub struct ActionContext {
     /// R5 platform-neutral runtime-node mutation sink. Preview runtimes
     /// install retained state; other runtimes use the diagnostic null sink.
     pub ui_mutation_sink: Rc<dyn super::services::ui_mutation_sink::UiMutationSink>,
+    /// R7 structured animation delivery. Preview installs one bounded
+    /// session timeline; other runtimes use the diagnostic null sink.
+    pub animation_sink: Rc<dyn super::services::animation_sink::AnimationSink>,
     /// Host-certified activation id for the ActionList this context
     /// serves (`None` when the dispatching input carried none). The
     /// action's effect requests inherit it; delayed/async work spawned
@@ -168,6 +171,7 @@ pub(crate) mod tests {
             policy: None,
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
             ui_mutation_sink: Rc::new(crate::action::services::NullUiMutationSink),
+            animation_sink: Rc::new(crate::action::services::NullAnimationSink),
             activation: None,
             logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),
