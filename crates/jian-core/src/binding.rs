@@ -35,20 +35,107 @@ use std::rc::Rc;
 /// runtime / compile diagnostics produced during evaluation.
 pub type ApplyFn = dyn FnMut(RuntimeValue, Vec<Diagnostic>) + 'static;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InvalidationClass {
-    LayoutSpatial,
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum InvalidationKind {
+    None,
     PaintOnly,
-    Interactive,
+    HitTest,
+    Relayout,
+    Navigation,
 }
 
-pub fn classify_binding(property: &str) -> InvalidationClass {
-    match property {
-        "content" | "text" | "x" | "y" | "width" | "height" | "layout" | "gap" | "padding"
-        | "alignItems" | "justifyContent" | "minWidth" | "maxWidth" | "minHeight" | "maxHeight" => {
-            InvalidationClass::LayoutSpatial
+impl InvalidationKind {
+    pub fn merge(self, other: Self) -> Self {
+        self.max(other)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingTarget {
+    Content,
+    Value,
+    Checked,
+    SelectedValue,
+    Visible,
+    Opacity,
+    Fill,
+    Stroke,
+    TextColor,
+    X,
+    Y,
+    Width,
+    Height,
+    Rotation,
+    ScaleX,
+    ScaleY,
+    Variant,
+    ActiveState,
+}
+
+impl BindingTarget {
+    pub fn parse(property: &str) -> Option<Self> {
+        Some(match property {
+            "content" | "text" => Self::Content,
+            "value" => Self::Value,
+            "checked" => Self::Checked,
+            "selectedValue" => Self::SelectedValue,
+            "visible" => Self::Visible,
+            "opacity" => Self::Opacity,
+            "fill" | "fills" | "fill[0].color" | "color" => Self::Fill,
+            "stroke" => Self::Stroke,
+            "textColor" => Self::TextColor,
+            "x" => Self::X,
+            "y" => Self::Y,
+            "width" => Self::Width,
+            "height" => Self::Height,
+            "rotation" => Self::Rotation,
+            "scaleX" => Self::ScaleX,
+            "scaleY" => Self::ScaleY,
+            "variant" => Self::Variant,
+            "activeState" => Self::ActiveState,
+            _ => return None,
+        })
+    }
+
+    pub fn invalidation(self) -> InvalidationKind {
+        match self {
+            Self::Opacity
+            | Self::Fill
+            | Self::Stroke
+            | Self::TextColor
+            | Self::Value
+            | Self::Checked
+            | Self::SelectedValue => InvalidationKind::PaintOnly,
+            Self::Visible | Self::X | Self::Y | Self::Rotation | Self::ScaleX | Self::ScaleY => {
+                InvalidationKind::HitTest
+            }
+            Self::Content | Self::Width | Self::Height | Self::Variant | Self::ActiveState => {
+                InvalidationKind::Relayout
+            }
         }
-        "visible" | "disabled" => InvalidationClass::Interactive,
+    }
+
+    pub fn application_order(self) -> u8 {
+        match self {
+            Self::ScaleX | Self::ScaleY => 2,
+            Self::X | Self::Y | Self::Width | Self::Height => 1,
+            _ => 0,
+        }
+    }
+}
+
+pub fn classify_binding(property: &str) -> InvalidationKind {
+    if let Some(target) = BindingTarget::parse(property) {
+        return target.invalidation();
+    }
+    match property {
+        "layout" | "gap" | "padding" | "alignItems" | "justifyContent" | "minWidth"
+        | "maxWidth" | "minHeight" | "maxHeight" => InvalidationKind::Relayout,
+        "disabled" => InvalidationKind::HitTest,
+        "transform" => InvalidationKind::PaintOnly,
         other => {
             // Spec table: unlisted properties default to paint-only, with a
             // debug diagnostic so silently misclassified layout props surface.
@@ -63,10 +150,16 @@ pub fn classify_binding(property: &str) -> InvalidationClass {
                 }
             }
             let _ = other;
-            InvalidationClass::PaintOnly
+            InvalidationKind::PaintOnly
         }
     }
 }
+
+#[path = "binding/application.rs"]
+mod application;
+
+pub use application::{apply_binding_value, BindingApplication};
+pub(crate) use application::{bound_scalar_to_string, number_from_runtime};
 
 pub(crate) fn has_install_binding(node: &jian_ops_schema::node::PenNode) -> bool {
     serde_json::to_value(node)
@@ -76,7 +169,7 @@ pub(crate) fn has_install_binding(node: &jian_ops_schema::node::PenNode) -> bool
         .is_some_and(|bindings| {
             bindings
                 .keys()
-                .any(|property| classify_binding(property) != InvalidationClass::PaintOnly)
+                .any(|property| classify_binding(property) != InvalidationKind::PaintOnly)
         })
 }
 
@@ -103,7 +196,7 @@ pub(crate) fn materialize_layout_bindings(
         .and_then(|value| value.as_str())
         .map(str::to_owned);
     for (property, source) in bindings {
-        if classify_binding(&property) == InvalidationClass::PaintOnly {
+        if classify_binding(&property) == InvalidationKind::PaintOnly {
             continue;
         }
         let Some(source) = source.as_str() else {
@@ -603,12 +696,12 @@ mod tests {
 
     #[test]
     fn invalidation_table_covers_geometry_interactivity_and_fallback() {
-        assert_eq!(classify_binding("width"), InvalidationClass::LayoutSpatial);
-        assert_eq!(classify_binding("visible"), InvalidationClass::Interactive);
-        assert_eq!(classify_binding("opacity"), InvalidationClass::PaintOnly);
+        assert_eq!(classify_binding("width"), InvalidationKind::Relayout);
+        assert_eq!(classify_binding("visible"), InvalidationKind::HitTest);
+        assert_eq!(classify_binding("opacity"), InvalidationKind::PaintOnly);
         assert_eq!(
             classify_binding("futureProperty"),
-            InvalidationClass::PaintOnly
+            InvalidationKind::PaintOnly
         );
     }
 }

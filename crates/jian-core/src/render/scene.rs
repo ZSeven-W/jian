@@ -208,7 +208,7 @@ fn walk(
     });
     let mut json = serde_json::to_value(&node.schema).ok();
 
-    let mut overrides = BindingOverrides::default();
+    let mut overrides = crate::binding::BindingApplication::default();
     if let (Some(_), Some(j), Some(state)) = (r, json.as_mut(), state) {
         overrides = apply_bindings(j, state, doc.schema.is_responsive());
     }
@@ -338,60 +338,23 @@ pub(super) fn active_tab_index(json: &Value) -> Option<usize> {
     )
 }
 
-/// Records which `bindings.<rect-prop>` fired this frame so the walker
-/// can override the laid-out rect *only* where a binding is authoritative.
-/// Without this, the walker would mis-read the static `x` / `y` from
-/// nested children's schema (parent-relative coords) and clobber the
-/// layout engine's already-resolved absolute coords.
-#[derive(Default, Clone, Copy)]
-pub(super) struct BindingOverrides {
-    x: Option<f32>,
-    y: Option<f32>,
-    w: Option<f32>,
-    h: Option<f32>,
-}
-
-impl BindingOverrides {
-    pub(super) fn apply_to_rect(self, r: crate::geometry::Rect) -> crate::geometry::Rect {
-        rect(
-            self.x.unwrap_or(r.origin.x),
-            self.y.unwrap_or(r.origin.y),
-            self.w.unwrap_or(r.size.width),
-            self.h.unwrap_or(r.size.height),
-        )
-    }
-}
-
-/// Walk a node's `bindings` map and overwrite any matching field on
-/// the JSON view with the binding's evaluated value. Recompiles every
-/// expression on every frame — the perf-driven effect-driven scene
-/// cache lands once the corpus shows real cost.
-///
-/// Supported binding keys:
-/// - `content` (string projection on text nodes)
-/// - `visible` (bool — emit_for_node drops the node if false)
-/// - `disabled` (bool — written through; consumed by the action-surface
-///   state-gate, not the renderer)
-/// - `opacity` (number — multiplied into Paint.opacity)
-/// - `x` / `y` / `width` / `height` (numbers — override the layout-engine
-///   rect at emit time. Children of a width/height-bound parent do *not*
-///   relayout; that needs the effect cache. For absolute-positioned
-///   leaves this is enough to move them around.)
-/// - `fill[0].color` (hex string — written into the first fill's color
-///   field, defaulting `type` to `"solid"`)
-/// - `value` (display-only widget value, preserving scalar JSON type)
+/// Evaluate a node's bindings and apply the canonical typed target table from
+/// `crate::binding`. Geometry overrides remain explicit so static child-local
+/// coordinates never overwrite the layout engine's absolute rect unless a
+/// binding actually supplied that property. `bind:value` stays the dedicated
+/// two-way widget projection path.
 pub(super) fn apply_bindings(
     node: &mut Value,
     state: &crate::state::StateGraph,
     responsive: bool,
-) -> BindingOverrides {
+) -> crate::binding::BindingApplication {
     // Legacy documents keep today's draw-time rect overrides (M1c
     // suppresses them only for responsive docs, where geometry comes
     // from the installed layout) — and today's string-only `content`
     // coercion: widening it to numbers/bools would change legacy
     // rendered output, violating the §1.1 bit-identical promise.
     let allow_rect_overrides = !responsive;
-    let mut overrides = BindingOverrides::default();
+    let mut overrides = crate::binding::BindingApplication::default();
     let Some(obj) = node.as_object_mut() else {
         return overrides;
     };
@@ -407,172 +370,52 @@ pub(super) fn apply_bindings(
             Err(_) => continue,
         };
         let (value, _warns) = compiled.eval(state, None, node_id.as_deref());
-        match prop.as_str() {
-            "content" => {
-                let projected = if responsive {
-                    bound_scalar_to_string(&value)
-                } else {
-                    // Legacy: strings only (pre-M1 behavior).
-                    value.as_str().map(str::to_owned)
-                };
-                if let Some(projected) = projected {
-                    obj.insert("content".into(), Value::String(projected));
+        if prop == "bind:value" {
+            let kind = obj.get("type").and_then(Value::as_str);
+            match kind {
+                Some("switch" | "checkbox") => {
+                    if let Some(projected) = value.as_bool() {
+                        obj.insert("checked".into(), Value::Bool(projected));
+                    }
                 }
-            }
-            "visible" => {
-                if let Some(b) = value.as_bool() {
-                    obj.insert("visible".into(), Value::Bool(b));
+                Some("slider" | "progress") => {
+                    if let Some(projected) = crate::binding::number_from_runtime(&value)
+                        .and_then(serde_json::Number::from_f64)
+                    {
+                        obj.insert("value".into(), Value::Number(projected));
+                    }
                 }
-            }
-            "disabled" => {
-                if let Some(b) = value.as_bool() {
-                    obj.insert("disabled".into(), Value::Bool(b));
-                }
-            }
-            "opacity" => {
-                if let Some(n) = number_from_runtime(&value) {
-                    if let Some(num) = serde_json::Number::from_f64(n) {
-                        obj.insert("opacity".into(), Value::Number(num));
+                _ => {
+                    if let Some(projected) = crate::binding::bound_scalar_to_string(&value) {
+                        obj.insert("value".into(), Value::String(projected));
                     }
                 }
             }
-            "x" if allow_rect_overrides => {
-                overrides.x = number_from_runtime(&value).map(|n| n as f32)
-            }
-            "y" if allow_rect_overrides => {
-                overrides.y = number_from_runtime(&value).map(|n| n as f32)
-            }
-            "width" if allow_rect_overrides => {
-                overrides.w = number_from_runtime(&value).map(|n| n as f32)
-            }
-            "height" if allow_rect_overrides => {
-                overrides.h = number_from_runtime(&value).map(|n| n as f32)
-            }
-            "fill[0].color" => {
-                if let Some(s) = value.as_str() {
-                    set_first_fill_color(obj, s);
-                }
-            }
-            "value" => {
-                if let Some(projected) = bound_scalar_to_json(&value) {
-                    obj.insert("value".into(), projected);
-                }
-            }
-            // Two-way input binding: project the bound state value
-            // into the node's `value` field so `emit_text_input`
-            // (and any future writable surfaces) repaint from
-            // current state. Without this, a SetValue dispatch
-            // mutates state but the input still shows the static
-            // schema `value`. We coerce scalars to a string form
-            // because the only consumer today (`emit_text_input`)
-            // reads `value` as text. A null projection (missing
-            // path, eval error, deliberately-null state) keeps the
-            // static schema `value` rather than blanking it — that
-            // way an author-set placeholder/seed isn't silently
-            // wiped by a path that hasn't been seeded yet.
-            "bind:value" => {
-                let kind = obj.get("type").and_then(Value::as_str);
-                match kind {
-                    Some("switch" | "checkbox") => {
-                        if let Some(projected) = value.as_bool() {
-                            obj.insert("checked".into(), Value::Bool(projected));
-                        }
-                    }
-                    Some("slider" | "progress") => {
-                        if let Some(projected) =
-                            number_from_runtime(&value).and_then(serde_json::Number::from_f64)
-                        {
-                            obj.insert("value".into(), Value::Number(projected));
-                        }
-                    }
-                    _ => {
-                        if let Some(projected) = bound_scalar_to_string(&value) {
-                            obj.insert("value".into(), Value::String(projected));
-                        }
-                    }
-                }
-            }
-            _ => {}
+            continue;
         }
+        if prop == "disabled" {
+            if let Some(disabled) = value.as_bool() {
+                obj.insert("disabled".into(), Value::Bool(disabled));
+            }
+            continue;
+        }
+        let Some(target) = crate::binding::BindingTarget::parse(prop) else {
+            continue;
+        };
+        if !responsive
+            && target == crate::binding::BindingTarget::Content
+            && value.as_str().is_none()
+        {
+            continue;
+        }
+        overrides.merge(crate::binding::apply_binding_value(
+            obj,
+            target,
+            &value,
+            allow_rect_overrides,
+        ));
     }
     overrides
-}
-
-fn bound_scalar_to_json(v: &crate::value::RuntimeValue) -> Option<Value> {
-    matches!(&v.0, Value::String(_) | Value::Number(_) | Value::Bool(_)).then(|| v.0.clone())
-}
-
-fn number_from_runtime(v: &crate::value::RuntimeValue) -> Option<f64> {
-    if let Some(n) = v.as_f64() {
-        return Some(n);
-    }
-    v.as_i64().map(|i| i as f64)
-}
-
-/// Stringify a bound runtime value for textual `content` / `value` fields.
-/// Strings come through unchanged; numbers / bools take their
-/// natural display form; object / array values stringify to empty
-/// so a misuse doesn't paint stale text. Null returns `None` —
-/// the caller leaves the existing `value` alone, preserving any
-/// static schema seed when the bound path hasn't been initialised.
-fn bound_scalar_to_string(v: &crate::value::RuntimeValue) -> Option<String> {
-    if v.is_null() {
-        return None;
-    }
-    if let Some(s) = v.as_str() {
-        return Some(s.to_owned());
-    }
-    if let Some(b) = v.as_bool() {
-        return Some(b.to_string());
-    }
-    if let Some(i) = v.as_i64() {
-        return Some(i.to_string());
-    }
-    if let Some(f) = v.as_f64() {
-        return Some(f.to_string());
-    }
-    Some(String::new())
-}
-
-fn set_first_fill_color(obj: &mut serde_json::Map<String, Value>, color: &str) {
-    let entry = obj
-        .entry("fill".to_owned())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let arr = match entry.as_array_mut() {
-        Some(a) => a,
-        None => return,
-    };
-    if arr.is_empty() {
-        arr.push(serde_json::json!({ "type": "solid", "color": color }));
-        return;
-    }
-    // Only mutate the first fill when it's already a solid colour.
-    // Gradient and image fills don't carry a flat `color` field, so
-    // writing one would either be a silent no-op (renderer keeps
-    // reading the gradient stops) or, worse, leave the node with a
-    // bogus mixed shape. The binding name itself — `fill[0].color`
-    // — implies a solid fill, so restricting to that contract keeps
-    // the binding honest.
-    let Some(first) = arr[0].as_object_mut() else {
-        return;
-    };
-    let kind = first
-        .get("type")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    match kind.as_deref() {
-        // No type yet → assume solid (matches the `arr.is_empty()`
-        // branch above where we materialise a fresh solid fill).
-        None => {
-            first.insert("type".into(), Value::String("solid".into()));
-            first.insert("color".into(), Value::String(color.to_owned()));
-        }
-        Some("solid") => {
-            first.insert("color".into(), Value::String(color.to_owned()));
-        }
-        // Gradient / image / unknown types: leave untouched.
-        _ => {}
-    }
 }
 
 pub(super) fn emit_for_node(

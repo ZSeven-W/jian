@@ -64,6 +64,10 @@ pub struct PenNodeBase {
     pub visible: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
+    /// Keep this node at its authored viewport position while its nearest
+    /// scrollable ancestor moves ordinary content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flip_x: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -92,6 +96,16 @@ mod tests {
         assert_eq!(b.id, "node-1");
         assert_eq!(b.blend_mode, None);
         assert_eq!(serde_json::to_string(&b).unwrap(), json);
+    }
+
+    #[test]
+    fn pin_is_additive_and_round_trips() {
+        let base: PenNodeBase = serde_json::from_str(r#"{"id":"n","pin":true}"#).unwrap();
+        assert_eq!(base.pin, Some(true));
+        assert_eq!(
+            serde_json::to_string(&base).unwrap(),
+            r#"{"id":"n","pin":true}"#
+        );
     }
 
     #[test]

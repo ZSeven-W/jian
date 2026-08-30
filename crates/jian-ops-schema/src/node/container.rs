@@ -122,6 +122,9 @@ pub struct ContainerProps {
     pub align_items: Option<AlignItems>,
     #[serde(default, alias = "clip", skip_serializing_if = "Option::is_none")]
     pub clip_content: Option<bool>,
+    /// Direct child ids that remain pinned while this container scrolls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticky_children: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub corner_radius: Option<CornerRadius>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +145,17 @@ mod tests {
         let c: ContainerProps = serde_json::from_str(json).unwrap();
         assert_eq!(c, ContainerProps::default());
         assert_eq!(serde_json::to_string(&c).unwrap(), json);
+    }
+
+    #[test]
+    fn sticky_children_are_additive_and_round_trip() {
+        let json = r#"{"stickyChildren":["header","tabs"]}"#;
+        let container: ContainerProps = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            container.sticky_children.as_deref(),
+            Some(["header".to_owned(), "tabs".to_owned()].as_slice())
+        );
+        assert_eq!(serde_json::to_string(&container).unwrap(), json);
     }
 
     #[test]

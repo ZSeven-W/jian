@@ -484,6 +484,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -602,6 +609,16 @@
                 "boolean",
                 "null"
               ]
+            },
+            "stickyChildren": {
+              "description": "Direct child ids that remain pinned while this container scrolls.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
             },
             "cornerRadius": {
               "anyOf": [
@@ -846,6 +863,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -964,6 +988,16 @@
                 "boolean",
                 "null"
               ]
+            },
+            "stickyChildren": {
+              "description": "Direct child ids that remain pinned while this container scrolls.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
             },
             "cornerRadius": {
               "anyOf": [
@@ -1208,6 +1242,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -1326,6 +1367,16 @@
                 "boolean",
                 "null"
               ]
+            },
+            "stickyChildren": {
+              "description": "Direct child ids that remain pinned while this container scrolls.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
             },
             "cornerRadius": {
               "anyOf": [
@@ -1637,6 +1688,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -1909,6 +1967,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -2176,6 +2241,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -2507,6 +2579,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -2882,6 +2961,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -3226,6 +3312,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -3584,6 +3677,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -3867,6 +3967,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -4222,6 +4329,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -4552,6 +4666,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -4864,6 +4985,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -5187,6 +5315,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -5530,6 +5665,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -5848,6 +5990,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -6218,6 +6367,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -6543,6 +6699,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
@@ -6882,6 +7045,13 @@
                 "null"
               ]
             },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "flipX": {
               "type": [
                 "boolean",
@@ -7136,6 +7306,13 @@
               ]
             },
             "locked": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "pin": {
+              "description": "Keep this node at its authored viewport position while its nearest scrollable ancestor moves ordinary content.",
               "type": [
                 "boolean",
                 "null"
