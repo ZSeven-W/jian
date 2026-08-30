@@ -47,6 +47,13 @@ impl Runtime {
         self.animation_sink = sink;
     }
 
+    pub fn set_action_observer(
+        &mut self,
+        observer: Rc<dyn crate::action::services::ActionObserver>,
+    ) {
+        self.observer = observer;
+    }
+
     /// Install the R3 action policy (e.g. the Preview allowlist). `None`
     /// restores "every registered action executes".
     pub fn set_policy(&mut self, policy: Option<Rc<dyn crate::action::policy::ActionPolicy>>) {
@@ -69,6 +76,18 @@ impl Runtime {
 
     pub fn frame_presented(&mut self) {
         self.dirty = false;
+    }
+
+    pub fn debug_action_task_count(&self) -> usize {
+        self.task_queue.len()
+    }
+
+    pub fn debug_active_gesture_count(&self) -> usize {
+        self.gestures.active_gesture_count()
+    }
+
+    pub fn set_debug_paused(&mut self, paused: bool) {
+        self.debug_paused = paused;
     }
 
     pub fn pump(&mut self, now_ms: u64) -> FrameDirective {

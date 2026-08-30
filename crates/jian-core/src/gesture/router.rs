@@ -103,6 +103,10 @@ impl PointerRouter {
         }
     }
 
+    pub fn active_gesture_count(&self) -> usize {
+        self.arenas.len() + self.multi.len() + usize::from(self.pending_tap.is_some())
+    }
+
     fn alloc_id(&mut self) -> RecognizerId {
         let id = self.next_id;
         self.next_id += 1;

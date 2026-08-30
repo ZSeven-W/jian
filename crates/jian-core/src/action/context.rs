@@ -46,6 +46,7 @@ pub struct EffectRequestContext {
     pub handler: Option<String>,
     pub node_id: Option<String>,
     pub activation: Option<u64>,
+    pub at_ms: u64,
 }
 
 pub struct ActionContext {
@@ -62,6 +63,8 @@ pub struct ActionContext {
 
     pub page_id: Option<String>,
     pub node_id: Option<String>,
+    /// Factual handler key for provenance and effect source attribution.
+    pub handler: Option<String>,
 
     pub network: Rc<dyn NetworkClient>,
     pub ws_sessions: WsSessionRegistry,
@@ -86,6 +89,9 @@ pub struct ActionContext {
     /// R7 structured animation delivery. Preview installs one bounded
     /// session timeline; other runtimes use the diagnostic null sink.
     pub animation_sink: Rc<dyn super::services::animation_sink::AnimationSink>,
+    /// R9 action execution observer. Nested ActionLists inherit the same
+    /// observer through their shared ActionContext.
+    pub observer: Rc<dyn super::services::observer::ActionObserver>,
     /// Host-certified activation id for the ActionList this context
     /// serves (`None` when the dispatching input carried none). The
     /// action's effect requests inherit it; delayed/async work spawned
@@ -159,6 +165,7 @@ pub(crate) mod tests {
             locals: RefCell::new(BTreeMap::new()),
             page_id: None,
             node_id: None,
+            handler: None,
             network: Rc::new(NullNetworkClient),
             ws_sessions: Rc::new(RefCell::new(HashMap::new())),
             storage: Rc::new(NullStorageBackend),
@@ -172,6 +179,7 @@ pub(crate) mod tests {
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
             ui_mutation_sink: Rc::new(crate::action::services::NullUiMutationSink),
             animation_sink: Rc::new(crate::action::services::NullAnimationSink),
+            observer: Rc::new(crate::action::services::NullActionObserver),
             activation: None,
             logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),

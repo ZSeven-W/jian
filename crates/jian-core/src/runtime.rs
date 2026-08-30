@@ -12,8 +12,8 @@
 //! `rt.dispatch_pointer(event)` and, each frame, `rt.tick(now)`.
 
 use crate::action::services::{
-    AnimationSink, AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, PlatformService,
-    Router as RouterSvc, StorageBackend, UiMutationSink,
+    ActionObserver, AnimationSink, AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient,
+    PlatformService, Router as RouterSvc, StorageBackend, UiMutationSink,
 };
 use crate::action::{ExecOutcome, SharedRegistry, TaskClock, TaskQueue};
 use crate::binding::DeferredBindingQueue;
@@ -163,6 +163,8 @@ pub struct Runtime {
     /// R7 structured animation requests. Preview installs one bounded
     /// session timeline; ordinary runtimes keep a diagnostic null sink.
     pub animation_sink: Rc<dyn AnimationSink>,
+    /// R9 action start/result observer used by Preview tracing.
+    pub observer: Rc<dyn ActionObserver>,
     /// R3 action policy — `None` keeps every registered action
     /// executable (today's behavior); Preview installs the fixed
     /// allowlist via `set_policy`.
@@ -172,6 +174,8 @@ pub struct Runtime {
     /// `make_action_ctx`, and therefore expired for every later
     /// delayed/async chain automatically).
     pending_activation: std::cell::Cell<Option<u64>>,
+    /// R9 debugger pause gate, composed with variant-swap input freezing.
+    debug_paused: bool,
     /// Audit log attached to the capability gate. `None` for the default
     /// `Runtime::new()` (DummyCapabilityGate has nothing to audit); set
     /// when the runtime is built via `new_from_document`.

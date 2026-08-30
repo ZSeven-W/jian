@@ -58,7 +58,11 @@ impl ActionChain {
                         continue;
                     }
                 }
-                act.execute(ctx).await?;
+                let observation = ctx.observer.action_started(act.name(), ctx);
+                let result = act.execute(ctx).await;
+                ctx.observer
+                    .action_finished(observation, act.name(), ctx, &result);
+                result?;
             }
             Ok(())
         }

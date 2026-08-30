@@ -1,7 +1,7 @@
 use super::{Runtime, AUDIT_LOG_CAPACITY};
 use crate::action::services::{
-    NullAnimationSink, NullClipboard, NullFeedback, NullNetworkClient, NullPlatform, NullRouter,
-    NullStorageBackend, NullUiMutationSink,
+    NullActionObserver, NullAnimationSink, NullClipboard, NullFeedback, NullNetworkClient,
+    NullPlatform, NullRouter, NullStorageBackend, NullUiMutationSink,
 };
 use crate::action::{default_registry, TaskClock, TaskQueue};
 use crate::binding::DeferredBindingQueue;
@@ -98,8 +98,10 @@ impl Runtime {
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
             ui_mutation_sink: Rc::new(NullUiMutationSink),
             animation_sink: Rc::new(NullAnimationSink),
+            observer: Rc::new(NullActionObserver),
             policy: None,
             pending_activation: std::cell::Cell::new(None),
+            debug_paused: false,
             audit: None,
             permissions: Rc::new(NullPermissionBroker),
             logic: Rc::new(crate::logic::NullLogicProvider),
@@ -248,8 +250,10 @@ impl Runtime {
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
             ui_mutation_sink: Rc::new(NullUiMutationSink),
             animation_sink: Rc::new(NullAnimationSink),
+            observer: Rc::new(NullActionObserver),
             policy: None,
             pending_activation: std::cell::Cell::new(None),
+            debug_paused: false,
             audit: Some(audit),
             permissions: Rc::new(NullPermissionBroker),
             logic: Rc::new(crate::logic::NullLogicProvider),

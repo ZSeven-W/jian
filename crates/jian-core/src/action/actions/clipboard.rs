@@ -36,15 +36,16 @@ impl ActionImpl for CopyText {
         // R3: the host sink owns the effect; the legacy clipboard service
         // stays the fallback for runtimes without a sink.
         let ectx = EffectRequestContext {
-            handler: None,
+            handler: ctx.handler.clone(),
             node_id: ctx.node_id.clone(),
             activation: ctx.activation,
+            at_ms: ctx.now_ms(),
         };
         let request = EffectRequest::Copy {
             text: text.to_owned(),
         };
         match ctx.effect_sink.request(&ectx, &request) {
-            EffectOutcome::Accepted => return Ok(()),
+            EffectOutcome::Accepted | EffectOutcome::AcceptedWithCompletion(_) => return Ok(()),
             EffectOutcome::Rejected(detail) => {
                 ctx.warn(crate::expression::Diagnostic {
                     kind: crate::expression::DiagKind::RuntimeWarning,

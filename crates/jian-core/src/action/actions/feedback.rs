@@ -4,7 +4,7 @@ use crate::action::action_trait::{ActionChain, ActionImpl, BoxedAction};
 use crate::action::context::{ActionContext, EffectRequestContext};
 use crate::action::error::{ActionError, ActionResult};
 use crate::action::registry::ActionRegistry;
-use crate::action::services::effect_sink::{EffectOutcome, EffectRequest};
+use crate::action::services::effect_sink::{EffectCompletionResult, EffectOutcome, EffectRequest};
 use crate::action::services::FeedbackLevel;
 use crate::expression::Expression;
 use async_trait::async_trait;
@@ -45,15 +45,16 @@ impl ActionImpl for Toast {
         // to the legacy service so non-Preview runtimes keep their
         // behavior (the same pattern guards every effect action).
         let ectx = EffectRequestContext {
-            handler: None,
+            handler: ctx.handler.clone(),
             node_id: ctx.node_id.clone(),
             activation: ctx.activation,
+            at_ms: ctx.now_ms(),
         };
         let request = EffectRequest::Toast {
             message: v.as_str().unwrap_or("").to_owned(),
         };
         match ctx.effect_sink.request(&ectx, &request) {
-            EffectOutcome::Accepted => return Ok(()),
+            EffectOutcome::Accepted | EffectOutcome::AcceptedWithCompletion(_) => return Ok(()),
             EffectOutcome::Rejected(detail) => {
                 ctx.warn(crate::expression::Diagnostic {
                     kind: crate::expression::DiagKind::RuntimeWarning,
@@ -137,16 +138,17 @@ impl ActionImpl for Alert {
             ctx.warn(w);
         }
         let ectx = EffectRequestContext {
-            handler: None,
+            handler: ctx.handler.clone(),
             node_id: ctx.node_id.clone(),
             activation: ctx.activation,
+            at_ms: ctx.now_ms(),
         };
         let request = EffectRequest::Alert {
             title: t.as_str().unwrap_or("").to_owned(),
             message: m.as_str().unwrap_or("").to_owned(),
         };
         match ctx.effect_sink.request(&ectx, &request) {
-            EffectOutcome::Accepted => return Ok(()),
+            EffectOutcome::Accepted | EffectOutcome::AcceptedWithCompletion(_) => return Ok(()),
             EffectOutcome::Rejected(detail) => {
                 ctx.warn(crate::expression::Diagnostic {
                     kind: crate::expression::DiagKind::RuntimeWarning,
@@ -221,9 +223,10 @@ impl ActionImpl for Confirm {
         // with the debug/controls slice). `Unsupported` keeps the legacy
         // inline-await path so non-Preview runtimes are unchanged.
         let ectx = EffectRequestContext {
-            handler: None,
+            handler: ctx.handler.clone(),
             node_id: ctx.node_id.clone(),
             activation: ctx.activation,
+            at_ms: ctx.now_ms(),
         };
         let request = EffectRequest::Confirm {
             title: t.as_str().unwrap_or("").to_owned(),
@@ -231,6 +234,17 @@ impl ActionImpl for Confirm {
         };
         match ctx.effect_sink.request(&ectx, &request) {
             EffectOutcome::Accepted => return Ok(()),
+            EffectOutcome::AcceptedWithCompletion(completion) => {
+                let confirmed = matches!(completion.await, EffectCompletionResult::Success);
+                if confirmed {
+                    if let Some(ref chain) = self.on_confirm {
+                        chain.run_serial(ctx).await?;
+                    }
+                } else if let Some(ref chain) = self.on_cancel {
+                    chain.run_serial(ctx).await?;
+                }
+                return Ok(());
+            }
             EffectOutcome::Rejected(detail) => {
                 ctx.warn(crate::expression::Diagnostic {
                     kind: crate::expression::DiagKind::RuntimeWarning,

@@ -123,7 +123,7 @@ impl Runtime {
     }
 
     pub fn input_frozen(&self) -> bool {
-        matches!(self.swap_state, SwapState::AwaitingIme { .. })
+        self.debug_paused || matches!(self.swap_state, SwapState::AwaitingIme { .. })
     }
 
     /// Request id that must be resolved before a parked responsive swap can

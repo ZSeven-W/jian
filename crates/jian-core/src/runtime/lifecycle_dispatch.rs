@@ -53,6 +53,7 @@ impl Runtime {
         let mut context = self.make_action_ctx();
         context.event = Some(crate::value::RuntimeValue::from(payload));
         context.node_id = node_id;
+        context.handler = Some(hook.to_owned());
         self.task_queue
             .spawn(
                 &self.actions,
@@ -90,6 +91,7 @@ impl Runtime {
         let mut context = self.make_action_ctx();
         context.event = Some(crate::value::RuntimeValue::from(payload));
         context.node_id = node_id;
+        context.handler = Some(hook.to_owned());
         self.task_queue
             .spawn(
                 &self.actions,

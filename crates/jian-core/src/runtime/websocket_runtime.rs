@@ -95,6 +95,7 @@ impl Runtime {
     fn make_action_ctx_with_event(&self, payload: serde_json::Value) -> ActionContext {
         let mut context = self.make_action_ctx();
         context.event = Some(crate::value::RuntimeValue::from(payload));
+        context.handler = Some("onMessage".to_owned());
         context
     }
 }

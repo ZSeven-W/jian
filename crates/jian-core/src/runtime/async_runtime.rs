@@ -139,6 +139,7 @@ impl Runtime {
             context.event = Some(crate::value::RuntimeValue::from(payload));
         }
         context.node_id = source_node_id;
+        context.handler = Some(event.handler_key().to_owned());
         if let Some(list) = handler_list {
             match self.task_queue.spawn(
                 &self.actions,
@@ -198,6 +199,7 @@ impl Runtime {
             locals: RefCell::new(BTreeMap::new()),
             page_id: Some(self.active_page_key.clone()),
             node_id: None,
+            handler: None,
             network: self.network.clone(),
             ws_sessions: self.ws_sessions.clone(),
             storage: self.storage.clone(),
@@ -211,6 +213,7 @@ impl Runtime {
             effect_sink: self.effect_sink.clone(),
             ui_mutation_sink: self.ui_mutation_sink.clone(),
             animation_sink: self.animation_sink.clone(),
+            observer: self.observer.clone(),
             // Never taken here: `make_action_ctx` also builds contexts
             // for due timers, websocket pumps and lifecycle hooks, and a
             // take at this altitude let the FIRST of those burn the id

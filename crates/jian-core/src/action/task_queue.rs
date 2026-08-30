@@ -194,6 +194,10 @@ impl TaskQueue {
         self.tasks.is_empty()
     }
 
+    pub fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
     pub fn cancel_generation(&mut self, generation: u64) {
         self.tasks.retain(|task| {
             if task.generation == generation {

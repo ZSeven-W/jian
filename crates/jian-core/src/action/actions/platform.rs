@@ -47,12 +47,13 @@ impl ActionImpl for Stub {
         // runtime without a sink falls back to the legacy warn-stub.
         if let Some(request) = self.effect_request() {
             let ectx = EffectRequestContext {
-                handler: None,
+                handler: ctx.handler.clone(),
                 node_id: ctx.node_id.clone(),
                 activation: ctx.activation,
+                at_ms: ctx.now_ms(),
             };
             match ctx.effect_sink.request(&ectx, &request) {
-                EffectOutcome::Accepted => return Ok(()),
+                EffectOutcome::Accepted | EffectOutcome::AcceptedWithCompletion(_) => return Ok(()),
                 EffectOutcome::Rejected(detail) => {
                     ctx.warn(crate::expression::Diagnostic {
                         kind: crate::expression::DiagKind::RuntimeWarning,
