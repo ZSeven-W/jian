@@ -9,12 +9,26 @@ impl Runtime {
         key: impl Into<String>,
         modifiers: crate::gesture::pointer::Modifiers,
     ) -> Vec<SemanticEvent> {
+        let key = key.into();
+        self.dispatch_key_with_facts(target, key.clone(), key, false, modifiers)
+    }
+
+    fn dispatch_key_with_facts(
+        &mut self,
+        target: crate::document::NodeKey,
+        key: String,
+        code: String,
+        repeat: bool,
+        modifiers: crate::gesture::pointer::Modifiers,
+    ) -> Vec<SemanticEvent> {
         if self.input_frozen() || self.document.is_none() {
             return Vec::new();
         }
         let event = SemanticEvent::KeyDown {
             node: target,
-            key: key.into(),
+            key,
+            code,
+            repeat,
             modifiers,
         };
         self.dispatch_semantic(&event);
@@ -26,12 +40,15 @@ impl Runtime {
     pub fn dispatch_keyboard(
         &mut self,
         key: impl Into<String>,
+        code: impl Into<String>,
+        repeat: bool,
         modifiers: crate::gesture::pointer::Modifiers,
     ) -> Vec<SemanticEvent> {
         if self.input_frozen() || self.document.is_none() {
             return Vec::new();
         }
         let key = key.into();
+        let code = code.into();
         if key == "Tab" {
             if modifiers.contains(crate::gesture::pointer::Modifiers::SHIFT) {
                 return self.focus_previous().unwrap_or_default();
@@ -40,6 +57,7 @@ impl Runtime {
         }
         let now = self.now_ms;
         let focused_id = self.focused_widget_id();
+        let value_before = focused_id.as_deref().and_then(|id| self.widget_value(id));
         let focused_tabs = focused_id.as_deref().is_some_and(|id| {
             self.document
                 .as_ref()
@@ -90,8 +108,12 @@ impl Runtime {
             }
         }
         if consumed {
+            let value_after = focused_id.as_deref().and_then(|id| self.widget_value(id));
             if let Some(id) = focused_id.as_deref() {
                 self.sync_widget_binding(id);
+                if value_before != value_after {
+                    self.dispatch_widget_change(id);
+                }
             }
             if focused_tabs {
                 // Keyboard tab changes must retire the old panel from pointer
@@ -103,7 +125,27 @@ impl Runtime {
         let Some(target) = self.focus.current() else {
             return Vec::new();
         };
-        self.dispatch_key(target, key, modifiers)
+        let submit = key == "Enter" && self.is_submit_input(target);
+        let mut events = self.dispatch_key_with_facts(target, key, code, repeat, modifiers);
+        if submit {
+            let event = SemanticEvent::Submit { node: target };
+            self.dispatch_semantic(&event);
+            events.push(event);
+        }
+        events
+    }
+
+    fn is_submit_input(&self, target: crate::document::NodeKey) -> bool {
+        self.document
+            .as_ref()
+            .and_then(|document| document.tree.nodes.get(target))
+            .is_some_and(|node| {
+                matches!(
+                    &node.schema,
+                    jian_ops_schema::node::PenNode::TextInput(_)
+                        | jian_ops_schema::node::PenNode::NumberInput(_)
+                )
+            })
     }
 
     fn focused_text_state_for_keyboard(

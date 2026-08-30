@@ -326,6 +326,49 @@ impl Runtime {
         self.scheduler.flush();
     }
 
+    pub(super) fn widget_value(&self, node_id: &str) -> Option<serde_json::Value> {
+        use crate::widget_state::WidgetState;
+        let numeric = self.widget_is_number_input(node_id);
+        Some(match self.widget_states.get(node_id) {
+            Some(WidgetState::TextInput(st)) if numeric => st
+                .text()
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .and_then(serde_json::Number::from_f64)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            Some(WidgetState::TextInput(st)) => serde_json::Value::String(st.text().to_owned()),
+            Some(WidgetState::Toggle { on }) => serde_json::Value::Bool(*on),
+            Some(WidgetState::Slider { value, .. }) => serde_json::json!(*value),
+            Some(WidgetState::Select { value, .. }) | Some(WidgetState::Radio { value, .. }) => {
+                value
+                    .clone()
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null)
+            }
+            Some(WidgetState::Tabs { active, .. }) => active
+                .clone()
+                .map(serde_json::Value::String)
+                .unwrap_or(serde_json::Value::Null),
+            None => return None,
+        })
+    }
+
+    pub(super) fn dispatch_widget_change(&mut self, node_id: &str) {
+        let Some(node) = self
+            .document
+            .as_ref()
+            .and_then(|document| document.tree.get(node_id))
+        else {
+            return;
+        };
+        let Some(value) = self.widget_value(node_id) else {
+            return;
+        };
+        self.dispatch_semantic(&crate::gesture::SemanticEvent::Change { node, value });
+    }
+
     fn widget_bind_key(&self, node_id: &str) -> Option<String> {
         let key = self.document.as_ref()?.tree.get(node_id)?;
         let node = self.document.as_ref()?.tree.nodes.get(key)?;

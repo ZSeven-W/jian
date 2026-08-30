@@ -1,8 +1,8 @@
 //! Keyboard translation — winit `KeyEvent` → `(key_string, Modifiers)`.
 //!
-//! jian-core doesn't ship a canonical keyboard event type yet (Plan 5
-//! scope kept it at `SemanticEvent::KeyDown { key: String, modifiers }`),
-//! so the translator returns the tuple directly. `key_string` follows
+//! jian-core's semantic key event also carries physical code/repeat facts,
+//! while this compatibility translator returns the legacy tuple directly.
+//! `key_string` follows
 //! the web-ish convention: printable chars as themselves
 //! (`"a"`, `"Enter"`, `"ArrowLeft"`, etc.).
 

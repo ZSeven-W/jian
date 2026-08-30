@@ -120,13 +120,13 @@ fn dispatch_keyboard_tab_walks_focus_chain() {
     assert_eq!(chain_ids, vec!["a", "b", "c"]);
 
     // First Tab — no previous focus → only FocusGained on "a".
-    let evs = rt.dispatch_keyboard("Tab", Modifiers::empty());
+    let evs = rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::empty());
     assert_eq!(evs.len(), 1);
     assert!(matches!(evs[0], SemanticEvent::FocusGained { .. }));
     assert_eq!(id_of(&rt, evs[0].node()), "a");
 
     // Second Tab — blur "a", focus "b".
-    let evs = rt.dispatch_keyboard("Tab", Modifiers::empty());
+    let evs = rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::empty());
     assert_eq!(evs.len(), 2);
     assert!(matches!(evs[0], SemanticEvent::FocusLost { .. }));
     assert!(matches!(evs[1], SemanticEvent::FocusGained { .. }));
@@ -134,7 +134,7 @@ fn dispatch_keyboard_tab_walks_focus_chain() {
     assert_eq!(id_of(&rt, evs[1].node()), "b");
 
     // Shift+Tab — blur "b", focus "a" (step backward).
-    let evs = rt.dispatch_keyboard("Tab", Modifiers::SHIFT);
+    let evs = rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::SHIFT);
     assert_eq!(evs.len(), 2);
     assert_eq!(id_of(&rt, evs[0].node()), "b");
     assert_eq!(id_of(&rt, evs[1].node()), "a");
@@ -169,10 +169,10 @@ fn dispatch_keyboard_non_tab_routes_to_focused_node() {
     rt.build_layout((400.0, 300.0)).unwrap();
 
     // Tab in to focus the input.
-    rt.dispatch_keyboard("Tab", Modifiers::empty());
+    rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::empty());
     assert!(rt.focus.current().is_some());
 
-    let evs = rt.dispatch_keyboard("Enter", Modifiers::empty());
+    let evs = rt.dispatch_keyboard("Enter", "Enter", false, Modifiers::empty());
     assert_eq!(evs.len(), 1);
     assert!(matches!(evs[0], SemanticEvent::KeyDown { .. }));
 
@@ -216,7 +216,7 @@ fn focus_handlers_fire_on_chain_step() {
     rt.build_layout((400.0, 300.0)).unwrap();
 
     // Tab in → gained == 1, lost == 0.
-    rt.dispatch_keyboard("Tab", Modifiers::empty());
+    rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::empty());
     assert_eq!(
         rt.state.app_get("gained").and_then(|v| v.as_i64()).unwrap(),
         1
@@ -228,7 +228,7 @@ fn focus_handlers_fire_on_chain_step() {
 
     // Tab to "b" → "a" loses focus, "b" gains. Only "a" has
     // handlers, so gained stays at 1 and lost ticks to 1.
-    rt.dispatch_keyboard("Tab", Modifiers::empty());
+    rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::empty());
     assert_eq!(
         rt.state.app_get("gained").and_then(|v| v.as_i64()).unwrap(),
         1
@@ -257,7 +257,7 @@ fn replace_document_rebuilds_focus_chain() {
     )
     .unwrap();
     rt.build_layout((400.0, 300.0)).unwrap();
-    rt.dispatch_keyboard("Tab", Modifiers::empty());
+    rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::empty());
     assert!(rt.focus.current().is_some());
 
     rt.replace_document(
@@ -280,7 +280,7 @@ fn replace_document_rebuilds_focus_chain() {
     let chain_len = rt.focus.chain().len();
     assert_eq!(chain_len, 2);
 
-    rt.dispatch_keyboard("Tab", Modifiers::empty());
+    rt.dispatch_keyboard("Tab", "Tab", false, Modifiers::empty());
     // First Tab post-reload focuses the new chain's first node.
     let cur = rt.focus.current().unwrap();
     let id = crate::document::tree::node_schema_id(

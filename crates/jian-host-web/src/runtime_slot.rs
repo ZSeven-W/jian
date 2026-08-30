@@ -147,7 +147,9 @@ impl RuntimeSlot {
             return None;
         };
         runtime.set_now_ms(now_ms);
-        let consumed = !runtime.dispatch_keyboard(key, modifiers).is_empty();
+        let consumed = !runtime
+            .dispatch_keyboard(key.clone(), key, false, modifiers)
+            .is_empty();
         self.put(runtime);
         Some(consumed)
     }
@@ -188,7 +190,7 @@ fn apply_input(runtime: &mut Runtime, input: PendingInput) {
             now_ms,
         } => {
             runtime.set_now_ms(now_ms);
-            runtime.dispatch_keyboard(key, modifiers);
+            runtime.dispatch_keyboard(key.clone(), key, false, modifiers);
         }
         PendingInput::Ime { event, now_ms } => {
             runtime.set_now_ms(now_ms);

@@ -289,6 +289,7 @@ impl Runtime {
                         });
                         if self.set_slider_from_x(node, event.position.x) {
                             self.sync_widget_binding(&id);
+                            self.dispatch_widget_change(&id);
                         }
                     }
                 }
@@ -324,6 +325,7 @@ impl Runtime {
                 }
                 if self.set_slider_from_x(node, event.position.x) {
                     self.sync_widget_binding(&id);
+                    self.dispatch_widget_change(&id);
                 }
             }
             PointerPhase::Up | PointerPhase::Cancel => {
@@ -407,6 +409,7 @@ impl Runtime {
         };
         if changed {
             self.sync_widget_binding(&id);
+            self.dispatch_widget_change(&id);
             if matches!(act, Act::Tabs) {
                 // Panels share the same laid-out grid cell, so switching does
                 // not require layout. It does require hit and focus indexes to

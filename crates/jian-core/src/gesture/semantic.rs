@@ -137,7 +137,16 @@ pub enum SemanticEvent {
     KeyDown {
         node: NodeKey,
         key: String,
+        code: String,
+        repeat: bool,
         modifiers: Modifiers,
+    },
+    Change {
+        node: NodeKey,
+        value: serde_json::Value,
+    },
+    Submit {
+        node: NodeKey,
     },
     /// Raw escape-hatch — delivered when an ancestor sets `gestures.rawPointer`.
     RawPointer {
@@ -182,6 +191,8 @@ impl SemanticEvent {
             | Self::HoverEnter { node, .. }
             | Self::HoverLeave { node, .. }
             | Self::KeyDown { node, .. }
+            | Self::Change { node, .. }
+            | Self::Submit { node }
             | Self::RawPointer { node, .. }
             | Self::FocusGained { node }
             | Self::FocusLost { node } => *node,
@@ -213,6 +224,8 @@ impl SemanticEvent {
             Self::HoverEnter { .. } => "onHoverEnter",
             Self::HoverLeave { .. } => "onHoverLeave",
             Self::KeyDown { .. } => "onKey",
+            Self::Change { .. } => "onChange",
+            Self::Submit { .. } => "onSubmit",
             Self::RawPointer { .. } => "onRawPointer",
             Self::FocusGained { .. } => "onFocus",
             Self::FocusLost { .. } => "onBlur",
@@ -360,8 +373,8 @@ pub struct GestureFacts {
 pub struct SemanticEventEnvelope {
     pub event: SemanticEvent,
     /// Pointer facts for pointer-originated events. `None` for
-    /// non-pointer events (key/scroll/focus) — their payloads carry no
-    /// pointer fields (later tasks expand them).
+    /// non-pointer events (key/change/submit/scroll/focus) — their
+    /// payloads carry no pointer fields.
     pub pointer_facts: Option<PointerFacts>,
     /// Gesture facts (pan/scale/rotate/long-press) — all `None` for
     /// events that are not gesture updates.
@@ -393,13 +406,25 @@ impl SemanticEventEnvelope {
     /// pointer facts are carried on the envelope, not guessed).
     pub fn payload(&self, local_origin: Option<Point>) -> Option<serde_json::Value> {
         match &self.event {
-            SemanticEvent::KeyDown { key, modifiers, .. } => {
+            SemanticEvent::KeyDown {
+                key,
+                code,
+                repeat,
+                modifiers,
+                ..
+            } => {
                 return Some(serde_json::json!({
                     "key": key,
+                    "code": code,
+                    "repeat": repeat,
                     "modifiers": modifier_names(*modifiers),
                 }));
             }
-            SemanticEvent::Scroll { .. }
+            SemanticEvent::Change { value, .. } => {
+                return Some(serde_json::json!({ "value": value }));
+            }
+            SemanticEvent::Submit { .. }
+            | SemanticEvent::Scroll { .. }
             | SemanticEvent::FocusGained { .. }
             | SemanticEvent::FocusLost { .. } => return None,
             _ => {}
@@ -519,13 +544,12 @@ impl SemanticEventEnvelope {
                     obj.insert("focal".into(), point_json(focal));
                 }
             }
-            // Key/control/Scroll/lifecycle payload expansion belongs to
-            // later tasks. Scroll/Focus keep their previous payload shape
-            // (none) and are not broadened in this slice. `KeyDown`
-            // returned above and never reaches this arm. Hover carries the
-            // standard pointer facts from the block above but no gesture
-            // facts.
+            // Submit/Scroll/Focus keep an absent payload. `KeyDown` and
+            // `Change` returned above and never reach this arm. Hover
+            // carries standard pointer facts but no gesture facts.
             SemanticEvent::KeyDown { .. }
+            | SemanticEvent::Change { .. }
+            | SemanticEvent::Submit { .. }
             | SemanticEvent::Scroll { .. }
             | SemanticEvent::HoverEnter { .. }
             | SemanticEvent::HoverLeave { .. }

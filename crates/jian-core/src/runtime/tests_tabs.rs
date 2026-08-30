@@ -139,7 +139,7 @@ fn tabs_keyboard_switch_rebuilds_spatial_and_focus_in_the_same_turn() {
     rt.focus_next().unwrap();
     assert_eq!(rt.focused_widget_id().as_deref(), Some("tabs"));
 
-    rt.dispatch_keyboard("ArrowRight", Modifiers::empty());
+    rt.dispatch_keyboard("ArrowRight", "ArrowRight", false, Modifiers::empty());
 
     let indexed: HashSet<String> = rt
         .spatial

@@ -14,7 +14,7 @@ fn text_input_keyboard_and_text_routing() {
     // Focus the first input, type, then backspace one char.
     rt.focus_next().unwrap();
     assert!(rt.dispatch_text_input("hi").unwrap());
-    rt.dispatch_keyboard("Backspace", Modifiers::empty());
+    rt.dispatch_keyboard("Backspace", "Backspace", false, Modifiers::empty());
     assert_eq!(widget_text(&mut rt, "a"), "h");
     // Tab to the second input; typing there leaves the first alone.
     rt.focus_next().unwrap();
@@ -52,7 +52,12 @@ fn bind_value_syncs_text_input_into_state_graph() {
         .and_then(|v| v.as_str().map(str::to_owned));
     assert_eq!(got.as_deref(), Some("a@b"));
     // Backspace updates the bound value too.
-    rt.dispatch_keyboard("Backspace", crate::gesture::pointer::Modifiers::empty());
+    rt.dispatch_keyboard(
+        "Backspace",
+        "Backspace",
+        false,
+        crate::gesture::pointer::Modifiers::empty(),
+    );
     let got = rt
         .state
         .app_get("email")
@@ -99,12 +104,12 @@ fn switch_and_slider_keyboard_sync_to_state_graph() {
     .unwrap();
     // Switch: Space flips it on.
     rt.focus_next().unwrap();
-    rt.dispatch_keyboard(" ", Modifiers::empty());
+    rt.dispatch_keyboard(" ", " ", false, Modifiers::empty());
     assert_eq!(rt.state.app_get("on").and_then(|v| v.as_bool()), Some(true));
     // Slider: two ArrowRight steps of 2 → 4.
     rt.focus_next().unwrap();
-    rt.dispatch_keyboard("ArrowRight", Modifiers::empty());
-    rt.dispatch_keyboard("ArrowRight", Modifiers::empty());
+    rt.dispatch_keyboard("ArrowRight", "ArrowRight", false, Modifiers::empty());
+    rt.dispatch_keyboard("ArrowRight", "ArrowRight", false, Modifiers::empty());
     assert_eq!(rt.state.app_get("vol").and_then(|v| v.as_f64()), Some(4.0));
 }
 
@@ -130,8 +135,8 @@ fn select_arrow_keys_cycle_options_into_state_graph() {
     )
     .unwrap();
     rt.focus_next().unwrap();
-    rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // a → b
-    rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // b → c
+    rt.dispatch_keyboard("ArrowDown", "ArrowDown", false, Modifiers::empty()); // a → b
+    rt.dispatch_keyboard("ArrowDown", "ArrowDown", false, Modifiers::empty()); // b → c
     assert_eq!(
         rt.state
             .app_get("choice")
@@ -139,7 +144,7 @@ fn select_arrow_keys_cycle_options_into_state_graph() {
             .as_deref(),
         Some("c")
     );
-    rt.dispatch_keyboard("ArrowDown", Modifiers::empty()); // c → a (wrap)
+    rt.dispatch_keyboard("ArrowDown", "ArrowDown", false, Modifiers::empty()); // c → a (wrap)
     assert_eq!(
         rt.state
             .app_get("choice")
