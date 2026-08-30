@@ -209,6 +209,7 @@ impl Runtime {
             capabilities: self.capabilities.clone(),
             policy: self.policy.clone(),
             effect_sink: self.effect_sink.clone(),
+            ui_mutation_sink: self.ui_mutation_sink.clone(),
             // Never taken here: `make_action_ctx` also builds contexts
             // for due timers, websocket pumps and lifecycle hooks, and a
             // take at this altitude let the FIRST of those burn the id

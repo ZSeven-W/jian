@@ -43,6 +43,7 @@ fn setup_ctx() -> (Rc<Scheduler>, Rc<StateGraph>, ActionContext) {
         capabilities: Rc::new(DummyCapabilityGate),
         policy: None,
         effect_sink: std::rc::Rc::new(jian_core::action::services::effect_sink::NullEffectSink),
+        ui_mutation_sink: std::rc::Rc::new(jian_core::action::services::NullUiMutationSink),
         activation: None,
         logic: Rc::new(jian_core::logic::NullLogicProvider),
         expr_cache: Rc::new(ExpressionCache::new()),

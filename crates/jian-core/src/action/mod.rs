@@ -9,6 +9,7 @@ pub mod action_trait;
 pub mod actions;
 pub mod cancel;
 pub mod capability;
+pub mod catalog;
 pub mod context;
 pub mod error;
 pub mod executor;
@@ -20,6 +21,7 @@ pub mod value;
 
 pub use action_trait::{ActionChain, ActionFactory, ActionImpl, BoxedAction};
 pub use capability::{Capability, CapabilityGate, DeclaredCapabilityGate, DummyCapabilityGate};
+pub use catalog::{preview_action_descriptors, ActionDescriptor};
 pub use context::ActionContext;
 pub use executor::{execute_list_async, ExecOutcome};
 pub use policy::{ActionPolicy, AllowListPolicy, PreviewActionPolicy};

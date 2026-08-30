@@ -132,9 +132,9 @@ mod tests {
 
     #[test]
     fn state_alias_uses_app() {
-        // `$state` is NOT a standalone scope; expect UnknownScope.
-        let err = StatePath::parse("$state.count").unwrap_err();
-        assert!(matches!(err, PathError::UnknownScope(_)));
+        let path = StatePath::parse("$state.count").unwrap();
+        assert_eq!(path.scope, Scope::App);
+        assert_eq!(path.segments, vec![Segment::Key("count".into())]);
     }
 
     #[test]

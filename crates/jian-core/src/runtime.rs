@@ -13,7 +13,7 @@
 
 use crate::action::services::{
     AsyncFeedback, ClipboardService, FeedbackSink, NetworkClient, PlatformService,
-    Router as RouterSvc, StorageBackend,
+    Router as RouterSvc, StorageBackend, UiMutationSink,
 };
 use crate::action::{ExecOutcome, SharedRegistry, TaskClock, TaskQueue};
 use crate::binding::DeferredBindingQueue;
@@ -157,6 +157,9 @@ pub struct Runtime {
     /// here. `NullEffectSink` for non-Preview runtimes; hosts override
     /// via `set_effect_sink`.
     pub effect_sink: Rc<dyn crate::action::services::effect_sink::EffectSink>,
+    /// R5 typed runtime-node mutation delivery. Preview installs retained
+    /// visibility/scroll state; other runtimes keep a diagnostic null sink.
+    pub ui_mutation_sink: Rc<dyn UiMutationSink>,
     /// R3 action policy — `None` keeps every registered action
     /// executable (today's behavior); Preview installs the fixed
     /// allowlist via `set_policy`.

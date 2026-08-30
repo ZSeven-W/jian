@@ -29,7 +29,7 @@ impl Scope {
 
     pub fn parse_prefix(s: &str) -> Option<Self> {
         Some(match s {
-            "$app" => Scope::App,
+            "$app" | "$state" => Scope::App,
             "$page" => Scope::Page,
             "$self" => Scope::SelfNode,
             "$route" => Scope::Route,
@@ -64,5 +64,11 @@ mod tests {
     #[test]
     fn unknown_prefix_fails() {
         assert_eq!(Scope::parse_prefix("$item"), None);
+    }
+
+    #[test]
+    fn state_is_an_input_alias_for_canonical_app() {
+        assert_eq!(Scope::parse_prefix("$state"), Some(Scope::App));
+        assert_eq!(Scope::parse_prefix("$state").unwrap().as_prefix(), "$app");
     }
 }

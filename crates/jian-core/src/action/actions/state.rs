@@ -1,4 +1,4 @@
-//! State-mutation actions: `set`, `reset`, `delete`.
+//! State-mutation actions: set, toggle, reset, delete.
 
 use crate::action::action_trait::{ActionImpl, BoxedAction};
 use crate::action::context::ActionContext;
@@ -130,6 +130,78 @@ pub fn factory_set(body: &Value) -> Result<BoxedAction, ActionError> {
     };
 
     Ok(Box::new(Set { pairs }))
+}
+
+struct Toggle {
+    path: StatePath,
+}
+
+#[async_trait(?Send)]
+impl ActionImpl for Toggle {
+    fn name(&self) -> &'static str {
+        "toggle"
+    }
+
+    async fn execute(&self, ctx: &ActionContext) -> ActionResult {
+        let value = ctx
+            .state
+            .resolve(&self.path, ctx.page_id.as_deref(), ctx.node_id.as_deref())
+            .ok_or_else(|| {
+                ActionError::Custom(format!(
+                    "toggle: path {} has no current value",
+                    display_path(&self.path)
+                ))
+            })?;
+        let current = value.as_bool().ok_or(ActionError::FieldType {
+            name: "toggle",
+            field: "body",
+            message: "target must currently contain a bool".into(),
+        })?;
+        write_path(ctx, &self.path, Value::Bool(!current))
+    }
+}
+
+pub fn factory_toggle(body: &Value) -> Result<BoxedAction, ActionError> {
+    let source = body.as_str().ok_or(ActionError::FieldType {
+        name: "toggle",
+        field: "body",
+        message: "must be one writable bool path".into(),
+    })?;
+    let path = StatePath::parse(source)
+        .map_err(|error| ActionError::Custom(format!("toggle: {error}")))?;
+    if path.segments.len() != 1 {
+        return Err(ActionError::Custom(
+            "toggle: target must be a single-segment writable path".into(),
+        ));
+    }
+    if !matches!(
+        path.scope,
+        Scope::App | Scope::Vars | Scope::Page | Scope::SelfNode
+    ) {
+        return Err(ActionError::Custom(format!(
+            "toggle: {} is not writable",
+            path.scope.as_prefix()
+        )));
+    }
+    Ok(Box::new(Toggle { path }))
+}
+
+fn display_path(path: &StatePath) -> String {
+    let mut output = path.scope.as_prefix().to_owned();
+    for segment in &path.segments {
+        match segment {
+            crate::state::Segment::Key(key) => {
+                output.push('.');
+                output.push_str(key);
+            }
+            crate::state::Segment::Index(index) => {
+                output.push('[');
+                output.push_str(&index.to_string());
+                output.push(']');
+            }
+        }
+    }
+    output
 }
 
 // ---- reset + delete ----

@@ -80,6 +80,9 @@ pub struct ActionContext {
     /// R3 effect sink — every effect-producing action hands its request
     /// here instead of touching host services directly.
     pub effect_sink: Rc<dyn super::services::effect_sink::EffectSink>,
+    /// R5 platform-neutral runtime-node mutation sink. Preview runtimes
+    /// install retained state; other runtimes use the diagnostic null sink.
+    pub ui_mutation_sink: Rc<dyn super::services::ui_mutation_sink::UiMutationSink>,
     /// Host-certified activation id for the ActionList this context
     /// serves (`None` when the dispatching input carried none). The
     /// action's effect requests inherit it; delayed/async work spawned
@@ -164,6 +167,7 @@ pub(crate) mod tests {
             capabilities: Rc::new(DummyCapabilityGate),
             policy: None,
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
+            ui_mutation_sink: Rc::new(crate::action::services::NullUiMutationSink),
             activation: None,
             logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),

@@ -6,6 +6,7 @@ pub mod null_impls;
 pub mod platform;
 pub mod router;
 pub mod storage;
+pub mod ui_mutation_sink;
 
 pub use clipboard::ClipboardService;
 pub use effect_sink::{EffectOutcome, EffectRequest, EffectSink, NullEffectSink};
@@ -17,6 +18,10 @@ pub use null_impls::{
 pub use platform::{NullPlatform, PlatformService};
 pub use router::{RouteState, Router};
 pub use storage::StorageBackend;
+pub use ui_mutation_sink::{
+    NullUiMutationSink, ScrollAlignment, UiMutationOutcome, UiMutationRequest, UiMutationSink,
+    UiMutationWork,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceError(pub String);

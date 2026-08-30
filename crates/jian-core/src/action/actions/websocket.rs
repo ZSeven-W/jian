@@ -343,6 +343,7 @@ mod tests {
             capabilities: Rc::new(DummyCapabilityGate),
             policy: None,
             effect_sink: Rc::new(crate::action::services::effect_sink::NullEffectSink),
+            ui_mutation_sink: Rc::new(crate::action::services::NullUiMutationSink),
             activation: None,
             logic: Rc::new(crate::logic::NullLogicProvider),
             expr_cache: Rc::new(ExpressionCache::new()),

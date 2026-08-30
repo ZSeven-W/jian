@@ -14,8 +14,10 @@ pub mod logic;
 pub mod navigation;
 pub mod network;
 pub mod platform;
+pub mod scroll;
 pub mod state;
 pub mod storage_ops;
+pub mod visibility;
 pub mod websocket;
 
 /// Register all MVP actions into a shared registry.
@@ -25,6 +27,7 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
 
     // State
     r.register("set", Box::new(state::factory_set));
+    r.register("toggle", Box::new(state::factory_toggle));
     r.register("delete", Box::new(state::factory_delete));
 
     // `reset` is dual-purpose (spec §3.2).
@@ -77,6 +80,19 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     r.register("notify", Box::new(platform::factory_notify));
     r.register("focus", Box::new(platform::factory_focus));
     r.register("blur", Box::new(platform::factory_blur));
+    r.register(
+        "dismiss_keyboard",
+        Box::new(platform::factory_dismiss_keyboard),
+    );
+
+    // Runtime-node UI mutations
+    r.register("show", Box::new(visibility::factory_show));
+    r.register("hide", Box::new(visibility::factory_hide));
+    r.register(
+        "toggle_visibility",
+        Box::new(visibility::factory_toggle_visibility),
+    );
+    r.register("scroll_to", Box::new(scroll::factory_scroll_to));
 
     // Control (nested — via weak registry upgrade)
     let w = weak.clone();

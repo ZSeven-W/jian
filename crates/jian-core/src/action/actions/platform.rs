@@ -1,6 +1,6 @@
 //! L4 platform stubs — emit warnings only until real adapters land.
 //!
-//! Actions: `vibrate`, `share`, `haptic`, `notify`. All succeed and push a
+//! Actions: vibrate, share, haptic, notify, focus, blur, dismiss_keyboard.
 //! RuntimeWarning describing the parameters; real dispatch arrives with the
 //! host-adapter plans.
 
@@ -95,6 +95,7 @@ impl Stub {
                     .to_owned(),
             }),
             "blur" => Some(EffectRequest::BlurFocus),
+            "dismiss_keyboard" => Some(EffectRequest::DismissKeyboard),
             _ => None,
         }
     }
@@ -122,3 +123,4 @@ stub_factory!(factory_notify, "notify", Some(Capability::Notifications));
 // these as registered actions is honoured.
 stub_factory!(factory_focus, "focus", None);
 stub_factory!(factory_blur, "blur", None);
+stub_factory!(factory_dismiss_keyboard, "dismiss_keyboard", None);

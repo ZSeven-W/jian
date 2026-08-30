@@ -38,6 +38,11 @@ impl Runtime {
         self.effect_sink = sink;
     }
 
+    /// Install the host-owned sink for typed visibility and scroll mutations.
+    pub fn set_ui_mutation_sink(&mut self, sink: Rc<dyn crate::action::services::UiMutationSink>) {
+        self.ui_mutation_sink = sink;
+    }
+
     /// Install the R3 action policy (e.g. the Preview allowlist). `None`
     /// restores "every registered action executes".
     pub fn set_policy(&mut self, policy: Option<Rc<dyn crate::action::policy::ActionPolicy>>) {
