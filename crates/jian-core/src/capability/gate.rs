@@ -36,6 +36,16 @@ pub fn from_schema_capability(c: SchemaCapability) -> Capability {
     }
 }
 
+/// Resolve a capability NAME (as authored in a registry entry or config)
+/// through the schema's own serde vocabulary, so the string form has
+/// exactly one source of truth. Unknown names are `None` — callers must
+/// fail closed, not guess.
+pub fn capability_from_name(name: &str) -> Option<Capability> {
+    serde_json::from_value::<SchemaCapability>(serde_json::Value::String(name.to_owned()))
+        .ok()
+        .map(from_schema_capability)
+}
+
 /// Privilege level for graded capabilities (currently only `Automation`).
 ///
 /// Dev-only — only compiled when the `dev-asp` feature is on (Plan 18).

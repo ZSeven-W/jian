@@ -35,10 +35,18 @@ impl Runtime {
         emitted.into_iter().map(|e| e.event).collect()
     }
 
-    /// Deliver a plain, non-envelope semantic event (key/scroll/focus)
-    /// through the same delivery path.
+    /// Deliver a plain semantic event that IS host input (a key, a
+    /// wheel): its chain may consume the pending activation.
     pub(super) fn dispatch_semantic(&mut self, event: &SemanticEvent) {
         self.deliver_enveloped(&SemanticEventEnvelope::plain(event.clone()), true);
+    }
+
+    /// Deliver a DERIVED semantic event (focus change, widget value
+    /// Change, text Submit). These are consequences of an input, not the
+    /// input itself — running them first must not spend the id the
+    /// originating chain was certified with.
+    pub(super) fn dispatch_semantic_secondary(&mut self, event: &SemanticEvent) {
+        self.deliver_enveloped(&SemanticEventEnvelope::plain(event.clone()), false);
     }
 
     /// The ONE semantic-delivery path, shared by pointer dispatch and tick:

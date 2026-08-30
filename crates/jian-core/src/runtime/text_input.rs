@@ -366,7 +366,7 @@ impl Runtime {
         let Some(value) = self.widget_value(node_id) else {
             return;
         };
-        self.dispatch_semantic(&crate::gesture::SemanticEvent::Change { node, value });
+        self.dispatch_semantic_secondary(&crate::gesture::SemanticEvent::Change { node, value });
     }
 
     fn widget_bind_key(&self, node_id: &str) -> Option<String> {

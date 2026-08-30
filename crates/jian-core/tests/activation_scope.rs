@@ -134,3 +134,98 @@ fn a_second_tap_does_not_inherit_the_first_certification() {
         "certification is per input, never carried over"
     );
 }
+
+/// A due-timer delivery must not spend the current certification. The
+/// double-tap window forces a Tap to pend; when a LATER input's dispatch
+/// flushes it, that flushed chain runs uncertified and the id set for
+/// the later input survives for the later input's own chain.
+#[test]
+fn a_flushed_pending_tap_does_not_spend_the_current_certification() {
+    use jian_core::geometry::point;
+    use jian_core::gesture::pointer::{PointerEvent, PointerPhase};
+
+    const DOUBLE_DOC: &str = r##"{
+        "version": "1.1", "formatVersion": "1.1", "id": "x",
+        "app": { "name": "x", "version": "1", "id": "x",
+                 "capabilities": ["clipboard"] },
+        "children": [
+            { "type": "frame", "id": "btn", "x": 0, "y": 0, "width": 200, "height": 200,
+              "events": { "onTap": [ { "copy": { "text": "'hi'" } } ],
+                          "onDoubleTap": [ { "copy": { "text": "'dbl'" } } ] } }
+        ]
+    }"##;
+
+    let log = Rc::new(ActivationLog::default());
+    let mut rt = Runtime::new();
+    rt.load_str(DOUBLE_DOC).expect("load doc");
+    rt.build_layout((800.0, 600.0)).expect("layout");
+    rt.rebuild_spatial();
+    rt.set_effect_sink(log.clone() as Rc<dyn EffectSink>);
+
+    // First tap: with a double-tap handler present the Tap PENDS,
+    // waiting out the double-tap window. Nothing delivered yet.
+    tap(&mut rt, 10, 20);
+    assert!(log.seen.borrow().is_empty(), "the tap is pending");
+
+    // The host certifies the NEXT input. The pending Tap belongs to the
+    // PREVIOUS one.
+    rt.set_activation(Some(9));
+
+    // A new Down far past the window flushes the pending Tap as DUE
+    // work before the current event dispatches.
+    let mut down = PointerEvent::simple_at(2, PointerPhase::Down, point(100.0, 100.0), 900);
+    down.kind = jian_core::gesture::pointer::PointerKind::Touch;
+    rt.dispatch_pointer(down);
+
+    assert_eq!(
+        log.seen.borrow().as_slice(),
+        &[None],
+        "the flushed Tap ran uncertified — it was not the input the id was minted for"
+    );
+    assert_eq!(
+        rt.take_activation(),
+        Some(9),
+        "the certification survives for the input it belongs to"
+    );
+}
+
+/// Derived semantic events (focus changes, widget Change, Submit) run on
+/// the uncertified path even when they fire inside a certified input's
+/// dispatch: the id stays with the input's own handler chain.
+#[test]
+fn derived_focus_events_do_not_race_the_certified_chain() {
+    use jian_core::geometry::point;
+    use jian_core::gesture::pointer::{PointerEvent, PointerPhase};
+
+    // A text input gains focus on tap; the frame's own onTap emits the
+    // certified effect. Focus events are derived and must not consume.
+    const FOCUS_DOC: &str = r##"{
+        "version": "1.1", "formatVersion": "1.1", "id": "x",
+        "app": { "name": "x", "version": "1", "id": "x",
+                 "capabilities": ["clipboard"] },
+        "children": [
+            { "type": "frame", "id": "btn", "x": 0, "y": 0, "width": 200, "height": 200,
+              "events": { "onTap": [ { "copy": { "text": "'hi'" } } ] } }
+        ]
+    }"##;
+
+    let log = Rc::new(ActivationLog::default());
+    let mut rt = Runtime::new();
+    rt.load_str(FOCUS_DOC).expect("load doc");
+    rt.build_layout((800.0, 600.0)).expect("layout");
+    rt.rebuild_spatial();
+    rt.set_effect_sink(log.clone() as Rc<dyn EffectSink>);
+
+    rt.set_activation(Some(3));
+    let mut down = PointerEvent::simple_at(1, PointerPhase::Down, point(100.0, 100.0), 10);
+    down.kind = jian_core::gesture::pointer::PointerKind::Touch;
+    let mut up = PointerEvent::simple_at(1, PointerPhase::Up, point(100.0, 100.0), 20);
+    up.kind = jian_core::gesture::pointer::PointerKind::Touch;
+    rt.dispatch_pointer(down);
+    rt.dispatch_pointer(up);
+    assert_eq!(
+        log.seen.borrow().as_slice(),
+        &[Some(3)],
+        "the tap's own chain gets the id even with derived events in the same dispatch"
+    );
+}

@@ -54,7 +54,14 @@ fn animate_is_constructible_from_the_complete_structured_body() {
 #[test]
 fn builtins_are_registry_entries_not_an_animate_hardcoded_list() {
     let registry = animatable_property_registry();
-    let names: Vec<String> = registry.entries().map(|entry| entry.name).collect();
+    // The registry is an OPEN process-global (custom entries may be
+    // registered at any time — sibling tests do), so assert the builtin
+    // set as an ordered subset rather than the whole table.
+    let names: Vec<String> = registry
+        .entries()
+        .map(|entry| entry.name)
+        .filter(|name| !name.starts_with("test."))
+        .collect();
     assert_eq!(
         names,
         [
@@ -267,4 +274,111 @@ fn schema_round_trip_preserves_unknown_animation_property_text() {
         .value;
     let encoded = serde_json::to_string(&document).expect("round trip");
     assert!(encoded.contains("\"property\":\"shader.futureGlow\""));
+}
+
+/// A registry entry's `capability` is a fail-closed gate: the same
+/// request reaches the sink only when the document declares the
+/// capability, and an entry naming an unknown capability fails at parse
+/// so the author sees it rather than a silent runtime skip.
+#[test]
+fn capability_gated_property_is_fail_closed() {
+    animatable_property_registry()
+        .register(AnimatableProperty {
+            name: "test.hapticPulse".to_owned(),
+            value_type: AnimationValueType::Number,
+            interpolate: AnimationInterpolate::Linear,
+            invalidation_class: InvalidationKind::PaintOnly,
+            apply: AnimationApply::Binding(BindingTarget::Opacity),
+            capability: Some("haptic".to_owned()),
+        })
+        .expect("test property registers once");
+
+    let doc = |caps: &str| {
+        format!(
+            r##"{{
+                "version": "1.1", "formatVersion": "1.1", "id": "x",
+                "app": {{ "name": "x", "version": "1", "id": "x",
+                          "capabilities": [{caps}] }},
+                "children": []
+            }}"##
+        )
+    };
+    let list = json!([{
+        "animate": {
+            "target": "card",
+            "property": "test.hapticPulse",
+            "to": 1.0,
+            "durationMs": 100
+        }
+    }]);
+
+    // Undeclared: the request never reaches the sink.
+    let sink = Rc::new(RecordingSink::default());
+    let mut runtime = Runtime::new();
+    runtime.load_str(&doc("")).expect("load doc");
+    runtime.set_animation_sink(sink.clone() as Rc<dyn AnimationSink>);
+    let outcome = {
+        let registry = runtime.actions.borrow();
+        let context = runtime.make_action_ctx();
+        futures::executor::block_on(execute_list_async(&registry, &list, &context))
+    };
+    assert!(outcome.result.is_ok(), "gated, not fatal");
+    assert!(
+        sink.requests.borrow().is_empty(),
+        "an undeclared capability must keep the request away from the sink"
+    );
+    assert!(
+        outcome
+            .warnings
+            .iter()
+            .any(|w| w.message.contains("capability")),
+        "the author gets a diagnostic, not silence: {:?}",
+        outcome.warnings
+    );
+
+    // Declared: the same request lands.
+    let sink = Rc::new(RecordingSink::default());
+    let mut runtime = Runtime::new();
+    runtime.load_str(&doc("\"haptic\"")).expect("load doc");
+    runtime.set_animation_sink(sink.clone() as Rc<dyn AnimationSink>);
+    let outcome = {
+        let registry = runtime.actions.borrow();
+        let context = runtime.make_action_ctx();
+        futures::executor::block_on(execute_list_async(&registry, &list, &context))
+    };
+    assert!(outcome.result.is_ok());
+    assert_eq!(
+        sink.requests.borrow().len(),
+        1,
+        "the declared capability lets the request through"
+    );
+}
+
+/// An entry whose capability name the runtime cannot resolve fails at
+/// parse — fail closed at the earliest visible point.
+#[test]
+fn unknown_capability_name_fails_at_parse() {
+    animatable_property_registry()
+        .register(AnimatableProperty {
+            name: "test.mystery".to_owned(),
+            value_type: AnimationValueType::Number,
+            interpolate: AnimationInterpolate::Linear,
+            invalidation_class: InvalidationKind::PaintOnly,
+            apply: AnimationApply::Binding(BindingTarget::Opacity),
+            capability: Some("teleport".to_owned()),
+        })
+        .expect("test property registers once");
+    let registry = default_registry();
+    let parsed = registry.borrow().parse_single(&json!({
+        "animate": {
+            "target": "card",
+            "property": "test.mystery",
+            "to": 1.0,
+            "durationMs": 100
+        }
+    }));
+    assert!(
+        parsed.is_err(),
+        "an unresolvable capability name must fail at parse"
+    );
 }

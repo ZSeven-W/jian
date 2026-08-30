@@ -15,6 +15,9 @@ const MAX_ITERATIONS: u32 = 1000;
 
 struct Animate {
     request: AnimationRequest,
+    /// The capability the property's registry entry demands, resolved at
+    /// parse time. `None` for the builtins, which are plain paint work.
+    required_capability: Option<crate::capability::gate::Capability>,
 }
 
 #[async_trait(?Send)]
@@ -24,6 +27,18 @@ impl ActionImpl for Animate {
     }
 
     async fn execute(&self, context: &ActionContext) -> ActionResult {
+        // The registry entry's capability is a fail-closed gate, the same
+        // shape the platform actions use: undeclared means the request
+        // never reaches the sink.
+        if let Some(capability) = self.required_capability {
+            if !context
+                .capabilities
+                .check(capability, "animate", context.now_ms())
+            {
+                warn(context, "animate: required capability not declared");
+                return Ok(());
+            }
+        }
         let mut request = self.request.clone();
         request.requested_at_ms = context.now_ms();
         match context.animation_sink.request(&request) {
@@ -61,6 +76,19 @@ pub fn factory_animate(body: &Value) -> Result<BoxedAction, ActionError> {
         .ok_or_else(|| ActionError::UnknownAnimatableProperty {
             property: property_name.to_owned(),
         })?;
+    // Resolve the entry's capability NAME now, so an unknown name is a
+    // parse error the author sees, not a silent runtime skip.
+    let required_capability = match descriptor.capability.as_deref() {
+        None => None,
+        Some(name) => Some(
+            crate::capability::gate::capability_from_name(name).ok_or_else(|| {
+                field_error(
+                    "property",
+                    "registry entry names a capability the runtime does not know",
+                )
+            })?,
+        ),
+    };
     let property = AnimationProperty::from_registered(property_name, descriptor.apply);
     let to = object.get("to").ok_or(ActionError::MissingField {
         name: "animate",
@@ -94,6 +122,7 @@ pub fn factory_animate(body: &Value) -> Result<BoxedAction, ActionError> {
     let direction = parse_direction(optional_string(object, "direction", "normal")?)?;
     let fill_mode = parse_fill_mode(optional_string(object, "fillMode", "none")?)?;
     Ok(Box::new(Animate {
+        required_capability,
         request: AnimationRequest {
             target: target.trim().to_owned(),
             property,

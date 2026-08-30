@@ -129,7 +129,7 @@ impl Runtime {
         let mut events = self.dispatch_key_with_facts(target, key, code, repeat, modifiers);
         if submit {
             let event = SemanticEvent::Submit { node: target };
-            self.dispatch_semantic(&event);
+            self.dispatch_semantic_secondary(&event);
             events.push(event);
         }
         events

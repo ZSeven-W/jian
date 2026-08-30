@@ -63,7 +63,7 @@ impl Runtime {
         let mut emitted = Vec::with_capacity(2);
         if let Some(prev) = change.previous {
             let ev = SemanticEvent::FocusLost { node: prev };
-            self.dispatch_semantic(&ev);
+            self.dispatch_semantic_secondary(&ev);
             emitted.push(ev);
         }
         // Re-read focus after FocusLost dispatch because an authored blur
@@ -71,7 +71,7 @@ impl Runtime {
         if let Some(next) = change.current {
             if self.focus.current() == Some(next) {
                 let ev = SemanticEvent::FocusGained { node: next };
-                self.dispatch_semantic(&ev);
+                self.dispatch_semantic_secondary(&ev);
                 emitted.push(ev);
             }
         }
