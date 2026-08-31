@@ -8529,10 +8529,9 @@
           }
         },
         {
-          "description": "Native SkSL shader fill (v1). The `sksl` source is stored RAW and is treated as untrusted: the renderer entrypoint is the SkSL signature `half4 main(float2 fragCoord)`. On compile failure the backend degrades to a visible solid fill (the first `color` uniform, else mid-gray) and never panics. Mirrors the sibling gradient bodies for the shared `opacity`/`blend_mode` tail.\n\nPencil-flavoured WebGL-GLSL import is an explicit follow-up, NOT v1; v1 expects SkSL (Skia's GLSL dialect) verbatim.",
+          "description": "Native SkSL shader fill (v1). Authors may provide RAW source in `sksl` or ask the loader to expand a built-in source through `preset`. The loader currently recognizes only `\"turbulence\"`; a recognized preset wins when both fields are present, so the authored `sksl` is ignored at render time. Unknown preset strings remain on the wire for forward compatibility and are treated by the loader as if no preset were set.\n\nRAW `sksl` remains supported and is treated as untrusted: the renderer entrypoint is `half4 main(float2 fragCoord)`. On compile failure the backend degrades to a visible solid fill (the first `color` uniform, else mid-gray) and never panics. Mirrors the sibling gradient bodies for the shared `opacity`/`blend_mode` tail.\n\nPencil-flavoured WebGL-GLSL import is an explicit follow-up, NOT v1; v1 expects SkSL (Skia's GLSL dialect) verbatim.",
           "type": "object",
           "required": [
-            "sksl",
             "type"
           ],
           "properties": {
@@ -8542,9 +8541,23 @@
                 "shader"
               ]
             },
+            "preset": {
+              "description": "Loader-expanded source selector. Only `\"turbulence\"` is recognized in v1; expansion is runtime-only and is never serialized into `sksl`.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ShaderPresetV1"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "sksl": {
-              "description": "RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.",
-              "type": "string"
+              "description": "Optional RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "uniforms": {
               "description": "Optional named-uniform map (`float` / `vec*` / `color`). A shader may declare none; absent or empty both mean \"no uniforms\".",
@@ -8751,6 +8764,13 @@
           "type": "string"
         }
       }
+    },
+    "ShaderPresetV1": {
+      "description": "Closed v1 authoring schema for [`ShaderFillBody::preset`]. The stored field remains an open string so future preset names can round-trip through older readers without panicking or losing data.",
+      "type": "string",
+      "enum": [
+        "turbulence"
+      ]
     },
     "ShaderUniformValue": {
       "description": "One named uniform value bound into an SkSL shader fill via `RuntimeShaderBuilder` at paint time. `untagged` so the wire form is the bare JSON scalar/array the author wrote — a number is a `float`, a number array is a `vec2`/`vec3`/`vec4`, and a hex string is a `color` mapped to a `vec4` (premultiplied RGBA). The named-uniforms map on `ShaderFillBody` is optional; a shader may take none.",

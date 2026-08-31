@@ -184,12 +184,28 @@ pub enum ShaderUniformValue {
     Color(String),
 }
 
-/// Native SkSL shader fill (v1). The `sksl` source is stored RAW and is
-/// treated as untrusted: the renderer entrypoint is the SkSL signature
-/// `half4 main(float2 fragCoord)`. On compile failure the backend
-/// degrades to a visible solid fill (the first `color` uniform, else
-/// mid-gray) and never panics. Mirrors the sibling gradient bodies for
-/// the shared `opacity`/`blend_mode` tail.
+/// Closed v1 authoring schema for [`ShaderFillBody::preset`]. The stored
+/// field remains an open string so future preset names can round-trip through
+/// older readers without panicking or losing data.
+#[doc(hidden)]
+#[derive(schemars::JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+pub enum ShaderPresetV1 {
+    Turbulence,
+}
+
+/// Native SkSL shader fill (v1). Authors may provide RAW source in `sksl`
+/// or ask the loader to expand a built-in source through `preset`. The
+/// loader currently recognizes only `"turbulence"`; a recognized preset
+/// wins when both fields are present, so the authored `sksl` is ignored at
+/// render time. Unknown preset strings remain on the wire for forward
+/// compatibility and are treated by the loader as if no preset were set.
+///
+/// RAW `sksl` remains supported and is treated as untrusted: the renderer
+/// entrypoint is `half4 main(float2 fragCoord)`. On compile failure the
+/// backend degrades to a visible solid fill (the first `color` uniform,
+/// else mid-gray) and never panics. Mirrors the sibling gradient bodies
+/// for the shared `opacity`/`blend_mode` tail.
 ///
 /// Pencil-flavoured WebGL-GLSL import is an explicit follow-up, NOT v1;
 /// v1 expects SkSL (Skia's GLSL dialect) verbatim.
@@ -198,8 +214,19 @@ pub enum ShaderUniformValue {
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct ShaderFillBody {
-    /// RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.
-    pub sksl: String,
+    /// Loader-expanded source selector. Only `"turbulence"` is recognized
+    /// in v1; expansion is runtime-only and is never serialized into `sksl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<ShaderPresetV1>")]
+    #[cfg_attr(
+        feature = "export-ts",
+        ts(type = "\"turbulence\" | null", optional = nullable)
+    )]
+    pub preset: Option<String>,
+    /// Optional RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "export-ts", ts(optional = nullable))]
+    pub sksl: Option<String>,
     /// Optional named-uniform map (`float` / `vec*` / `color`). A
     /// shader may declare none; absent or empty both mean "no uniforms".
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -510,7 +537,10 @@ mod tests {
         let f: PenFill = serde_json::from_str(json).unwrap();
         match &f {
             PenFill::Shader(body) => {
-                assert!(body.sksl.contains("half4 main(float2 p)"));
+                assert!(body
+                    .sksl
+                    .as_deref()
+                    .is_some_and(|sksl| sksl.contains("half4 main(float2 p)")));
                 let uniforms = body.uniforms.as_ref().expect("uniforms map");
                 assert_eq!(uniforms.get("glow"), Some(&ShaderUniformValue::Float(0.5)));
                 assert_eq!(
@@ -540,15 +570,38 @@ mod tests {
     }
 
     #[test]
-    fn shader_fill_rejects_missing_sksl() {
-        // `sksl` is required — a shader fill with no source must fail to
-        // deserialize rather than silently producing an empty program.
-        let json = r##"{"type":"shader","uniforms":{"glow":0.5}}"##;
-        let parsed: Result<PenFill, _> = serde_json::from_str(json);
+    fn shader_fill_preset_only_roundtrips_without_materializing_sksl() {
+        let json = r##"{"type":"shader","preset":"turbulence"}"##;
+        let fill: PenFill = serde_json::from_str(json).expect("preset-only shader parses");
+        let value = serde_json::to_value(&fill).expect("preset-only shader serializes");
+        assert_eq!(value["preset"], "turbulence");
         assert!(
-            parsed.is_err(),
-            "missing `sksl` must reject, got {parsed:?}"
+            value.get("sksl").is_none(),
+            "preset expansion belongs to the loader, not persisted schema: {value}"
         );
+
+        let roundtripped: PenFill = serde_json::from_value(value).expect("round-trip parses");
+        assert_eq!(fill, roundtripped);
+    }
+
+    #[test]
+    fn shader_fill_preset_and_sksl_coexist_on_the_wire() {
+        let json = r##"{"type":"shader","preset":"turbulence","sksl":"author source"}"##;
+        let fill: PenFill = serde_json::from_str(json).expect("combined shader parses");
+        let value = serde_json::to_value(&fill).expect("combined shader serializes");
+        assert_eq!(value["preset"], "turbulence");
+        assert_eq!(value["sksl"], "author source");
+    }
+
+    #[test]
+    fn shader_fill_unknown_preset_is_preserved_without_panicking() {
+        let json = r##"{"type":"shader","preset":"future_noise","sksl":"author source"}"##;
+        let fill: PenFill =
+            serde_json::from_str(json).expect("unknown preset stays forward-compatible");
+        let value = serde_json::to_value(&fill).expect("unknown preset serializes");
+        assert_eq!(value["preset"], "future_noise");
+        let roundtripped: PenFill = serde_json::from_value(value).expect("round-trip parses");
+        assert_eq!(fill, roundtripped);
     }
 
     #[test]
