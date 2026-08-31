@@ -16,9 +16,9 @@
 //! matching second Tap yields only `DoubleTap` (no first- or second-Tap).
 //! Chains without `onDoubleTap` deliver Taps immediately (legacy single-
 //! tap behavior, which built-in widget activation depends on). The
-//! pending-Tap state machine lives in [`router_tap`]; the runtime drives
+//! pending-Tap state machine lives in `router_tap`; the runtime drives
 //! due timers first (`tick_enveloped` at the incoming event's timestamp,
-//! then the internal [`Self::dispatch_current`] path), so a due LongPress
+//! then the internal `Self::dispatch_current` path), so a due LongPress
 //! or deferred Tap is delivered BEFORE the current event's slider side
 //! effects, disabled-predicate evaluation, hover semantics and arena
 //! routing — and the public dispatch entry points do the same. A
@@ -162,7 +162,7 @@ impl PointerRouter {
     /// Envelope-returning dispatch used by the runtime. Recognizers attach
     /// factual pointer/gesture metadata here; nothing downstream
     /// reconstructs it. Uses the static (no state) disabled predicate;
-    /// the runtime pointer path calls [`Self::dispatch_enveloped_with`].
+    /// the runtime pointer path calls `Self::dispatch_enveloped_with`.
     /// A due pending Tap is flushed BEFORE Hover/current semantics.
     pub fn dispatch_enveloped(
         &mut self,

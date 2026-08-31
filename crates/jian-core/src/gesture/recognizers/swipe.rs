@@ -51,7 +51,7 @@
 //!
 //! # Lifecycle
 //!
-//! The claim-time `Swipe` is emitted from [`Self::accept`] so the arena
+//! The claim-time `Swipe` is emitted from `Self::accept` so the arena
 //! rejects losers first — a Press cancellation (if any) precedes the
 //! Swipe. `Up`/`Cancel` before the claim reject; after a claim no
 //! second Swipe is ever emitted for the sequence.

@@ -3,7 +3,7 @@
 //! exactly the safe action vocabulary and reject everything else with a
 //! structured, non-fatal diagnostic.
 //!
-//! Policy runs inside [`ActionChain::run_serial`]: a rejection never
+//! Policy runs inside `ActionChain::run_serial`: a rejection never
 //! aborts the chain — it emits `ActionError::PolicyRejected`, runs the
 //! action's optional rejection branch, and the LATER SAFE SIBLINGS still
 //! execute. Unknown/invalid syntax stays a parse error (the registry

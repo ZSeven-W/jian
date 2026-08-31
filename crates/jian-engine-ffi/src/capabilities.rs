@@ -377,7 +377,7 @@ impl CapabilityBridge {
                 unsafe { callback(lifecycle.callbacks.user_data, id) };
             }
         }
-        let warnings: Vec<_> = self.state.borrow_mut().warnings.drain(..).collect();
+        let warnings = std::mem::take(&mut self.state.borrow_mut().warnings);
         for warning in warnings {
             lifecycle.runtime.push_load_warning(warning);
         }

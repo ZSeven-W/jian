@@ -7,7 +7,7 @@
 //!
 //! Recognizers never reconstruct facts after the fact: `SemanticEventEnvelope`
 //! carries the `SemanticEvent` plus the factual `PointerFacts` captured from
-//! the `PointerEvent` that produced it. One payload path ([`Self::payload`])
+//! the `PointerEvent` that produced it. One payload path (`Self::payload`)
 //! turns the envelope into the `$event` object fed to handlers through
 //! `runtime/async_runtime.rs`. Missing facts are absent, never guessed.
 
