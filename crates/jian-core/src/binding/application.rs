@@ -115,6 +115,9 @@ pub fn apply_binding_value(
                 application.y = number_from_runtime(value).map(|number| number as f32);
             }
         }
+        // Paint-only translation is carried to the host overlay. It must not
+        // materialize as schema geometry or contribute a rect override.
+        BindingTarget::TranslateX | BindingTarget::TranslateY => {}
         BindingTarget::Width => {
             insert_number(object, "width", value);
             if allow_rect_overrides {
@@ -312,5 +315,26 @@ mod tests {
             true,
         );
         assert_eq!(reference["ref"], "b");
+    }
+
+    #[test]
+    fn translate_targets_are_passed_through_without_layout_changes() {
+        for target in [BindingTarget::TranslateX, BindingTarget::TranslateY] {
+            let mut node = serde_json::json!({
+                "type": "rectangle",
+                "id": "card",
+                "x": 10,
+                "y": 20,
+            });
+            let application = apply_binding_value(
+                node.as_object_mut().unwrap(),
+                target,
+                &RuntimeValue(serde_json::json!(32)),
+                true,
+            );
+            assert_eq!(application, BindingApplication::default());
+            assert_eq!(node["x"], 10);
+            assert_eq!(node["y"], 20);
+        }
     }
 }

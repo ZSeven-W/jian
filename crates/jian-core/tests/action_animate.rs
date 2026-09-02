@@ -73,6 +73,8 @@ fn builtins_are_registry_entries_not_an_animate_hardcoded_list() {
             "scaleX",
             "scaleY",
             "stroke",
+            "translateX",
+            "translateY",
             "width",
             "x",
             "y",
@@ -89,6 +91,36 @@ fn builtins_are_registry_entries_not_an_animate_hardcoded_list() {
     assert!(opacity.capability.is_none());
     assert!(registry.is_reserved_shader_uniform("shader.glow"));
     assert!(!registry.is_reserved_shader_uniform("shader."));
+}
+
+#[test]
+fn translate_x_registry_entry_is_paint_only() {
+    let translate_x = animatable_property_registry()
+        .get("translateX")
+        .expect("translateX builtin");
+    assert_eq!(translate_x.value_type, AnimationValueType::Length);
+    assert_eq!(translate_x.interpolate, AnimationInterpolate::Linear);
+    assert_eq!(translate_x.invalidation_class, InvalidationKind::PaintOnly);
+    assert_eq!(
+        translate_x.apply,
+        AnimationApply::Binding(BindingTarget::TranslateX)
+    );
+}
+
+#[test]
+fn animate_accepts_translate_x_property() {
+    let registry = default_registry();
+    let parsed = registry
+        .borrow()
+        .parse_single(&json!({ "animate": {
+            "target": "card",
+            "property": "translateX",
+            "from": -12,
+            "to": 24,
+            "durationMs": 300
+        }}))
+        .expect("paint-only translateX animation should validate");
+    assert_eq!(parsed.name(), "animate");
 }
 
 #[test]

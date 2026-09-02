@@ -156,7 +156,8 @@ fn builtin_properties() -> Vec<AnimatableProperty> {
     use AnimationInterpolate::{ColorSrgb, Discrete, Linear};
     use AnimationValueType::{Angle, Color, Length, Number};
     use BindingTarget::{
-        CornerRadius, Fill, Height, Opacity, Rotation, ScaleX, ScaleY, Stroke, Width, X, Y,
+        CornerRadius, Fill, Height, Opacity, Rotation, ScaleX, ScaleY, Stroke, TranslateX,
+        TranslateY, Width, X, Y,
     };
     [
         (
@@ -168,6 +169,20 @@ fn builtin_properties() -> Vec<AnimatableProperty> {
         ),
         ("x", Length, Linear, InvalidationKind::HitTest, X),
         ("y", Length, Linear, InvalidationKind::HitTest, Y),
+        (
+            "translateX",
+            Length,
+            Linear,
+            InvalidationKind::PaintOnly,
+            TranslateX,
+        ),
+        (
+            "translateY",
+            Length,
+            Linear,
+            InvalidationKind::PaintOnly,
+            TranslateY,
+        ),
         (
             "rotation",
             Angle,

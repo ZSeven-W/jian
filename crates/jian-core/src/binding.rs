@@ -77,6 +77,8 @@ pub enum BindingTarget {
     CornerRadius,
     X,
     Y,
+    TranslateX,
+    TranslateY,
     Width,
     Height,
     Rotation,
@@ -101,6 +103,8 @@ impl BindingTarget {
             "cornerRadius" => Self::CornerRadius,
             "x" => Self::X,
             "y" => Self::Y,
+            "translateX" => Self::TranslateX,
+            "translateY" => Self::TranslateY,
             "width" => Self::Width,
             "height" => Self::Height,
             "rotation" => Self::Rotation,
@@ -121,7 +125,9 @@ impl BindingTarget {
             | Self::CornerRadius
             | Self::Value
             | Self::Checked
-            | Self::SelectedValue => InvalidationKind::PaintOnly,
+            | Self::SelectedValue
+            | Self::TranslateX
+            | Self::TranslateY => InvalidationKind::PaintOnly,
             Self::Visible | Self::X | Self::Y | Self::Rotation | Self::ScaleX | Self::ScaleY => {
                 InvalidationKind::HitTest
             }
@@ -134,7 +140,12 @@ impl BindingTarget {
     pub fn application_order(self) -> u8 {
         match self {
             Self::ScaleX | Self::ScaleY => 2,
-            Self::X | Self::Y | Self::Width | Self::Height => 1,
+            Self::X
+            | Self::Y
+            | Self::TranslateX
+            | Self::TranslateY
+            | Self::Width
+            | Self::Height => 1,
             _ => 0,
         }
     }
@@ -716,5 +727,17 @@ mod tests {
             classify_binding("futureProperty"),
             InvalidationKind::PaintOnly
         );
+    }
+
+    #[test]
+    fn translate_targets_parse_as_paint_only_in_application_order_one() {
+        for (property, target) in [
+            ("translateX", BindingTarget::TranslateX),
+            ("translateY", BindingTarget::TranslateY),
+        ] {
+            assert_eq!(BindingTarget::parse(property), Some(target));
+            assert_eq!(target.invalidation(), InvalidationKind::PaintOnly);
+            assert_eq!(target.application_order(), 1);
+        }
     }
 }
