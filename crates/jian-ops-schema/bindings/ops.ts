@@ -359,7 +359,7 @@ export type ImageFillMode = "fill" | "fit" | "crop" | "tile" | "stretch";
 
 export type ImageFitMode = "fill" | "fit" | "crop" | "tile";
 
-export type ImageNode = { src: string, objectFit: ImageFitMode | null, width: SizingBehavior | null, height: SizingBehavior | null, cornerRadius: CornerRadius | null, effects: Array<PenEffect> | null, exposure: number | null, contrast: number | null, saturation: number | null, temperature: number | null, tint: number | null, highlights: number | null, shadows: number | null, imagePrompt: string | null, imageSearchQuery: string | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, constraints: Constraints | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null,
+export type ImageNode = { src: string, objectFit: ImageFitMode | null, width: SizingBehavior | null, height: SizingBehavior | null, cornerRadius: CornerRadius | null, effects: Array<PenEffect> | null, exposure: number | null, contrast: number | null, saturation: number | null, temperature: number | null, tint: number | null, highlights: number | null, shadows: number | null, imagePrompt: string | null, imageSearchQuery: string | null, video: VideoMeta | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, constraints: Constraints | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null,
 /**
  * Keep this node at its authored viewport position while its nearest
  * scrollable ancestor moves ordinary content.
@@ -1065,6 +1065,8 @@ export type VariableKind = "color" | "number" | "boolean" | "string";
 export type VariableScalar = boolean | number | string;
 
 export type VariableValue = VariableScalar | Array<ThemedValue>;
+
+export type VideoMeta = { src: string, autoplay: boolean, loop: boolean, muted: boolean, holdLastFrame: boolean, clickToReplay: boolean, videoPrompt: string | null, };
 
 /**
  * Authored overrides for the four auto-derived interaction states.

@@ -20,6 +20,7 @@ pub mod tabs;
 pub mod text;
 pub mod text_area;
 pub mod text_input;
+pub mod video;
 
 pub use base::{BoolOrExpression, MaskType, NumberOrExpression, PenNodeBase};
 pub use checkbox::CheckboxNode;
@@ -49,6 +50,7 @@ pub use text::{
 };
 pub use text_area::TextAreaNode;
 pub use text_input::TextInputNode;
+pub use video::VideoMeta;
 
 use serde::{Deserialize, Serialize};
 

@@ -3525,6 +3525,16 @@
                 "null"
               ]
             },
+            "video": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/VideoMeta"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "state": {
               "type": [
                 "object",
@@ -9409,6 +9419,38 @@
         "crop",
         "tile"
       ]
+    },
+    "VideoMeta": {
+      "type": "object",
+      "required": [
+        "src"
+      ],
+      "properties": {
+        "src": {
+          "type": "string"
+        },
+        "autoplay": {
+          "type": "boolean"
+        },
+        "loop": {
+          "type": "boolean"
+        },
+        "muted": {
+          "type": "boolean"
+        },
+        "holdLastFrame": {
+          "type": "boolean"
+        },
+        "clickToReplay": {
+          "type": "boolean"
+        },
+        "videoPrompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
     },
     "SelectOption": {
       "description": "A single dropdown option: the persisted `value` and its display `label`.",

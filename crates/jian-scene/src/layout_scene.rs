@@ -34,6 +34,7 @@ pub use jian_ops_schema::node::MaskType;
 use jian_widgets::{Color, ImageAdjustments, ImageBlendMode, ImageDrawMode, Point2D, Rect};
 #[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
+use std::sync::Arc;
 
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
@@ -487,6 +488,18 @@ pub struct SceneTextRun {
     pub strikethrough: bool,
 }
 
+/// Video playback metadata carried by an image poster in the render scene.
+/// The scene paints only the poster; HTML export consumes the playback fields.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SceneVideo {
+    pub src: Arc<str>,
+    pub autoplay: bool,
+    pub r#loop: bool,
+    pub muted: bool,
+    pub hold_last_frame: bool,
+    pub click_to_replay: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneNode {
     /// Stable node id (the `.op` schema id). Identity for hit-test /
@@ -639,6 +652,8 @@ pub struct SceneNode {
     /// document change; owning a `String` here made each rebuild
     /// memcpy the entire image set.
     pub image_src: Option<std::sync::Arc<str>>,
+    /// Optional video source and playback policy for an image poster.
+    pub video: Option<SceneVideo>,
     /// Stable content hash for `image_src`. The canvas painter uses it
     /// as a per-frame cache key without hashing large data URLs again.
     pub image_src_id: u64,
@@ -892,6 +907,7 @@ impl SceneNode {
             arc_inner_radius: None,
             polygon_sides: 3,
             image_src: None,
+            video: None,
             image_src_id: 0,
             image_fit: SceneImageFit::Fill,
             image_blend_mode: ImageBlendMode::Normal,

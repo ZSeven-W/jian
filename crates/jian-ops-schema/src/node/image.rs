@@ -1,6 +1,7 @@
 use super::base::PenNodeBase;
 use super::container::CornerRadius;
 use super::image_src::ImageSrc;
+use super::video::VideoMeta;
 use crate::sizing::SizingBehavior;
 use crate::style::PenEffect;
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,8 @@ pub struct ImageNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_search_query: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<VideoMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::StateSchema>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bindings: Option<crate::events::Bindings>,
@@ -80,6 +83,7 @@ pub struct ImageNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::PenNode;
     use crate::style::BlendMode;
 
     #[test]
@@ -90,5 +94,51 @@ mod tests {
 
         let serialized = serde_json::to_string(&image).expect("serialize image node");
         assert_eq!(serialized.matches("\"blendMode\"").count(), 1);
+    }
+
+    #[test]
+    fn video_metadata_round_trips_all_playback_flags() {
+        let json = r#"{
+            "type":"image",
+            "id":"hero",
+            "src":"data:image/png;base64,AA==",
+            "video": {
+                "src":"https://example.com/hero.mp4",
+                "autoplay":true,
+                "loop":true,
+                "muted":true,
+                "holdLastFrame":true,
+                "clickToReplay":true,
+                "videoPrompt":"cinematic mountain flyover"
+            }
+        }"#;
+        let PenNode::Image(image) = serde_json::from_str(json).expect("video image") else {
+            panic!("expected image node");
+        };
+        let video = image.video.as_ref().expect("video metadata");
+        assert_eq!(video.src, "https://example.com/hero.mp4");
+        assert!(video.autoplay);
+        assert!(video.r#loop);
+        assert!(video.muted);
+        assert!(video.hold_last_frame);
+        assert!(video.click_to_replay);
+        assert_eq!(
+            video.video_prompt.as_deref(),
+            Some("cinematic mountain flyover")
+        );
+        let serialized = serde_json::to_string(&PenNode::Image(image)).expect("serialize image");
+        assert!(serialized.contains("\"video\""));
+        assert!(serialized.contains("\"holdLastFrame\":true"));
+        assert!(serialized.contains("\"clickToReplay\":true"));
+    }
+
+    #[test]
+    fn absent_or_null_video_metadata_is_not_serialized() {
+        for suffix in ["", r#", "video": null"#] {
+            let json = format!(r#"{{"type":"image","id":"hero","src":"poster.png"{suffix}}}"#);
+            let node: PenNode = serde_json::from_str(&json).expect("image node");
+            let serialized = serde_json::to_string(&node).expect("serialize image");
+            assert!(!serialized.contains("\"video\""), "{serialized}");
+        }
     }
 }
