@@ -70,6 +70,10 @@ pub struct PenDocument {
     /// Code-to-design conversion ledger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversion: Option<crate::conversion::ConversionSpec>,
+
+    /// Authored document motion preference. Hosts may reduce further.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<crate::motion::MotionPreference>,
 }
 
 impl Clone for PenDocument {
@@ -92,6 +96,7 @@ impl Clone for PenDocument {
             logic_modules: self.logic_modules.clone(),
             design_md: self.design_md.clone(),
             conversion: self.conversion.clone(),
+            motion: self.motion,
         };
         crate::image_thumbs::propagate_to_clone(self, &mut cloned);
         cloned

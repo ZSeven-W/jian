@@ -91,7 +91,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 /**
  * Figma-style per-axis anchoring for absolutely positioned nodes.
@@ -162,6 +162,11 @@ export type DesignMdTypography = { fontFamily: string | null, headings: string |
  */
 scale: string | null, };
 
+/**
+ * CSS/Material-style easing names accepted by document motion declarations.
+ */
+export type Easing = "linear" | "ease" | "easeIn" | "easeOut" | "easeInOut" | "standard" | "emphasized" | "emphasizedDecelerate" | "emphasizedAccelerate" | { "cubicBezier": [number, number, number, number] };
+
 export type EllipseNode = { width: SizingBehavior | null, height: SizingBehavior | null, cornerRadius: number | null, innerRadius: number | null, startAngle: number | null, sweepAngle: number | null, fill: Array<PenFill> | null, stroke: PenStroke | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, constraints: Constraints | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null,
 /**
  * Keep this node at its authored viewport position while its nearest
@@ -176,7 +181,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 /**
  * All supported event hook keys. Note: input events (`onChange`, `onSubmit`, `onFocus`,
@@ -236,7 +241,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null,
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null,
 /**
  * Direct child ids that remain pinned while this container scrolls.
  */
@@ -315,7 +320,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null,
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null,
 /**
  * Direct child ids that remain pinned while this container scrolls.
  */
@@ -340,7 +345,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type ImageFillBody = { url: string, mode: ImageFillMode | null, originalSize: ImageOriginalSize | null, transform: ImageTransform | null,
 /**
@@ -373,13 +378,19 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type ImageOriginalSize = { width: number, height: number, };
 
 export type ImageTransform = { m00: number, m01: number, m02: number, m10: number, m11: number, m12: number, };
 
 export type JustifyContent = "start" | "center" | "end" | "space_between" | "space_around";
+
+/**
+ * A keyframe stop map. Values use the same JSON value representation as the
+ * action layer so colors and numbers keep their existing wire shape.
+ */
+export type Keyframe = { offset: number, values: { [key in string]?: JsonValue }, } & ({ [key in string]?: JsonValue });
 
 export type LayoutMode = "none" | "vertical" | "horizontal";
 
@@ -397,7 +408,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, };
 
 export type LinearGradientBody = { angle: number | null, stops: Array<GradientStop>, explain: string | null, opacity: number | null, blendMode: BlendMode | null, };
 
@@ -434,10 +445,31 @@ export type MeshGradientBody = { rows: number, cols: number, stops: Array<MeshVe
 export type MeshVertexStop = { row: number, col: number, color: string, };
 
 /**
+ * The document's authored motion preference. A host may reduce further.
+ */
+export type MotionPreference = "full" | "reduced";
+
+/**
+ * The two P1 lifecycle triggers.
+ */
+export type MotionTrigger = "mount" | "inView";
+
+/**
  * Declarative per-node navigation: clicking the node pushes/replaces/pops a route.
  * Equivalent to `events.on_tap = [{"push": "..."}]` but more editor-discoverable.
  */
 export type NavigationRoute = { "push": string } | { "replace": string } | { "pop": null };
+
+/**
+ * One time-based node animation declaration.
+ */
+export type NodeAnimation = { trigger: MotionTrigger, keyframes: Array<Keyframe>, durationMs: bigint, delayMs: bigint, easing: Easing, iterations: number, fillMode: NodeAnimationFillMode, once: boolean, } & ({ [key in string]?: JsonValue });
+
+/**
+ * Fill policy for a node declaration. P1 intentionally keeps only the CSS
+ * policies needed by mount/inView recipes.
+ */
+export type NodeAnimationFillMode = "forwards" | "none";
 
 export type NodeLifecycleHooks = { onMount: Array<Action> | null, onUnmount: Array<Action> | null,
 /**
@@ -484,7 +516,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 /**
  * Opacity can be a number or a `$variable` reference string.
@@ -532,7 +564,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type PenDocument = {
 /**
@@ -570,7 +602,11 @@ designMd: DesignMdSpec | null,
 /**
  * Code-to-design conversion ledger.
  */
-conversion: ConversionSpec | null, };
+conversion: ConversionSpec | null,
+/**
+ * Authored document motion preference. Hosts may reduce further.
+ */
+motion: MotionPreference | null, };
 
 export type PenEffect = { "type": "blur" } & BlurBody | { "type": "background_blur" } & BlurBody | { "type": "shadow" } & ShadowBody;
 
@@ -611,7 +647,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type PrimitiveType = "int" | "float" | "number" | "string" | "bool" | "array" | "object" | "date";
 
@@ -636,7 +672,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type RadialGradientBody = { cx: number | null, cy: number | null, radius: number | null, stops: Array<GradientStop>, explain: string | null, opacity: number | null, blendMode: BlendMode | null, };
 
@@ -662,7 +698,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type RectangleNode = { children: Array<PenNode> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, constraints: Constraints | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null,
 /**
@@ -678,7 +714,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null,
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, width: SizingBehavior | null, height: SizingBehavior | null, layout: LayoutMode | null, gap: NumberOrExpression | null, padding: Padding | null, justifyContent: JustifyContent | null, alignItems: AlignItems | null, clipContent: boolean | null,
 /**
  * Direct child ids that remain pinned while this container scrolls.
  */
@@ -698,7 +734,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, };
 
 export type RouteSpec = { pageId: string, preload: boolean | null, guards: Array<Action> | null,
 /**
@@ -741,7 +777,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 /**
  * A single dropdown option: the persisted `value` and its display `label`.
@@ -853,7 +889,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type SolidFillBody = { color: string, explain: string | null, opacity: number | null, blendMode: BlendMode | null, };
 
@@ -895,7 +931,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 /**
  * Tabbed panel switcher. Unlike the leaf widgets this is a CONTAINER:
@@ -929,7 +965,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type TextAlign = "left" | "center" | "right" | "justify";
 
@@ -973,7 +1009,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type TextContent = string | Array<StyledTextSegment>;
 
@@ -1031,7 +1067,7 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type TextNode = { width: SizingBehavior | null, height: SizingBehavior | null, content: TextContent, fontFamily: string | null, fontSize: number | null, fontWeight: FontWeight | null, fontStyle: FontStyleKind | null, letterSpacing: number | null, lineHeight: number | null, textAlign: TextAlign | null, textAlignVertical: TextAlignVertical | null, textGrowth: TextGrowth | null, underline: boolean | null, strikethrough: boolean | null, fill: Array<PenFill> | null, effects: Array<PenEffect> | null, state: { [key in string]?: StateEntry } | null, bindings: { [key in string]?: Expression } | null, events: EventHandlers | null, lifecycle: NodeLifecycleHooks | null, semantics: SemanticsMeta | null, gestures: GestureOverrides | null, route: NavigationRoute | null, id: string, name: string | null, role: string | null, explain: string | null, x: number | null, y: number | null, rotation: number | null, constraints: Constraints | null, opacity: NumberOrExpression | null, enabled: BoolOrExpression | null, visible: boolean | null, locked: boolean | null,
 /**
@@ -1047,11 +1083,14 @@ maskType?: MaskType | null,
  * Composite this node's complete rendered subtree with the backdrop.
  * Absence is the source-over default; pass-through groups also stay absent.
  */
-blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
 
 export type ThemedValue = { value: VariableScalar, theme: { [key in string]?: string } | null, };
 
-export type Transition = "push" | "fade" | "modal" | "none";
+/**
+ * A node-level transition applied to runtime paint changes.
+ */
+export type Transition = { durationMs: bigint, easing: Easing, properties: Array<string> | null, } & ({ [key in string]?: JsonValue });
 
 /**
  * Vertical anchoring for an absolutely positioned node.

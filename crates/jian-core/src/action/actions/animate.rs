@@ -128,6 +128,7 @@ pub fn factory_animate(body: &Value) -> Result<BoxedAction, ActionError> {
             property,
             from,
             to: to.clone(),
+            stops: None,
             duration_ms,
             delay_ms,
             easing,
@@ -227,6 +228,10 @@ fn parse_easing(authored: &str) -> Result<Easing, ActionError> {
         "ease_in" | "ease-in" => Ok(Easing::EaseIn),
         "ease_out" | "ease-out" => Ok(Easing::EaseOut),
         "ease_in_out" | "ease-in-out" => Ok(Easing::EaseInOut),
+        "standard" => Ok(Easing::Standard),
+        "emphasized" => Ok(Easing::Emphasized),
+        "emphasizedDecelerate" | "emphasized_decelerate" => Ok(Easing::EmphasizedDecelerate),
+        "emphasizedAccelerate" | "emphasized_accelerate" => Ok(Easing::EmphasizedAccelerate),
         _ => Err(field_error("easing", "unknown easing")),
     }
 }

@@ -79,13 +79,18 @@ impl AnimationProperty {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Easing {
     Linear,
     Ease,
     EaseIn,
     EaseOut,
     EaseInOut,
+    Standard,
+    Emphasized,
+    EmphasizedDecelerate,
+    EmphasizedAccelerate,
+    CubicBezier(f32, f32, f32, f32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +115,10 @@ pub struct AnimationRequest {
     pub property: AnimationProperty,
     pub from: Option<Value>,
     pub to: Value,
+    /// Optional piecewise stops. When present, the timeline ignores `from`
+    /// and `to` for interpolation and uses these ordered `(progress, value)`
+    /// pairs instead.
+    pub stops: Option<Vec<(f32, Value)>>,
     pub duration_ms: u64,
     pub delay_ms: u64,
     pub easing: Easing,

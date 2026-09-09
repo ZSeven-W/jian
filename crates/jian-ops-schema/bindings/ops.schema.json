@@ -145,6 +145,17 @@
           "type": "null"
         }
       ]
+    },
+    "motion": {
+      "description": "Authored document motion preference. Hosts may reduce further.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MotionPreference"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "definitions": {
@@ -534,6 +545,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "width": {
               "anyOf": [
                 {
@@ -913,6 +943,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "width": {
               "anyOf": [
                 {
@@ -1290,6 +1339,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "width": {
@@ -1738,6 +1806,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -2015,6 +2102,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             }
           }
@@ -2294,6 +2400,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -2632,6 +2757,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -3011,6 +3155,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -3365,6 +3528,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -3737,6 +3919,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -4030,6 +4231,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -4389,6 +4609,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -4726,6 +4965,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -5048,6 +5306,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -5378,6 +5655,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -5725,6 +6021,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -6053,6 +6368,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -6427,6 +6761,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -6762,6 +7115,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             },
             "minWidth": {
@@ -7105,6 +7477,25 @@
                 "type": "string"
               }
             },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
+              }
+            },
             "minWidth": {
               "type": [
                 "number",
@@ -7369,6 +7760,25 @@
               ],
               "additionalProperties": {
                 "type": "string"
+              }
+            },
+            "transition": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/Transition"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "animations": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "$ref": "#/definitions/NodeAnimation"
               }
             }
           }
@@ -8215,6 +8625,172 @@
         "color_burn",
         "hard_light",
         "exclusion"
+      ]
+    },
+    "Transition": {
+      "description": "A node-level transition applied to runtime paint changes.",
+      "type": "object",
+      "properties": {
+        "durationMs": {
+          "default": 200,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "easing": {
+          "default": "standard",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Easing"
+            }
+          ]
+        },
+        "properties": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "Easing": {
+      "description": "CSS/Material-style easing names accepted by document motion declarations.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "linear",
+            "ease",
+            "ease_in",
+            "ease_out",
+            "ease_in_out",
+            "standard",
+            "emphasized",
+            "emphasizedDecelerate",
+            "emphasizedAccelerate"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "cubicBezier"
+          ],
+          "properties": {
+            "cubicBezier": {
+              "type": "array",
+              "items": [
+                {
+                  "type": "number",
+                  "format": "float"
+                },
+                {
+                  "type": "number",
+                  "format": "float"
+                },
+                {
+                  "type": "number",
+                  "format": "float"
+                },
+                {
+                  "type": "number",
+                  "format": "float"
+                }
+              ],
+              "maxItems": 4,
+              "minItems": 4
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "NodeAnimation": {
+      "description": "One time-based node animation declaration.",
+      "type": "object",
+      "required": [
+        "durationMs",
+        "keyframes",
+        "trigger"
+      ],
+      "properties": {
+        "trigger": {
+          "$ref": "#/definitions/MotionTrigger"
+        },
+        "keyframes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Keyframe"
+          }
+        },
+        "durationMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "delayMs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "easing": {
+          "default": "standard",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Easing"
+            }
+          ]
+        },
+        "iterations": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "fillMode": {
+          "$ref": "#/definitions/NodeAnimationFillMode"
+        },
+        "once": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    },
+    "MotionTrigger": {
+      "description": "The two P1 lifecycle triggers.",
+      "type": "string",
+      "enum": [
+        "mount",
+        "inView"
+      ]
+    },
+    "Keyframe": {
+      "description": "A keyframe stop map. Values use the same JSON value representation as the action layer so colors and numbers keep their existing wire shape.",
+      "type": "object",
+      "required": [
+        "offset",
+        "values"
+      ],
+      "properties": {
+        "offset": {
+          "type": "number",
+          "format": "float"
+        },
+        "values": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "NodeAnimationFillMode": {
+      "description": "Fill policy for a node declaration. P1 intentionally keeps only the CSS policies needed by mount/inView recipes.",
+      "type": "string",
+      "enum": [
+        "forwards",
+        "none"
       ]
     },
     "SizingBehavior": {
@@ -9718,7 +10294,7 @@
             "null"
           ],
           "additionalProperties": {
-            "$ref": "#/definitions/Transition"
+            "$ref": "#/definitions/Transition2"
           }
         }
       }
@@ -9760,7 +10336,7 @@
         }
       }
     },
-    "Transition": {
+    "Transition2": {
       "type": "string",
       "enum": [
         "push",
@@ -10049,6 +10625,14 @@
         "token",
         "component",
         "screen"
+      ]
+    },
+    "MotionPreference": {
+      "description": "The document's authored motion preference. A host may reduce further.",
+      "type": "string",
+      "enum": [
+        "full",
+        "reduced"
       ]
     }
   }

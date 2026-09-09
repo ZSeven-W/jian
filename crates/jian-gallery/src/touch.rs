@@ -228,6 +228,7 @@ fn touch_document() -> (RuntimeDocument, NodeKey) {
         logic_modules: None,
         design_md: None,
         conversion: None,
+        motion: None,
     };
     (
         RuntimeDocument {

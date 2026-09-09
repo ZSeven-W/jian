@@ -16,6 +16,7 @@ pub mod image_table;
 pub mod image_thumbs;
 pub mod lifecycle;
 pub mod logic_module;
+pub mod motion;
 pub mod navigation;
 pub mod node;
 pub mod pack;
@@ -36,6 +37,10 @@ pub use compat::load_str;
 pub use design_md::{DesignMdColor, DesignMdSpec, DesignMdTypography};
 pub use document::PenDocument;
 pub use error::{LoadResult, LoadWarning, OpsResult, OpsSchemaError};
+pub use motion::{
+    Easing, Keyframe, MotionPreference, MotionTrigger, NodeAnimation, NodeAnimationFillMode,
+    Transition,
+};
 
 #[cfg(test)]
 mod tests {

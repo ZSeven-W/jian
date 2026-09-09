@@ -122,6 +122,10 @@ fn load_value_with(
     let mut doc: PenDocument =
         crate::node::image_src::intern::with_load_scope(table, || serde_json::from_value(raw))?;
 
+    if let Err((path, reason)) = crate::motion::validate_document(&doc) {
+        return Err(OpsSchemaError::MotionValidation { path, reason });
+    }
+
     if opts.promote_legacy_widgets {
         for n in crate::promote::promote_document(&mut doc) {
             warnings.push(LoadWarning::LegacyRolePromoted {
@@ -182,6 +186,7 @@ const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
     // warned "UnknownField: designMd" on open.
     "designMd",
     "conversion",
+    "motion",
     // OpenPencil editor-only view state. It is intentionally not part of the
     // typed `PenDocument`; compatible hosts may carry it through the raw JSON
     // while schema consumers ignore it.

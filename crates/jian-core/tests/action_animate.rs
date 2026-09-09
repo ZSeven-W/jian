@@ -193,6 +193,7 @@ fn action_emits_the_exact_typed_request() {
             property: AnimationProperty::Rotation,
             from: Some(json!(10)),
             to: json!(90),
+            stops: None,
             duration_ms: 300,
             delay_ms: 50,
             easing: Easing::EaseInOut,

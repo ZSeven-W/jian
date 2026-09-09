@@ -14,6 +14,9 @@ pub enum OpsSchemaError {
 
     #[error("schema validation failed: {0}")]
     Validation(String),
+
+    #[error("motion validation failed at {path}: {reason}")]
+    MotionValidation { path: String, reason: String },
 }
 
 pub type OpsResult<T> = std::result::Result<T, OpsSchemaError>;
