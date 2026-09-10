@@ -709,6 +709,9 @@ pub struct SceneWidget {
     pub kind: String,
     /// On/off state for switch / checkbox.
     pub checked: Option<bool>,
+    /// Preview-runtime switch tween: `0` = off look, `1` = on look.
+    /// `None` paints from [`Self::checked`]. Not an authored field.
+    pub toggle_progress: Option<f32>,
     /// Numeric value for slider / progress / number_input.
     pub value_num: Option<f32>,
     /// Progress has no determinate value and paints its unknown-progress frame.

@@ -19,6 +19,8 @@ pub enum AnimationProperty {
     CornerRadius,
     Width,
     Height,
+    /// Internal switch on/off look. Not a P1 authorable property.
+    ToggleProgress,
     ShaderUniform(String),
     Custom(String),
 }
@@ -39,6 +41,7 @@ impl AnimationProperty {
             "cornerRadius" => Self::CornerRadius,
             "width" => Self::Width,
             "height" => Self::Height,
+            "toggleProgress" => Self::ToggleProgress,
             _ if apply == AnimationApply::ShaderUniform => Self::ShaderUniform(name.to_owned()),
             _ => Self::Custom(name.to_owned()),
         }
@@ -59,6 +62,7 @@ impl AnimationProperty {
             Self::CornerRadius => "cornerRadius",
             Self::Width => "width",
             Self::Height => "height",
+            Self::ToggleProgress => "toggleProgress",
             Self::ShaderUniform(name) | Self::Custom(name) => name,
         }
     }
