@@ -3,7 +3,8 @@
 use crate::events::ExtraJson;
 use crate::node::PenNode;
 use crate::PenDocument;
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -134,7 +135,7 @@ fn default_transition_duration() -> u64 {
 
 /// A keyframe stop map. Values use the same JSON value representation as the
 /// action layer so colors and numbers keep their existing wire shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
@@ -143,6 +144,16 @@ pub struct Keyframe {
     pub values: BTreeMap<String, Value>,
     #[serde(default, flatten)]
     pub extra: ExtraJson,
+}
+
+impl<'de> Deserialize<'de> for Keyframe {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        keyframe_from_value(value).map_err(D::Error::custom)
+    }
 }
 
 /// The two P1 lifecycle triggers.
@@ -185,6 +196,7 @@ impl Default for NodeAnimationFillMode {
 #[serde(rename_all = "camelCase")]
 pub struct NodeAnimation {
     pub trigger: MotionTrigger,
+    #[serde(deserialize_with = "deserialize_keyframes")]
     pub keyframes: Vec<Keyframe>,
     pub duration_ms: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -223,6 +235,87 @@ fn is_true(value: &bool) -> bool {
 
 fn is_forwards(value: &NodeAnimationFillMode) -> bool {
     *value == NodeAnimationFillMode::Forwards
+}
+
+/// Accept a keyframe array or the two-stop `{from, to}` shorthand.
+fn deserialize_keyframes<'de, D>(deserializer: D) -> Result<Vec<Keyframe>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    keyframes_from_value(value).map_err(D::Error::custom)
+}
+
+fn keyframes_from_value(value: Value) -> Result<Vec<Keyframe>, String> {
+    match value {
+        Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (index, item) in items.into_iter().enumerate() {
+                match keyframe_from_value(item) {
+                    Ok(keyframe) => out.push(keyframe),
+                    Err(error) => return Err(format!("{error} at keyframe {index}")),
+                }
+            }
+            Ok(out)
+        }
+        Value::Object(map) => from_to_keyframes(map),
+        _ => Err("keyframes must be an array or a {from, to} object".to_owned()),
+    }
+}
+
+fn from_to_keyframes(mut map: serde_json::Map<String, Value>) -> Result<Vec<Keyframe>, String> {
+    let from = map
+        .remove("from")
+        .ok_or_else(|| "keyframes object missing field `from`".to_owned())?;
+    let to = map
+        .remove("to")
+        .ok_or_else(|| "keyframes object missing field `to`".to_owned())?;
+    Ok(vec![
+        Keyframe {
+            offset: 0.0,
+            values: property_map(from, "from")?,
+            extra: ExtraJson::default(),
+        },
+        Keyframe {
+            offset: 1.0,
+            values: property_map(to, "to")?,
+            extra: ExtraJson::default(),
+        },
+    ])
+}
+
+fn property_map(value: Value, field: &str) -> Result<BTreeMap<String, Value>, String> {
+    let Value::Object(map) = value else {
+        return Err(format!("`{field}` must be an object of property values"));
+    };
+    Ok(map.into_iter().collect())
+}
+
+/// Canonical `{offset, values}` or flat `{offset, prop: value, ...}`.
+fn keyframe_from_value(value: Value) -> Result<Keyframe, String> {
+    let Value::Object(mut map) = value else {
+        return Err("keyframe must be an object".to_owned());
+    };
+    let offset = match map.remove("offset") {
+        Some(offset) => serde_json::from_value::<f32>(offset)
+            .map_err(|error| format!("invalid `offset`: {error}"))?,
+        None => return Err("missing field `offset`".to_owned()),
+    };
+    if let Some(values) = map.remove("values") {
+        let values =
+            serde_json::from_value(values).map_err(|error| format!("invalid `values`: {error}"))?;
+        Ok(Keyframe {
+            offset,
+            values,
+            extra: ExtraJson(map.into_iter().collect()),
+        })
+    } else {
+        Ok(Keyframe {
+            offset,
+            values: map.into_iter().collect(),
+            extra: ExtraJson::default(),
+        })
+    }
 }
 
 /// Validate every motion declaration before a document is exposed to a host.

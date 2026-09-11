@@ -1,4 +1,4 @@
-use jian_ops_schema::{load_str, OpsSchemaError};
+use jian_ops_schema::{load_str, NodeAnimation, OpsSchemaError};
 
 fn motion_document(extra: &str) -> String {
     format!(
@@ -91,4 +91,119 @@ fn invalid_keyframes_are_typed_load_errors() {
             Err(other) => panic!("{name}: expected motion validation error, got {other}"),
         }
     }
+}
+
+fn hero_animation_values(source: &str) -> serde_json::Value {
+    let loaded = load_str(source).expect("motion document");
+    serde_json::to_value(&loaded.value).unwrap()["children"][0]["animations"][0].clone()
+}
+
+#[test]
+fn canonical_keyframes_keep_the_values_wrapper() {
+    let source = motion_document(
+        r##""animations":[{"trigger":"mount","durationMs":400,"keyframes":[
+            {"offset":0,"values":{"opacity":0,"translateY":16}},
+            {"offset":1,"values":{"opacity":1,"translateY":0}}
+        ]}]"##,
+    );
+    let animation = hero_animation_values(&source);
+    assert_eq!(animation["keyframes"][0]["offset"], 0.0);
+    assert_eq!(animation["keyframes"][0]["values"]["opacity"], 0.0);
+    assert_eq!(animation["keyframes"][0]["values"]["translateY"], 16.0);
+    assert!(animation["keyframes"][0].get("opacity").is_none());
+}
+
+#[test]
+fn flat_keyframes_load_as_property_maps() {
+    let source = motion_document(
+        r##""animations":[{"trigger":"mount","durationMs":400,"keyframes":[
+            {"offset":0,"opacity":0,"translateY":16},
+            {"offset":1,"opacity":1,"translateY":0}
+        ]}]"##,
+    );
+    let loaded = load_str(&source).expect("flat keyframes");
+    let (_, animations) = loaded.value.children[0].motion_declarations();
+    let keyframes = &animations.expect("animations")[0].keyframes;
+    assert_eq!(keyframes[0].offset, 0.0);
+    assert_eq!(keyframes[0].values["opacity"], serde_json::json!(0));
+    assert_eq!(keyframes[0].values["translateY"], serde_json::json!(16));
+    assert_eq!(keyframes[1].offset, 1.0);
+    assert_eq!(keyframes[1].values["opacity"], serde_json::json!(1));
+}
+
+#[test]
+fn mixed_keyframe_list_loads_canonical_and_flat_together() {
+    let source = motion_document(
+        r##""animations":[{"trigger":"mount","durationMs":400,"keyframes":[
+            {"offset":0,"opacity":0,"translateY":16},
+            {"offset":1,"values":{"opacity":1,"translateY":0}}
+        ]}]"##,
+    );
+    let animation = hero_animation_values(&source);
+    assert_eq!(animation["keyframes"][0]["values"]["opacity"], 0.0);
+    assert_eq!(animation["keyframes"][0]["values"]["translateY"], 16.0);
+    assert_eq!(animation["keyframes"][1]["values"]["opacity"], 1.0);
+    assert_eq!(animation["keyframes"][1]["values"]["translateY"], 0.0);
+}
+
+#[test]
+fn from_to_shorthand_deserializes_to_offsets_zero_and_one() {
+    let animation: NodeAnimation = serde_json::from_value(serde_json::json!({
+        "trigger": "mount",
+        "durationMs": 400,
+        "keyframes": {
+            "from": {"opacity": 0, "translateY": 16},
+            "to": {"opacity": 1, "translateY": 0}
+        }
+    }))
+    .expect("from/to shorthand");
+    assert_eq!(animation.keyframes.len(), 2);
+    assert_eq!(animation.keyframes[0].offset, 0.0);
+    assert_eq!(animation.keyframes[1].offset, 1.0);
+    assert_eq!(
+        animation.keyframes[0].values["translateY"],
+        serde_json::json!(16)
+    );
+    assert_eq!(
+        animation.keyframes[1].values["opacity"],
+        serde_json::json!(1)
+    );
+}
+
+#[test]
+fn missing_keyframe_offset_names_the_index() {
+    let err = serde_json::from_str::<NodeAnimation>(
+        r#"{"trigger":"mount","durationMs":200,"keyframes":[{"opacity":0},{"offset":1,"opacity":1}]}"#,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("missing field `offset`"),
+        "expected missing offset, got {msg}"
+    );
+    assert!(
+        msg.contains("at keyframe 0"),
+        "expected keyframe index, got {msg}"
+    );
+}
+
+#[test]
+fn flat_keyframes_serialize_canonical_values_wrapper() {
+    let source = motion_document(
+        r##""animations":[{"trigger":"mount","durationMs":400,"keyframes":[
+            {"offset":0,"opacity":0,"translateY":16},
+            {"offset":1,"opacity":1,"translateY":0}
+        ]}]"##,
+    );
+    let animation = hero_animation_values(&source);
+    assert_eq!(
+        animation["keyframes"][0],
+        serde_json::json!({"offset": 0.0, "values": {"opacity": 0, "translateY": 16}})
+    );
+    assert_eq!(
+        animation["keyframes"][1],
+        serde_json::json!({"offset": 1.0, "values": {"opacity": 1, "translateY": 0}})
+    );
+    assert!(animation["keyframes"][0].get("opacity").is_none());
+    assert!(animation["keyframes"][0].get("translateY").is_none());
 }
