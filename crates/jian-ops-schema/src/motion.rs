@@ -40,7 +40,7 @@ pub const P1_MOTION_PROPERTIES: &[&str] = &[
 ];
 
 /// CSS/Material-style easing names accepted by document motion declarations.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 pub enum Easing {
@@ -59,6 +59,7 @@ pub enum Easing {
     #[serde(rename = "ease_in_out", alias = "easeInOut", alias = "ease-in-out")]
     #[cfg_attr(feature = "export-ts", ts(rename = "easeInOut"))]
     EaseInOut,
+    #[default]
     #[serde(rename = "standard")]
     #[cfg_attr(feature = "export-ts", ts(rename = "standard"))]
     Standard,
@@ -74,12 +75,6 @@ pub enum Easing {
     #[serde(rename = "cubicBezier")]
     #[cfg_attr(feature = "export-ts", ts(rename = "cubicBezier"))]
     CubicBezier(f32, f32, f32, f32),
-}
-
-impl Default for Easing {
-    fn default() -> Self {
-        Self::Standard
-    }
 }
 
 /// The document's authored motion preference. A host may reduce further.
@@ -171,22 +166,19 @@ pub enum MotionTrigger {
 
 /// Fill policy for a node declaration. P1 intentionally keeps only the CSS
 /// policies needed by mount/inView recipes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 pub enum NodeAnimationFillMode {
+    #[default]
     #[serde(rename = "forwards")]
     #[cfg_attr(feature = "export-ts", ts(rename = "forwards"))]
     Forwards,
     #[serde(rename = "none")]
     #[cfg_attr(feature = "export-ts", ts(rename = "none"))]
     None,
-}
-
-impl Default for NodeAnimationFillMode {
-    fn default() -> Self {
-        Self::Forwards
-    }
 }
 
 /// One time-based node animation declaration.
