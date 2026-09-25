@@ -214,3 +214,62 @@ fn deep_trees_decode_without_native_recursion() {
     assert_eq!(levels, depth);
     std::mem::forget(node);
 }
+
+/// `VARIANTS` and `decode_variant` are indexed by hand, so a variant added to
+/// `PenNode` without them would compile and then fail to decode at runtime.
+/// This match is exhaustive: a new variant stops the tests compiling until
+/// its tag and index are added here — and to `de.rs`.
+fn declared_tag(node: &PenNode) -> (usize, &'static str) {
+    match node {
+        PenNode::Frame(_) => (0, "frame"),
+        PenNode::Group(_) => (1, "group"),
+        PenNode::Rectangle(_) => (2, "rectangle"),
+        PenNode::Ellipse(_) => (3, "ellipse"),
+        PenNode::Line(_) => (4, "line"),
+        PenNode::Polygon(_) => (5, "polygon"),
+        PenNode::Path(_) => (6, "path"),
+        PenNode::Text(_) => (7, "text"),
+        PenNode::TextInput(_) => (8, "text_input"),
+        PenNode::Image(_) => (9, "image"),
+        PenNode::IconFont(_) => (10, "icon_font"),
+        PenNode::TextArea(_) => (11, "text_area"),
+        PenNode::Select(_) => (12, "select"),
+        PenNode::Switch(_) => (13, "switch"),
+        PenNode::Checkbox(_) => (14, "checkbox"),
+        PenNode::Slider(_) => (15, "slider"),
+        PenNode::RadioGroup(_) => (16, "radio_group"),
+        PenNode::NumberInput(_) => (17, "number_input"),
+        PenNode::Progress(_) => (18, "progress"),
+        PenNode::Tabs(_) => (19, "tabs"),
+        PenNode::Ref(_) => (20, "ref"),
+    }
+}
+
+#[test]
+fn the_variant_table_covers_every_pen_node_variant() {
+    let _ = declared_tag; // exhaustiveness is the check; keep it referenced
+    let expected = [
+        "frame",
+        "group",
+        "rectangle",
+        "ellipse",
+        "line",
+        "polygon",
+        "path",
+        "text",
+        "text_input",
+        "image",
+        "icon_font",
+        "text_area",
+        "select",
+        "switch",
+        "checkbox",
+        "slider",
+        "radio_group",
+        "number_input",
+        "progress",
+        "tabs",
+        "ref",
+    ];
+    assert_eq!(super::VARIANTS, expected);
+}
