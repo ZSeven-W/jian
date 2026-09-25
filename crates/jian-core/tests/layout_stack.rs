@@ -299,3 +299,42 @@ fn flow_siblings_are_untouched_by_the_stack_rules() {
         "second cell after the gap",
     );
 }
+
+#[test]
+fn explicit_offsets_are_measured_from_the_frame_origin_not_its_padding() {
+    // A padded header stack holding a full-bleed backdrop at `x:0` and a
+    // bell pinned at `x:307` so it sits inside the right padding. Pinning
+    // the absolute layers to the grid cell resolved their insets against
+    // the CONTENT box, pushing both 24px right: the backdrop overhung the
+    // frame and the bell hung off the edge. Flow layers still honour the
+    // padding.
+    let at = laid_out(
+        r##"{
+      "version":"0.8.0",
+      "children":[{
+        "type":"frame","id":"header","width":375,"height":200,"layout":"none",
+        "padding":[10,24,0,24],
+        "children":[
+          {"type":"rectangle","id":"backdrop","x":0,"y":0,"width":375,"height":180},
+          {"type":"frame","id":"bell","x":307,"y":34,"width":44,"height":44},
+          {"type":"rectangle","id":"flow","width":"fill_container","height":20}
+        ]
+      }]
+    }"##,
+    );
+    assert_rect(
+        at("backdrop"),
+        (0.0, 0.0, 375.0, 180.0),
+        "full-bleed backdrop",
+    );
+    assert_rect(
+        at("bell"),
+        (307.0, 34.0, 44.0, 44.0),
+        "bell inside the right padding",
+    );
+    assert_rect(
+        at("flow"),
+        (24.0, 10.0, 327.0, 20.0),
+        "flow layer keeps the padding",
+    );
+}

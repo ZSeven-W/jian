@@ -179,12 +179,23 @@ fn resolve_align_items(a: Option<&OpsAlign>) -> AlignItems {
 
 /// Place a child into a stack parent's shared cell and neutralise the flex
 /// hints that no longer apply. Called by `LayoutEngine::build` once the
-/// parent is known; children keep their own `Position::Absolute` inset when
-/// they authored an explicit `x` / `y` (grid positions those against the
-/// container's padding box, which is the same origin as the cell).
+/// parent is known.
+///
+/// A child that authored an explicit `x` / `y` keeps its
+/// `Position::Absolute` inset and is NOT pinned to the cell: an absolutely
+/// positioned grid item placed on explicit lines resolves its inset against
+/// that grid AREA — the container's CONTENT box — so the stack's padding was
+/// added on top of the authored coordinate (a full-bleed `x:0, width:375`
+/// backdrop in a `padding:[0,24]` header drew 24px to the right and was
+/// clipped; a bell pinned at `x:307` to sit inside the right padding hung
+/// off the edge). Left on auto placement, its containing block is the
+/// container's padding box, so `x` / `y` are measured from the frame's own
+/// origin — the coordinate space every authoring tool and model uses.
 pub fn apply_stack_child(style: &mut Style) {
-    style.grid_row = line(1);
-    style.grid_column = line(1);
+    if style.position != Position::Absolute {
+        style.grid_row = line(1);
+        style.grid_column = line(1);
+    }
     // A stacked layer is never flexed, and `min_size: 0` (set by
     // `container_to_style` so a fill child can yield space to a fixed
     // sibling in a row) would let a grid item shrink below its content.
