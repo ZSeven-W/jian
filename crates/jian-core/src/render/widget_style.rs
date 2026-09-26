@@ -13,6 +13,17 @@ const LEGACY_ACTIVE: Color = Color::rgb(0x3b, 0x82, 0xf6);
 const LEGACY_INACTIVE: Color = Color::rgb(0xd1, 0xd5, 0xdb);
 const LEGACY_FOREGROUND: Color = Color::rgb(0x9c, 0xa3, 0xaf);
 const DERIVED_INACTIVE_ALPHA: u8 = 0x59;
+/// Page-text fallback for an adjacent label whose stroke is an accent and
+/// whose document supplies no `--foreground`. Relative luminance ~0.178 sits
+/// at the crossover where contrast is >= 4.5:1 against BOTH pure white
+/// (4.61:1) and pure black (4.56:1), so the label stays legible on a light
+/// or dark page without knowing which one it is painted on.
+const PAGE_NEUTRAL_FOREGROUND: Color = Color::rgb(0x75, 0x75, 0x75);
+/// A stroke whose sRGB chroma (max - min channel, 0..=1) is at most this is
+/// treated as a neutral border that tells us the page tone. Chroma rather
+/// than HSV saturation: dark slates (e.g. #334155, HSV s = 0.4) are neutral
+/// borders on dark pages, while every accent hue sits far above 0.15.
+const NEUTRAL_STROKE_MAX_CHROMA: f32 = 0.15;
 
 /// Resolved visual roles for a first-class widget.
 ///
@@ -40,9 +51,13 @@ pub struct AuthoredWidgetVisual {
     /// Muted foreground painted on the authored surface (placeholder/icon).
     pub muted_foreground: Color,
     /// Foreground adjacent to, rather than on top of, the authored surface.
-    /// Checkbox/radio labels must not contrast against the accent swatch.
+    /// Checkbox/radio labels are page text: see [`adjacent_label_foreground`].
     pub label_foreground: Color,
     pub muted_label_foreground: Color,
+    /// Muted foreground painted ON the inactive track (unselected tab text).
+    /// Unlike [`Self::label_foreground`] it contrasts against the stroke,
+    /// because the stroke is the track surface underneath it.
+    pub muted_track_foreground: Color,
 }
 
 /// Resolve authored widget paints into semantic visual roles.
@@ -53,6 +68,17 @@ pub struct AuthoredWidgetVisual {
 pub fn resolve_authored_widget_visual(
     fill: Option<Color>,
     stroke: Option<Color>,
+) -> AuthoredWidgetVisual {
+    resolve_authored_widget_visual_on_page(fill, stroke, None)
+}
+
+/// [`resolve_authored_widget_visual`] with the document's page-text colour
+/// (its `--foreground` design variable resolved for the active theme), when
+/// the caller can reach it. Adjacent labels then use it verbatim.
+pub fn resolve_authored_widget_visual_on_page(
+    fill: Option<Color>,
+    stroke: Option<Color>,
+    page_foreground: Option<Color>,
 ) -> AuthoredWidgetVisual {
     let active = fill.unwrap_or(LEGACY_ACTIVE);
     let inactive = stroke.unwrap_or_else(|| {
@@ -66,8 +92,12 @@ pub fn resolve_authored_widget_visual(
         .map(contrast_foreground)
         .unwrap_or(LEGACY_FOREGROUND);
     let muted_foreground = multiply_alpha(foreground, 0xa6);
-    let label_foreground = stroke.map(contrast_foreground).unwrap_or(LEGACY_FOREGROUND);
+    let label_foreground = adjacent_label_foreground(stroke, page_foreground);
     let muted_label_foreground = multiply_alpha(label_foreground, 0xa6);
+    let muted_track_foreground = multiply_alpha(
+        stroke.map(contrast_foreground).unwrap_or(LEGACY_FOREGROUND),
+        0xa6,
+    );
 
     AuthoredWidgetVisual {
         active,
@@ -80,7 +110,35 @@ pub fn resolve_authored_widget_visual(
         muted_foreground,
         label_foreground,
         muted_label_foreground,
+        muted_track_foreground,
     }
+}
+
+/// Colour of a label painted NEXT TO a checkbox / radio indicator, on the
+/// page background. It must not depend on checked state or accent paint:
+///
+/// 1. the document's page foreground when the caller resolved one;
+/// 2. else a neutral (low-chroma) stroke is a border drawn for this page, so
+///    contrast against it predicts the page tone (light grey border -> black);
+/// 3. else the stroke is an accent (a checked box stroked in the brand
+///    colour) that says nothing about the page, so use a neutral that stays
+///    >= 4.5:1 on both white and black pages;
+/// 4. no stroke keeps the legacy muted label.
+pub fn adjacent_label_foreground(stroke: Option<Color>, page_foreground: Option<Color>) -> Color {
+    if let Some(page) = page_foreground {
+        return page;
+    }
+    match stroke {
+        Some(stroke) if is_neutral(stroke) => contrast_foreground(stroke),
+        Some(_) => PAGE_NEUTRAL_FOREGROUND,
+        None => LEGACY_FOREGROUND,
+    }
+}
+
+fn is_neutral(color: Color) -> bool {
+    let max = color.r().max(color.g()).max(color.b());
+    let min = color.r().min(color.g()).min(color.b());
+    f32::from(max - min) / 255.0 <= NEUTRAL_STROKE_MAX_CHROMA
 }
 
 /// Keep an authored accent's hue for an inactive track while reducing its
@@ -263,6 +321,76 @@ mod tests {
         assert_eq!(visual.inactive_foreground, Color::rgb(0xff, 0xff, 0xff));
         assert_eq!(visual.surface, Some(accent));
         assert_eq!(visual.border, None);
+    }
+
+    fn contrast(a: Color, b: Color) -> f64 {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    const WHITE: Color = Color::rgb(0xff, 0xff, 0xff);
+    const BLACK: Color = Color::rgb(0x00, 0x00, 0x00);
+
+    #[test]
+    fn checked_accent_stroke_label_stays_readable_on_a_white_page() {
+        // Arena regression: a checked box stroked in the brand accent painted
+        // its label white (contrast vs the blue stroke) onto a white page.
+        let accent = Color::rgb(0x25, 0x63, 0xeb);
+        let visual = resolve_authored_widget_visual(Some(accent), Some(accent));
+
+        assert!(contrast(visual.label_foreground, WHITE) >= 4.5);
+        assert!(contrast(visual.label_foreground, BLACK) >= 4.5);
+        // The check mark sits ON the accent and still contrasts against it.
+        assert_eq!(visual.active_foreground, WHITE);
+    }
+
+    #[test]
+    fn unchecked_neutral_stroke_label_is_unchanged() {
+        let visual = resolve_authored_widget_visual(
+            Some(Color::rgb(0xff, 0xff, 0xff)),
+            Some(Color::rgb(0xd1, 0xd5, 0xdb)),
+        );
+        assert_eq!(visual.label_foreground, BLACK);
+    }
+
+    #[test]
+    fn dark_page_neutral_border_yields_a_light_label() {
+        // Slate borders have inflated HSV saturation but tiny chroma.
+        let visual = resolve_authored_widget_visual(
+            Some(Color::rgb(0x0f, 0x17, 0x2a)),
+            Some(Color::rgb(0x33, 0x41, 0x55)),
+        );
+        assert_eq!(visual.label_foreground, WHITE);
+    }
+
+    #[test]
+    fn document_page_foreground_wins_regardless_of_checked_paint() {
+        let page = Color::rgb(0x11, 0x18, 0x27);
+        let accent = Color::rgb(0x25, 0x63, 0xeb);
+        let checked =
+            resolve_authored_widget_visual_on_page(Some(accent), Some(accent), Some(page));
+        let unchecked = resolve_authored_widget_visual_on_page(
+            Some(WHITE),
+            Some(Color::rgb(0xd1, 0xd5, 0xdb)),
+            Some(page),
+        );
+        assert_eq!(checked.label_foreground, page);
+        assert_eq!(unchecked.label_foreground, page);
+        assert_eq!(
+            checked.muted_label_foreground,
+            Color::rgba(0x11, 0x18, 0x27, 0xa6)
+        );
+    }
+
+    #[test]
+    fn tab_track_text_still_contrasts_against_the_track() {
+        let track = Color::rgb(0x1e, 0x29, 0x3b);
+        let visual =
+            resolve_authored_widget_visual(Some(Color::rgb(0x25, 0x63, 0xeb)), Some(track));
+        assert_eq!(
+            visual.muted_track_foreground,
+            Color::rgba(0xff, 0xff, 0xff, 0xa6)
+        );
     }
 
     #[test]

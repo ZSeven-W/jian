@@ -31,7 +31,8 @@ pub use text_geometry::{
     Granularity, TextGeometry, TextGeometryError, TextRect, WritingDirection,
 };
 pub use widget_style::{
-    resolve_authored_widget_visual, with_visual_opacity, AuthoredWidgetVisual, WidgetTheme,
+    adjacent_label_foreground, resolve_authored_widget_visual,
+    resolve_authored_widget_visual_on_page, with_visual_opacity, AuthoredWidgetVisual, WidgetTheme,
 };
 
 use crate::geometry::{Affine2, Rect, Size};

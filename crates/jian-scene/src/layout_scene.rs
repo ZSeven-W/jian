@@ -726,6 +726,11 @@ pub struct SceneWidget {
     pub trailing_icon: Option<String>,
     /// Adjacent label (checkbox).
     pub label: Option<String>,
+    /// Page-text colour for labels painted beside the control (checkbox /
+    /// radio): the document's `--foreground` resolved for the active theme
+    /// at scene-build time. `None` lets the shared widget colour policy
+    /// derive a readable neutral instead.
+    pub label_foreground: Option<Color>,
     /// Range minimum (slider / number_input). `None` = 0.
     pub min: Option<f32>,
     /// Range maximum (slider / progress / number_input). `None` = 100.

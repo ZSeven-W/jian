@@ -1399,7 +1399,7 @@ fn emit_widget_visual(
                 let role = if index == active {
                     visual.active_foreground
                 } else {
-                    visual.muted_label_foreground
+                    visual.muted_track_foreground
                 };
                 out.push(DrawOp::Text(TextRun {
                     content: label.to_owned(),
