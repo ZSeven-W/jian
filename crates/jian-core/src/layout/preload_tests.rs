@@ -229,6 +229,31 @@ fn fit_content_labelled_checkbox_measures_indicator_gap_and_label_only() {
 }
 
 #[test]
+fn fit_content_labelled_checkbox_with_authored_height_leaves_the_label_unclipped() {
+    use crate::render::widget_metrics::{labelled_checkbox_indicator_side, CHECKBOX_LABEL_GAP};
+
+    // Regression: `height: 22` paints a 22px indicator, but measure reserved
+    // the 18px intrinsic one, clipping the label's last glyph.
+    let checkbox = text_input_node(json!({
+        "type":"checkbox",
+        "id":"input",
+        "width":"fit_content",
+        "height":22,
+        "label":"Accept"
+    }));
+    let engine = LayoutEngine::with_backend(Rc::new(FixedCheckboxLabelMeasure));
+    let rect = compute_single_child_with_engine(checkbox, engine);
+
+    let side = labelled_checkbox_indicator_side(rect.size.width, rect.size.height);
+    assert_eq!(side, 22.0);
+    assert!(
+        rect.size.width >= side + CHECKBOX_LABEL_GAP + 42.0,
+        "width {} must hold box {side} + gap + 42px label",
+        rect.size.width
+    );
+}
+
+#[test]
 fn default_labelled_checkbox_measure_keeps_the_intrinsic_eighteen_pixel_height() {
     let checkbox = text_input_node(json!({
         "type":"checkbox",

@@ -21,6 +21,7 @@ mod responsive;
 use crate::document::{NodeKey, NodeTree};
 use crate::error::{CoreError, CoreResult};
 use crate::geometry::{rect, Rect};
+use crate::render::widget_metrics as wm;
 use jian_ops_schema::pack::initial_layout::InitialLayoutSnapshot;
 use measure::{default_backend, FontStyleKind, MeasureBackend, MeasureRequest, StyledRun};
 use slotmap::SecondaryMap;
@@ -53,8 +54,9 @@ pub struct InputChromeMeasure {
 }
 
 /// Checkbox anatomy used for labelled checkbox fit-content measurement.
-/// The 18px indicator plus 8px label gap mirrors the scene painter; unlike an
-/// input this chrome adds no field padding and no 36px minimum height.
+/// Indicator side + label gap come from `render::widget_metrics`, the same
+/// source the painters read; unlike an input this chrome adds no field
+/// padding and no 36px minimum height.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CheckboxChromeMeasure;
 
@@ -87,8 +89,6 @@ pub struct OwnedRun {
 
 const INPUT_PAD_X: f32 = 8.0;
 const INPUT_ICON_BOX: f32 = 20.0;
-const CHECKBOX_INDICATOR: f32 = 18.0;
-const CHECKBOX_LABEL_GAP: f32 = 8.0;
 
 impl OwnedRun {
     fn as_styled(&self) -> StyledRun<'_> {
@@ -533,8 +533,8 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
             runs: vec![OwnedRun {
                 text: label,
                 font_family: None,
-                font_size: 14.0,
-                font_weight: 400,
+                font_size: wm::WIDGET_LABEL_FONT_SIZE,
+                font_weight: wm::WIDGET_LABEL_FONT_WEIGHT,
                 font_style: FontStyleKind::Normal,
                 letter_spacing: 0.0,
             }],
@@ -761,10 +761,13 @@ fn measure_text_for_taffy(
     };
     let res = backend.measure(&req);
     let (measured_width, measured_height) = if tm.checkbox_chrome.is_some() {
-        (
-            CHECKBOX_INDICATOR + CHECKBOX_LABEL_GAP + res.width,
-            res.height.max(CHECKBOX_INDICATOR),
-        )
+        // The painter sizes the indicator from the control height, so an
+        // authored height (e.g. 22) widens the box past the 18px intrinsic
+        // side; measuring with the intrinsic side clipped the label's tail.
+        let height = known
+            .height
+            .unwrap_or_else(|| res.height.max(wm::CHECKBOX_INDICATOR_MIN));
+        (wm::labelled_checkbox_fit_width(height, res.width), height)
     } else if let Some(chrome) = tm.input_chrome {
         let left = if chrome.leading_icon {
             INPUT_PAD_X + INPUT_ICON_BOX + INPUT_PAD_X

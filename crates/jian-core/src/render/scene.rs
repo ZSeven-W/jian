@@ -1095,7 +1095,7 @@ fn emit_widget_visual(
                 .and_then(Value::as_str)
                 .filter(|label| !label.is_empty());
             let (box_x, box_y, box_w, box_h) = if label.is_some() {
-                let size = w.min(h).max(0.0);
+                let size = super::widget_metrics::labelled_checkbox_indicator_side(w, h);
                 (x, y + (h - size) / 2.0, size, size)
             } else {
                 (x, y, w, h)
@@ -1132,13 +1132,13 @@ fn emit_widget_visual(
                 });
             }
             if let Some(label) = label {
-                let font_size = 14.0_f32.min(h.max(0.0));
-                let gap = 8.0_f32;
+                let font_size = super::widget_metrics::WIDGET_LABEL_FONT_SIZE.min(h.max(0.0));
+                let gap = super::widget_metrics::CHECKBOX_LABEL_GAP;
                 out.push(DrawOp::Text(TextRun {
                     content: label.to_owned(),
                     font_family: String::new(),
                     font_size,
-                    font_weight: 400,
+                    font_weight: super::widget_metrics::WIDGET_LABEL_FONT_WEIGHT,
                     color: with_visual_opacity(visual.label_foreground, opacity),
                     origin: point(box_x + box_w + gap, y + (h - font_size) / 2.0),
                     max_width: (w - box_w - gap).max(0.0),

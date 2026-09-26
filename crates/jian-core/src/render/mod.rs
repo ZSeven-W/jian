@@ -11,6 +11,7 @@ pub mod scene;
 mod scene_commands;
 pub mod text;
 pub mod text_geometry;
+pub mod widget_metrics;
 pub mod widget_style;
 
 pub use commands::{affine_to_array, RenderCommand, ScenePaintCommand};
