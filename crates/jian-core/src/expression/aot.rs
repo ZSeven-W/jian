@@ -470,7 +470,19 @@ fn is_trivial_bare_id_chunk(chunk: &Chunk, source: &str) -> bool {
 pub fn snapshot_to_chunks(snap: &ExpressionsSnapshot) -> BTreeMap<String, Chunk> {
     snap.entries
         .iter()
-        .map(|(src, packed)| (src.clone(), Chunk::from(packed)))
+        .map(|(src, packed)| {
+            // Version-1 packs may contain ternaries compiled before their
+            // false branch consumed the condition. Recompile conditional
+            // sources on load without changing the wire opcode set. Keep
+            // the total conversion fallback for sources we cannot compile.
+            let chunk = src
+                .contains('?')
+                .then(|| super::Expression::compile(src).ok())
+                .flatten()
+                .map(|expression| expression.chunk)
+                .unwrap_or_else(|| Chunk::from(packed));
+            (src.clone(), chunk)
+        })
         .collect()
 }
 

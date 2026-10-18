@@ -136,7 +136,13 @@ fn emit(c: &mut Chunk, e: &Expr) -> Result<(), Diagnostic> {
             let jmp_end = c.push(OpCode::Jump(0));
             let else_start = c.ops.len();
             c.patch_jump(jmp_false, else_start);
+            // Short-circuit jumps retain their taken operand for && / ||.
+            // This branch is already known to be falsy: the opposite jump
+            // falls through and consumes it before evaluating the else value.
+            // Keep a positive target so existing packed-bytecode readers accept it.
+            let discard_false = c.push(OpCode::JumpIfTrue(0));
             emit(c, el)?;
+            c.patch_jump(discard_false, c.ops.len());
             c.patch_jump(jmp_end, c.ops.len());
         }
 
