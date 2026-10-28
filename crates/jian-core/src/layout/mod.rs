@@ -14,6 +14,7 @@
 //! rules live in the private `measure_text_for_taffy` callback.
 
 pub mod constraints;
+mod fill_text;
 pub mod measure;
 pub mod resolve;
 mod responsive;
@@ -257,10 +258,11 @@ impl LayoutEngine {
         // (Text / IconFont / Image / …) so leaf sizes propagate into
         // flex measurements.
         for (key, data) in doc_tree.nodes.iter() {
+            let parent = data.parent.map(|p| &doc_tree.nodes[p].schema);
             let mut style = if responsive {
                 resolve::node_to_style_responsive(&data.schema, &mut self.constraint_lints)
             } else {
-                resolve::node_to_style(&data.schema)
+                fill_text::legacy_style(&data.schema, parent)
             };
             // Direction-aware flex_shrink: a child whose MAIN-AXIS size is a
             // fixed Number must not be shrunk below it. `node_to_style` only
