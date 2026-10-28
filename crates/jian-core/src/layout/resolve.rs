@@ -303,7 +303,7 @@ pub(crate) fn apply_limits(style: &mut Style, limits: &jian_ops_schema::sizing::
 /// (mirrors Figma / design-tool semantics where an overlay icon sits
 /// at a fixed offset inside a layer).
 pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
-    use jian_ops_schema::node::PenNode;
+    use jian_ops_schema::node::{PenNode, TextGrowth};
     let mut style = match n {
         PenNode::Frame(f) => container_to_style(&f.container),
         PenNode::Group(g) => container_to_style(&g.container),
@@ -328,14 +328,16 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             // flex-share its row, so squares keep their size (matches TS).
             let fixed = matches!(w, Some(SizingBehavior::Number(_)))
                 && matches!(h, Some(SizingBehavior::Number(_)));
-            // Fill text shares the remaining row width with fixed siblings.
-            // Its automatic min-content width would otherwise prevent shrink;
-            // text_growth still decides whether the allocated box wraps.
-            let fill_text_width = matches!(n, PenNode::Text(_))
-                && matches!(
-                    w,
-                    Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
-                );
+            // Wrapping fill text shares the remaining width with fixed siblings.
+            // Its automatic min-content width would otherwise prevent shrink.
+            // Keep no-wrap text's minimum so consumers can detect its overflow.
+            let fill_text_width = matches!(
+                n,
+                PenNode::Text(text) if text.text_growth == Some(TextGrowth::FixedWidth)
+            ) && matches!(
+                w,
+                Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
+            );
             Style {
                 size: Size {
                     width: resolve_sizing(w),
