@@ -328,10 +328,26 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             // flex-share its row, so squares keep their size (matches TS).
             let fixed = matches!(w, Some(SizingBehavior::Number(_)))
                 && matches!(h, Some(SizingBehavior::Number(_)));
+            // Fill text shares the remaining row width with fixed siblings.
+            // Its automatic min-content width would otherwise prevent shrink;
+            // text_growth still decides whether the allocated box wraps.
+            let fill_text_width = matches!(n, PenNode::Text(_))
+                && matches!(
+                    w,
+                    Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
+                );
             Style {
                 size: Size {
                     width: resolve_sizing(w),
                     height: resolve_sizing(h),
+                },
+                min_size: Size {
+                    width: if fill_text_width {
+                        length(0.0_f32)
+                    } else {
+                        auto()
+                    },
+                    height: auto(),
                 },
                 flex_shrink: if fixed { 0.0 } else { 1.0 },
                 ..Default::default()
@@ -563,6 +579,10 @@ pub fn apply_fill_container_axes(
         style.size.height = auto();
     }
 }
+
+#[cfg(test)]
+#[path = "resolve_fill_text_tests.rs"]
+mod fill_text_tests;
 
 #[cfg(test)]
 mod tests {
