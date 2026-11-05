@@ -156,6 +156,16 @@
           "type": "null"
         }
       ]
+    },
+    "comments": {
+      "description": "Review comment threads pinned to nodes or canvas points.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/definitions/CanvasComment"
+      }
     }
   },
   "definitions": {
@@ -10641,6 +10651,156 @@
       "enum": [
         "full",
         "reduced"
+      ]
+    },
+    "CanvasComment": {
+      "description": "One comment thread.",
+      "type": "object",
+      "required": [
+        "anchor",
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "description": "Stable thread id, unique within the document.",
+          "type": "string"
+        },
+        "status": {
+          "default": "pending",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommentStatus"
+            }
+          ]
+        },
+        "anchor": {
+          "$ref": "#/definitions/CommentAnchor"
+        },
+        "messages": {
+          "description": "The opening message followed by its replies, oldest first.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CommentMessage"
+          }
+        },
+        "updatedAt": {
+          "description": "Unix epoch milliseconds of the last change (message or status).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "CommentStatus": {
+      "description": "Review state of a thread.",
+      "oneOf": [
+        {
+          "description": "Feedback waiting to be addressed.",
+          "type": "string",
+          "enum": [
+            "pending"
+          ]
+        },
+        {
+          "description": "Changes or a reply have been provided.",
+          "type": "string",
+          "enum": [
+            "addressed"
+          ]
+        },
+        {
+          "description": "Kept for history; skipped by agents unless history is requested.",
+          "type": "string",
+          "enum": [
+            "archived"
+          ]
+        }
+      ]
+    },
+    "CommentAnchor": {
+      "description": "Where a thread is pinned.\n\nWith `nodeId`, the pin follows that node and `x` / `y` are an offset from the node's top-left corner (absent ⇒ the node's top-right corner). Without `nodeId`, `x` / `y` are absolute document coordinates on `pageId` (absent ⇒ the document's first page).",
+      "type": "object",
+      "properties": {
+        "pageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nodeId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "x": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "y": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        }
+      }
+    },
+    "CommentMessage": {
+      "description": "One message in a thread.",
+      "type": "object",
+      "required": [
+        "author",
+        "text"
+      ],
+      "properties": {
+        "author": {
+          "$ref": "#/definitions/CommentAuthor"
+        },
+        "text": {
+          "type": "string"
+        },
+        "createdAt": {
+          "description": "Unix epoch milliseconds.",
+          "default": 0,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
+    },
+    "CommentAuthor": {
+      "description": "Who wrote a message.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "default": "user",
+          "allOf": [
+            {
+              "$ref": "#/definitions/CommentAuthorKind"
+            }
+          ]
+        },
+        "name": {
+          "description": "Display name — a person's name or an agent's name.",
+          "default": "",
+          "type": "string"
+        }
+      }
+    },
+    "CommentAuthorKind": {
+      "description": "Whether a message came from a person (GUI) or an agent (MCP).",
+      "type": "string",
+      "enum": [
+        "user",
+        "agent"
       ]
     }
   }

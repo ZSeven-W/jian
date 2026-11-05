@@ -71,6 +71,23 @@ export type BoolOrExpression = boolean | string;
  */
 export type BreakpointRange = { minWidth: number | null, maxWidth: number | null, };
 
+/**
+ * One comment thread.
+ */
+export type CanvasComment = {
+/**
+ * Stable thread id, unique within the document.
+ */
+id: string, status: CommentStatus, anchor: CommentAnchor,
+/**
+ * The opening message followed by its replies, oldest first.
+ */
+messages: Array<CommentMessage>,
+/**
+ * Unix epoch milliseconds of the last change (message or status).
+ */
+updatedAt?: number | null, };
+
 export type Capability = "storage" | "network" | "camera" | "microphone" | "location" | "notifications" | "clipboard" | "biometric" | "file_system" | "haptic";
 
 /**
@@ -92,6 +109,44 @@ maskType?: MaskType | null,
  * Absence is the source-over default; pass-through groups also stay absent.
  */
 blendMode?: BlendMode | null, theme: { [key in string]?: string } | null, transition: Transition | null, animations: Array<NodeAnimation> | null, minWidth: number | null, maxWidth: number | null, minHeight: number | null, maxHeight: number | null, };
+
+/**
+ * Where a thread is pinned.
+ *
+ * With `nodeId`, the pin follows that node and `x` / `y` are an offset
+ * from the node's top-left corner (absent ⇒ the node's top-right
+ * corner). Without `nodeId`, `x` / `y` are absolute document
+ * coordinates on `pageId` (absent ⇒ the document's first page).
+ */
+export type CommentAnchor = { pageId?: string | null, nodeId?: string | null, x?: number | null, y?: number | null, };
+
+/**
+ * Who wrote a message.
+ */
+export type CommentAuthor = { kind: CommentAuthorKind,
+/**
+ * Display name — a person's name or an agent's name.
+ */
+name: string, };
+
+/**
+ * Whether a message came from a person (GUI) or an agent (MCP).
+ */
+export type CommentAuthorKind = "user" | "agent";
+
+/**
+ * One message in a thread.
+ */
+export type CommentMessage = { author: CommentAuthor, text: string,
+/**
+ * Unix epoch milliseconds.
+ */
+createdAt: number, };
+
+/**
+ * Review state of a thread.
+ */
+export type CommentStatus = "pending" | "addressed" | "archived";
 
 /**
  * Figma-style per-axis anchoring for absolutely positioned nodes.
@@ -606,7 +661,11 @@ conversion: ConversionSpec | null,
 /**
  * Authored document motion preference. Hosts may reduce further.
  */
-motion: MotionPreference | null, };
+motion: MotionPreference | null,
+/**
+ * Review comment threads pinned to nodes or canvas points.
+ */
+comments: Array<CanvasComment> | null, };
 
 export type PenEffect = { "type": "blur" } & BlurBody | { "type": "background_blur" } & BlurBody | { "type": "shadow" } & ShadowBody;
 

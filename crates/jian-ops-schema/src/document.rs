@@ -74,6 +74,10 @@ pub struct PenDocument {
     /// Authored document motion preference. Hosts may reduce further.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub motion: Option<crate::motion::MotionPreference>,
+
+    /// Review comment threads pinned to nodes or canvas points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<Vec<crate::comment::CanvasComment>>,
 }
 
 impl Clone for PenDocument {
@@ -97,6 +101,7 @@ impl Clone for PenDocument {
             design_md: self.design_md.clone(),
             conversion: self.conversion.clone(),
             motion: self.motion,
+            comments: self.comments.clone(),
         };
         crate::image_thumbs::propagate_to_clone(self, &mut cloned);
         cloned

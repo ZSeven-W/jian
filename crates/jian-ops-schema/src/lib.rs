@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod breakpoint;
+pub mod comment;
 pub mod compat;
 pub mod constraints;
 pub mod conversion;
@@ -33,6 +34,9 @@ pub mod style;
 pub mod variable;
 pub mod version;
 
+pub use comment::{
+    CanvasComment, CommentAnchor, CommentAuthor, CommentAuthorKind, CommentMessage, CommentStatus,
+};
 pub use compat::load_str;
 pub use design_md::{DesignMdColor, DesignMdSpec, DesignMdTypography};
 pub use document::PenDocument;

@@ -187,6 +187,7 @@ const KNOWN_TOP_LEVEL_FIELDS: &[&str] = &[
     "designMd",
     "conversion",
     "motion",
+    "comments",
     // OpenPencil editor-only view state. It is intentionally not part of the
     // typed `PenDocument`; compatible hosts may carry it through the raw JSON
     // while schema consumers ignore it.
