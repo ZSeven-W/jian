@@ -593,7 +593,7 @@ fn text_measure_for(n: &jian_ops_schema::node::PenNode) -> Option<TextMeasure> {
             _ => None,
         };
     };
-    let node_size = t.font_size.map(|v| v as f32).unwrap_or(14.0);
+    let node_size = t.font_size_px().map(|v| v as f32).unwrap_or(14.0);
     let node_weight = resolve_weight(t.font_weight.as_ref());
     let node_style = resolve_style(t.font_style.as_ref());
     let node_family = t.font_family.clone();

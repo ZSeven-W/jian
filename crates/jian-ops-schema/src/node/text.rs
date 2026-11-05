@@ -1,4 +1,5 @@
 use super::base::PenNodeBase;
+use crate::node::base::NumberOrExpression;
 use crate::sizing::SizingBehavior;
 use crate::style::{PenEffect, PenFill, StyledTextSegment};
 use serde::{Deserialize, Serialize};
@@ -77,8 +78,9 @@ pub struct TextNode {
     pub content: TextContent,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_family: Option<String>,
+    /// A number, or a `$variable` reference resolved at render time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub font_size: Option<f64>,
+    pub font_size: Option<crate::node::base::NumberOrExpression>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_weight: Option<FontWeight>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,6 +120,14 @@ pub struct TextNode {
 }
 
 impl TextNode {
+    /// The font size in px, or `None` when unset or an unresolved
+    /// `$variable` ref (the canvas resolver substitutes refs before layout).
+    pub fn font_size_px(&self) -> Option<f64> {
+        self.font_size
+            .as_ref()
+            .and_then(NumberOrExpression::as_number)
+    }
+
     /// Return the canonical unitless `lineHeight` multiplier used by both
     /// measurement and paint.
     ///

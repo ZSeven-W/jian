@@ -93,6 +93,29 @@ pub enum Padding {
 pub enum CornerRadius {
     Uniform(f64),
     PerCorner([f64; 4]),
+    /// A `$variable` reference, resolved at render time like `gap`.
+    Expression(String),
+}
+
+impl CornerRadius {
+    /// The uniform radius in px; per-corner radii report their first corner.
+    /// An unresolved `$variable` ref reports `None`.
+    pub fn uniform_px(&self) -> Option<f64> {
+        match self {
+            CornerRadius::Uniform(r) => Some(*r),
+            CornerRadius::PerCorner(c) => Some(c[0]),
+            CornerRadius::Expression(_) => None,
+        }
+    }
+
+    /// The four corner radii in px (TL, TR, BR, BL); `None` for a ref.
+    pub fn corners_px(&self) -> Option<[f64; 4]> {
+        match self {
+            CornerRadius::Uniform(r) => Some([*r; 4]),
+            CornerRadius::PerCorner(c) => Some(*c),
+            CornerRadius::Expression(_) => None,
+        }
+    }
 }
 
 /// Container props — shared by Frame/Group/Rectangle.

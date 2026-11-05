@@ -2853,11 +2853,15 @@
               ]
             },
             "fontSize": {
-              "type": [
-                "number",
-                "null"
-              ],
-              "format": "double"
+              "description": "A number, or a `$variable` reference resolved at render time.",
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/NumberOrExpression"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "fontWeight": {
               "anyOf": [
@@ -8895,6 +8899,10 @@
           },
           "maxItems": 4,
           "minItems": 4
+        },
+        {
+          "description": "A `$variable` reference, resolved at render time like `gap`.",
+          "type": "string"
         }
       ]
     },

@@ -11,6 +11,22 @@ pub enum NumberOrExpression {
     Expression(String),
 }
 
+impl NumberOrExpression {
+    /// The literal number, or `None` for an unresolved `$variable` ref.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            NumberOrExpression::Number(n) => Some(*n),
+            NumberOrExpression::Expression(_) => None,
+        }
+    }
+}
+
+impl From<f64> for NumberOrExpression {
+    fn from(n: f64) -> Self {
+        NumberOrExpression::Number(n)
+    }
+}
+
 /// Boolean that may also be an expression.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
