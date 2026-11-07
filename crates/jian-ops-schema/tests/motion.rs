@@ -207,3 +207,52 @@ fn flat_keyframes_serialize_canonical_values_wrapper() {
     assert!(animation["keyframes"][0].get("opacity").is_none());
     assert!(animation["keyframes"][0].get("translateY").is_none());
 }
+
+fn hero_iterations(iterations: &str) -> Result<serde_json::Value, OpsSchemaError> {
+    let source = motion_document(&format!(
+        r##""animations":[{{"trigger":"mount","durationMs":200,"iterations":{iterations},"keyframes":[
+            {{"offset":0,"values":{{"opacity":0}}}},
+            {{"offset":1,"values":{{"opacity":1}}}}
+        ]}}]"##
+    ));
+    let loaded = load_str(&source)?;
+    Ok(serde_json::to_value(&loaded.value).unwrap()["children"][0]["animations"][0].clone())
+}
+
+#[test]
+fn iterations_round_trip_counts_and_infinite() {
+    assert_eq!(hero_iterations("3").unwrap()["iterations"], 3);
+    assert_eq!(
+        hero_iterations("\"infinite\"").unwrap()["iterations"],
+        "infinite"
+    );
+    // Older documents may carry 0; the runtime already treats it as one pass.
+    assert_eq!(hero_iterations("0").unwrap()["iterations"], 0);
+    assert!(hero_iterations("1").unwrap().get("iterations").is_none());
+}
+
+#[test]
+fn iterations_reject_other_values() {
+    for bad in ["-1", "\"forever\"", "1.5", "null"] {
+        assert!(
+            hero_iterations(bad).is_err(),
+            "iterations {bad} should not load"
+        );
+    }
+}
+
+#[test]
+fn iterations_api_reports_infinite_and_caps_counts() {
+    let animation: NodeAnimation = serde_json::from_value(serde_json::json!({
+        "trigger": "mount", "durationMs": 100, "iterations": "infinite",
+        "keyframes": {"from": {"opacity": 0}, "to": {"opacity": 1}}
+    }))
+    .expect("infinite animation");
+    assert!(animation.iterations.is_infinite());
+    assert_eq!(animation.iterations.count_or(u32::MAX), u32::MAX);
+    assert_eq!(jian_ops_schema::Iterations::Count(4).count_or(9), 4);
+    assert_eq!(
+        jian_ops_schema::Iterations::default(),
+        jian_ops_schema::Iterations::Count(1)
+    );
+}

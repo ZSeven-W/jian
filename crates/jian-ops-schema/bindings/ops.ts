@@ -518,7 +518,7 @@ export type NavigationRoute = { "push": string } | { "replace": string } | { "po
 /**
  * One time-based node animation declaration.
  */
-export type NodeAnimation = { trigger: MotionTrigger, keyframes: Array<Keyframe>, durationMs: bigint, delayMs: bigint, easing: Easing, iterations: number, fillMode: NodeAnimationFillMode, once: boolean, } & ({ [key in string]?: JsonValue });
+export type NodeAnimation = { trigger: MotionTrigger, keyframes: Array<Keyframe>, durationMs: bigint, delayMs: bigint, easing: Easing, iterations: number | "infinite", fillMode: NodeAnimationFillMode, once: boolean, } & ({ [key in string]?: JsonValue });
 
 /**
  * Fill policy for a node declaration. P1 intentionally keeps only the CSS

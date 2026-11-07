@@ -42,8 +42,8 @@ pub use design_md::{DesignMdColor, DesignMdSpec, DesignMdTypography};
 pub use document::PenDocument;
 pub use error::{LoadResult, LoadWarning, OpsResult, OpsSchemaError};
 pub use motion::{
-    Easing, Keyframe, MotionPreference, MotionTrigger, NodeAnimation, NodeAnimationFillMode,
-    Transition,
+    Easing, Iterations, Keyframe, MotionPreference, MotionTrigger, NodeAnimation,
+    NodeAnimationFillMode, Transition,
 };
 
 #[cfg(test)]

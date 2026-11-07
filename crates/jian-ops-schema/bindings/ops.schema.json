@@ -8759,9 +8759,7 @@
           ]
         },
         "iterations": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
+          "$ref": "#/definitions/Iterations"
         },
         "fillMode": {
           "$ref": "#/definitions/NodeAnimationFillMode"
@@ -8798,6 +8796,21 @@
         }
       },
       "additionalProperties": true
+    },
+    "Iterations": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        {
+          "type": "string",
+          "enum": [
+            "infinite"
+          ]
+        }
+      ]
     },
     "NodeAnimationFillMode": {
       "description": "Fill policy for a node declaration. P1 intentionally keeps only the CSS policies needed by mount/inView recipes.",

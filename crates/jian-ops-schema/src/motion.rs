@@ -195,18 +195,15 @@ pub struct NodeAnimation {
     pub delay_ms: u64,
     #[serde(default)]
     pub easing: Easing,
-    #[serde(default = "default_iterations", skip_serializing_if = "is_one")]
-    pub iterations: u32,
+    #[serde(default, skip_serializing_if = "Iterations::is_default")]
+    #[cfg_attr(feature = "export-ts", ts(type = "number | \"infinite\""))]
+    pub iterations: Iterations,
     #[serde(default, skip_serializing_if = "is_forwards")]
     pub fill_mode: NodeAnimationFillMode,
     #[serde(default = "default_once", skip_serializing_if = "is_true")]
     pub once: bool,
     #[serde(default, flatten)]
     pub extra: ExtraJson,
-}
-
-fn default_iterations() -> u32 {
-    1
 }
 
 fn default_once() -> bool {
@@ -217,16 +214,116 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
-fn is_one(value: &u32) -> bool {
-    *value == 1
-}
-
 fn is_true(value: &bool) -> bool {
     *value
 }
 
 fn is_forwards(value: &NodeAnimationFillMode) -> bool {
     *value == NodeAnimationFillMode::Forwards
+}
+
+/// How many times an animation plays. `"infinite"` repeats until the node
+/// unmounts or an interaction stops it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Iterations {
+    Count(u32),
+    Infinite,
+}
+
+impl Default for Iterations {
+    fn default() -> Self {
+        Self::Count(1)
+    }
+}
+
+impl Iterations {
+    pub fn is_infinite(self) -> bool {
+        self == Self::Infinite
+    }
+
+    /// The pass count, with `Infinite` mapped to `cap`.
+    pub fn count_or(self, cap: u32) -> u32 {
+        match self {
+            Self::Count(count) => count,
+            Self::Infinite => cap,
+        }
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl Serialize for Iterations {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Count(count) => serializer.serialize_u32(*count),
+            Self::Infinite => serializer.serialize_str(INFINITE_ITERATIONS),
+        }
+    }
+}
+
+const INFINITE_ITERATIONS: &str = "infinite";
+
+impl<'de> Deserialize<'de> for Iterations {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct IterationsVisitor;
+
+        impl serde::de::Visitor<'_> for IterationsVisitor {
+            type Value = Iterations;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a non-negative integer or \"infinite\"")
+            }
+
+            fn visit_u64<E: Error>(self, value: u64) -> Result<Iterations, E> {
+                u32::try_from(value)
+                    .map(Iterations::Count)
+                    .map_err(|_| E::custom(format!("iterations {value} is out of range")))
+            }
+
+            fn visit_i64<E: Error>(self, value: i64) -> Result<Iterations, E> {
+                u64::try_from(value)
+                    .map_err(|_| E::custom(format!("iterations {value} must not be negative")))
+                    .and_then(|value| self.visit_u64(value))
+            }
+
+            fn visit_str<E: Error>(self, value: &str) -> Result<Iterations, E> {
+                if value == INFINITE_ITERATIONS {
+                    Ok(Iterations::Infinite)
+                } else {
+                    Err(E::custom(format!(
+                        "iterations must be a number or \"infinite\", got {value:?}"
+                    )))
+                }
+            }
+        }
+
+        deserializer.deserialize_any(IterationsVisitor)
+    }
+}
+
+impl schemars::JsonSchema for Iterations {
+    fn schema_name() -> String {
+        "Iterations".to_owned()
+    }
+
+    fn json_schema(generator: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
+        let count = generator.subschema_for::<u32>();
+        let infinite = Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            enum_values: Some(vec![Value::String(INFINITE_ITERATIONS.to_owned())]),
+            ..Default::default()
+        });
+        Schema::Object(SchemaObject {
+            subschemas: Some(Box::new(SubschemaValidation {
+                any_of: Some(vec![count, infinite]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
 }
 
 /// Accept a keyframe array or the two-stop `{from, to}` shorthand.
