@@ -303,7 +303,7 @@ pub(crate) fn apply_limits(style: &mut Style, limits: &jian_ops_schema::sizing::
 /// (mirrors Figma / design-tool semantics where an overlay icon sits
 /// at a fixed offset inside a layer).
 pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
-    use jian_ops_schema::node::{PenNode, TextGrowth};
+    use jian_ops_schema::node::PenNode;
     let mut style = match n {
         PenNode::Frame(f) => container_to_style(&f.container),
         PenNode::Group(g) => container_to_style(&g.container),
@@ -328,28 +328,10 @@ pub fn node_to_style(n: &jian_ops_schema::node::PenNode) -> Style {
             // flex-share its row, so squares keep their size (matches TS).
             let fixed = matches!(w, Some(SizingBehavior::Number(_)))
                 && matches!(h, Some(SizingBehavior::Number(_)));
-            // Wrapping fill text shares the remaining width with fixed siblings.
-            // Its automatic min-content width would otherwise prevent shrink.
-            // Keep no-wrap text's minimum so consumers can detect its overflow.
-            let fill_text_width = matches!(
-                n,
-                PenNode::Text(text) if text.text_growth == Some(TextGrowth::FixedWidth)
-            ) && matches!(
-                w,
-                Some(SizingBehavior::Keyword(SizingKeyword::FillContainer))
-            );
             Style {
                 size: Size {
                     width: resolve_sizing(w),
                     height: resolve_sizing(h),
-                },
-                min_size: Size {
-                    width: if fill_text_width {
-                        length(0.0_f32)
-                    } else {
-                        auto()
-                    },
-                    height: auto(),
                 },
                 flex_shrink: if fixed { 0.0 } else { 1.0 },
                 ..Default::default()
@@ -374,6 +356,7 @@ pub(crate) fn node_to_style_responsive(
     warnings: &mut Vec<String>,
 ) -> Style {
     let mut style = node_to_style(node);
+    super::fill_text::apply_min_width(&mut style, node);
     if let (Some(base), Some(limits)) = (node_base(node), node_limits(node)) {
         let limits = limits.sanitized(&base.id, warnings);
         apply_limits(&mut style, &limits);
