@@ -1,0 +1,652 @@
+{
+  "kind": "transitions",
+  "source": "openpencil@742bc1433 (op-preview-core)",
+  "layers": {
+    "push": "outgoing static below; incoming above at dx = width * (1 - eased)",
+    "pop": "incoming static below; outgoing above at dx = width * eased",
+    "replace": "outgoing alpha = 1 - linear below; incoming alpha = linear above"
+  },
+  "transitions": [
+    {
+      "kind": "push",
+      "durationMs": 240,
+      "samples": [
+        {
+          "t": 0,
+          "linear": 0.0,
+          "eased": 0.0,
+          "active": true,
+          "nextDeadlineMs": 16
+        },
+        {
+          "t": 8,
+          "linear": 0.03333333507180214,
+          "eased": 0.09670382738113403,
+          "active": true,
+          "nextDeadlineMs": 24
+        },
+        {
+          "t": 16,
+          "linear": 0.06666667014360428,
+          "eased": 0.18696296215057373,
+          "active": true,
+          "nextDeadlineMs": 32
+        },
+        {
+          "t": 24,
+          "linear": 0.10000000149011612,
+          "eased": 0.27100008726119995,
+          "active": true,
+          "nextDeadlineMs": 40
+        },
+        {
+          "t": 32,
+          "linear": 0.13333334028720856,
+          "eased": 0.3490369915962219,
+          "active": true,
+          "nextDeadlineMs": 48
+        },
+        {
+          "t": 40,
+          "linear": 0.1666666716337204,
+          "eased": 0.4212963581085205,
+          "active": true,
+          "nextDeadlineMs": 56
+        },
+        {
+          "t": 48,
+          "linear": 0.20000000298023224,
+          "eased": 0.48799997568130493,
+          "active": true,
+          "nextDeadlineMs": 64
+        },
+        {
+          "t": 56,
+          "linear": 0.23333333432674408,
+          "eased": 0.5493704080581665,
+          "active": true,
+          "nextDeadlineMs": 72
+        },
+        {
+          "t": 64,
+          "linear": 0.2666666805744171,
+          "eased": 0.6056296229362488,
+          "active": true,
+          "nextDeadlineMs": 80
+        },
+        {
+          "t": 72,
+          "linear": 0.30000001192092896,
+          "eased": 0.6570000052452087,
+          "active": true,
+          "nextDeadlineMs": 88
+        },
+        {
+          "t": 80,
+          "linear": 0.3333333432674408,
+          "eased": 0.703703761100769,
+          "active": true,
+          "nextDeadlineMs": 96
+        },
+        {
+          "t": 88,
+          "linear": 0.36666667461395264,
+          "eased": 0.7459629774093628,
+          "active": true,
+          "nextDeadlineMs": 104
+        },
+        {
+          "t": 96,
+          "linear": 0.4000000059604645,
+          "eased": 0.7839999794960022,
+          "active": true,
+          "nextDeadlineMs": 112
+        },
+        {
+          "t": 104,
+          "linear": 0.4333333373069763,
+          "eased": 0.8180370330810547,
+          "active": true,
+          "nextDeadlineMs": 120
+        },
+        {
+          "t": 112,
+          "linear": 0.46666666865348816,
+          "eased": 0.8482962846755981,
+          "active": true,
+          "nextDeadlineMs": 128
+        },
+        {
+          "t": 120,
+          "linear": 0.5,
+          "eased": 0.875,
+          "active": true,
+          "nextDeadlineMs": 136
+        },
+        {
+          "t": 128,
+          "linear": 0.5333333611488342,
+          "eased": 0.8983703851699829,
+          "active": true,
+          "nextDeadlineMs": 144
+        },
+        {
+          "t": 136,
+          "linear": 0.5666666626930237,
+          "eased": 0.9186296463012695,
+          "active": true,
+          "nextDeadlineMs": 152
+        },
+        {
+          "t": 144,
+          "linear": 0.6000000238418579,
+          "eased": 0.9359999895095825,
+          "active": true,
+          "nextDeadlineMs": 160
+        },
+        {
+          "t": 152,
+          "linear": 0.6333333253860474,
+          "eased": 0.9507036805152893,
+          "active": true,
+          "nextDeadlineMs": 168
+        },
+        {
+          "t": 160,
+          "linear": 0.6666666865348816,
+          "eased": 0.9629629850387573,
+          "active": true,
+          "nextDeadlineMs": 176
+        },
+        {
+          "t": 168,
+          "linear": 0.699999988079071,
+          "eased": 0.9729999899864197,
+          "active": true,
+          "nextDeadlineMs": 184
+        },
+        {
+          "t": 176,
+          "linear": 0.7333333492279053,
+          "eased": 0.9810370206832886,
+          "active": true,
+          "nextDeadlineMs": 192
+        },
+        {
+          "t": 184,
+          "linear": 0.7666666507720947,
+          "eased": 0.9872962832450867,
+          "active": true,
+          "nextDeadlineMs": 200
+        },
+        {
+          "t": 192,
+          "linear": 0.800000011920929,
+          "eased": 0.9919999837875366,
+          "active": true,
+          "nextDeadlineMs": 208
+        },
+        {
+          "t": 200,
+          "linear": 0.8333333134651184,
+          "eased": 0.9953703880310059,
+          "active": true,
+          "nextDeadlineMs": 216
+        },
+        {
+          "t": 208,
+          "linear": 0.8666666746139526,
+          "eased": 0.9976296424865723,
+          "active": true,
+          "nextDeadlineMs": 224
+        },
+        {
+          "t": 216,
+          "linear": 0.8999999761581421,
+          "eased": 0.9990000128746033,
+          "active": true,
+          "nextDeadlineMs": 232
+        },
+        {
+          "t": 224,
+          "linear": 0.9333333373069763,
+          "eased": 0.9997037053108215,
+          "active": true,
+          "nextDeadlineMs": 240
+        },
+        {
+          "t": 232,
+          "linear": 0.9666666388511658,
+          "eased": 0.9999629855155945,
+          "active": true,
+          "nextDeadlineMs": 240
+        },
+        {
+          "t": 240,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        },
+        {
+          "t": 248,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        },
+        {
+          "t": 256,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        }
+      ]
+    },
+    {
+      "kind": "pop",
+      "durationMs": 240,
+      "samples": [
+        {
+          "t": 0,
+          "linear": 0.0,
+          "eased": 0.0,
+          "active": true,
+          "nextDeadlineMs": 16
+        },
+        {
+          "t": 8,
+          "linear": 0.03333333507180214,
+          "eased": 0.09670382738113403,
+          "active": true,
+          "nextDeadlineMs": 24
+        },
+        {
+          "t": 16,
+          "linear": 0.06666667014360428,
+          "eased": 0.18696296215057373,
+          "active": true,
+          "nextDeadlineMs": 32
+        },
+        {
+          "t": 24,
+          "linear": 0.10000000149011612,
+          "eased": 0.27100008726119995,
+          "active": true,
+          "nextDeadlineMs": 40
+        },
+        {
+          "t": 32,
+          "linear": 0.13333334028720856,
+          "eased": 0.3490369915962219,
+          "active": true,
+          "nextDeadlineMs": 48
+        },
+        {
+          "t": 40,
+          "linear": 0.1666666716337204,
+          "eased": 0.4212963581085205,
+          "active": true,
+          "nextDeadlineMs": 56
+        },
+        {
+          "t": 48,
+          "linear": 0.20000000298023224,
+          "eased": 0.48799997568130493,
+          "active": true,
+          "nextDeadlineMs": 64
+        },
+        {
+          "t": 56,
+          "linear": 0.23333333432674408,
+          "eased": 0.5493704080581665,
+          "active": true,
+          "nextDeadlineMs": 72
+        },
+        {
+          "t": 64,
+          "linear": 0.2666666805744171,
+          "eased": 0.6056296229362488,
+          "active": true,
+          "nextDeadlineMs": 80
+        },
+        {
+          "t": 72,
+          "linear": 0.30000001192092896,
+          "eased": 0.6570000052452087,
+          "active": true,
+          "nextDeadlineMs": 88
+        },
+        {
+          "t": 80,
+          "linear": 0.3333333432674408,
+          "eased": 0.703703761100769,
+          "active": true,
+          "nextDeadlineMs": 96
+        },
+        {
+          "t": 88,
+          "linear": 0.36666667461395264,
+          "eased": 0.7459629774093628,
+          "active": true,
+          "nextDeadlineMs": 104
+        },
+        {
+          "t": 96,
+          "linear": 0.4000000059604645,
+          "eased": 0.7839999794960022,
+          "active": true,
+          "nextDeadlineMs": 112
+        },
+        {
+          "t": 104,
+          "linear": 0.4333333373069763,
+          "eased": 0.8180370330810547,
+          "active": true,
+          "nextDeadlineMs": 120
+        },
+        {
+          "t": 112,
+          "linear": 0.46666666865348816,
+          "eased": 0.8482962846755981,
+          "active": true,
+          "nextDeadlineMs": 128
+        },
+        {
+          "t": 120,
+          "linear": 0.5,
+          "eased": 0.875,
+          "active": true,
+          "nextDeadlineMs": 136
+        },
+        {
+          "t": 128,
+          "linear": 0.5333333611488342,
+          "eased": 0.8983703851699829,
+          "active": true,
+          "nextDeadlineMs": 144
+        },
+        {
+          "t": 136,
+          "linear": 0.5666666626930237,
+          "eased": 0.9186296463012695,
+          "active": true,
+          "nextDeadlineMs": 152
+        },
+        {
+          "t": 144,
+          "linear": 0.6000000238418579,
+          "eased": 0.9359999895095825,
+          "active": true,
+          "nextDeadlineMs": 160
+        },
+        {
+          "t": 152,
+          "linear": 0.6333333253860474,
+          "eased": 0.9507036805152893,
+          "active": true,
+          "nextDeadlineMs": 168
+        },
+        {
+          "t": 160,
+          "linear": 0.6666666865348816,
+          "eased": 0.9629629850387573,
+          "active": true,
+          "nextDeadlineMs": 176
+        },
+        {
+          "t": 168,
+          "linear": 0.699999988079071,
+          "eased": 0.9729999899864197,
+          "active": true,
+          "nextDeadlineMs": 184
+        },
+        {
+          "t": 176,
+          "linear": 0.7333333492279053,
+          "eased": 0.9810370206832886,
+          "active": true,
+          "nextDeadlineMs": 192
+        },
+        {
+          "t": 184,
+          "linear": 0.7666666507720947,
+          "eased": 0.9872962832450867,
+          "active": true,
+          "nextDeadlineMs": 200
+        },
+        {
+          "t": 192,
+          "linear": 0.800000011920929,
+          "eased": 0.9919999837875366,
+          "active": true,
+          "nextDeadlineMs": 208
+        },
+        {
+          "t": 200,
+          "linear": 0.8333333134651184,
+          "eased": 0.9953703880310059,
+          "active": true,
+          "nextDeadlineMs": 216
+        },
+        {
+          "t": 208,
+          "linear": 0.8666666746139526,
+          "eased": 0.9976296424865723,
+          "active": true,
+          "nextDeadlineMs": 224
+        },
+        {
+          "t": 216,
+          "linear": 0.8999999761581421,
+          "eased": 0.9990000128746033,
+          "active": true,
+          "nextDeadlineMs": 232
+        },
+        {
+          "t": 224,
+          "linear": 0.9333333373069763,
+          "eased": 0.9997037053108215,
+          "active": true,
+          "nextDeadlineMs": 240
+        },
+        {
+          "t": 232,
+          "linear": 0.9666666388511658,
+          "eased": 0.9999629855155945,
+          "active": true,
+          "nextDeadlineMs": 240
+        },
+        {
+          "t": 240,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        },
+        {
+          "t": 248,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        },
+        {
+          "t": 256,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        }
+      ]
+    },
+    {
+      "kind": "replace",
+      "durationMs": 160,
+      "samples": [
+        {
+          "t": 0,
+          "linear": 0.0,
+          "eased": 0.0,
+          "active": true,
+          "nextDeadlineMs": 16
+        },
+        {
+          "t": 8,
+          "linear": 0.05000000074505806,
+          "eased": 0.14262503385543823,
+          "active": true,
+          "nextDeadlineMs": 24
+        },
+        {
+          "t": 16,
+          "linear": 0.10000000149011612,
+          "eased": 0.27100008726119995,
+          "active": true,
+          "nextDeadlineMs": 32
+        },
+        {
+          "t": 24,
+          "linear": 0.15000000596046448,
+          "eased": 0.38587498664855957,
+          "active": true,
+          "nextDeadlineMs": 40
+        },
+        {
+          "t": 32,
+          "linear": 0.20000000298023224,
+          "eased": 0.48799997568130493,
+          "active": true,
+          "nextDeadlineMs": 48
+        },
+        {
+          "t": 40,
+          "linear": 0.25,
+          "eased": 0.578125,
+          "active": true,
+          "nextDeadlineMs": 56
+        },
+        {
+          "t": 48,
+          "linear": 0.30000001192092896,
+          "eased": 0.6570000052452087,
+          "active": true,
+          "nextDeadlineMs": 64
+        },
+        {
+          "t": 56,
+          "linear": 0.3499999940395355,
+          "eased": 0.7253750562667847,
+          "active": true,
+          "nextDeadlineMs": 72
+        },
+        {
+          "t": 64,
+          "linear": 0.4000000059604645,
+          "eased": 0.7839999794960022,
+          "active": true,
+          "nextDeadlineMs": 80
+        },
+        {
+          "t": 72,
+          "linear": 0.44999998807907104,
+          "eased": 0.8336249589920044,
+          "active": true,
+          "nextDeadlineMs": 88
+        },
+        {
+          "t": 80,
+          "linear": 0.5,
+          "eased": 0.875,
+          "active": true,
+          "nextDeadlineMs": 96
+        },
+        {
+          "t": 88,
+          "linear": 0.550000011920929,
+          "eased": 0.9088749885559082,
+          "active": true,
+          "nextDeadlineMs": 104
+        },
+        {
+          "t": 96,
+          "linear": 0.6000000238418579,
+          "eased": 0.9359999895095825,
+          "active": true,
+          "nextDeadlineMs": 112
+        },
+        {
+          "t": 104,
+          "linear": 0.6499999761581421,
+          "eased": 0.9571250081062317,
+          "active": true,
+          "nextDeadlineMs": 120
+        },
+        {
+          "t": 112,
+          "linear": 0.699999988079071,
+          "eased": 0.9729999899864197,
+          "active": true,
+          "nextDeadlineMs": 128
+        },
+        {
+          "t": 120,
+          "linear": 0.75,
+          "eased": 0.984375,
+          "active": true,
+          "nextDeadlineMs": 136
+        },
+        {
+          "t": 128,
+          "linear": 0.800000011920929,
+          "eased": 0.9919999837875366,
+          "active": true,
+          "nextDeadlineMs": 144
+        },
+        {
+          "t": 136,
+          "linear": 0.8500000238418579,
+          "eased": 0.9966250061988831,
+          "active": true,
+          "nextDeadlineMs": 152
+        },
+        {
+          "t": 144,
+          "linear": 0.8999999761581421,
+          "eased": 0.9990000128746033,
+          "active": true,
+          "nextDeadlineMs": 160
+        },
+        {
+          "t": 152,
+          "linear": 0.949999988079071,
+          "eased": 0.999875009059906,
+          "active": true,
+          "nextDeadlineMs": 160
+        },
+        {
+          "t": 160,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        },
+        {
+          "t": 168,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        },
+        {
+          "t": 176,
+          "linear": 1.0,
+          "eased": 1.0,
+          "active": false,
+          "nextDeadlineMs": null
+        }
+      ]
+    }
+  ]
+}

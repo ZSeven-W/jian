@@ -26,6 +26,7 @@ pub mod geometry;
 pub mod gesture;
 pub mod layout;
 pub mod logic;
+pub mod motion;
 pub mod render;
 pub mod runtime;
 pub mod scene;
