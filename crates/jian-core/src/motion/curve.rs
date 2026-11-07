@@ -70,6 +70,108 @@ pub fn ease_in_out_cubic(t: f32) -> f32 {
     }
 }
 
+/// The first progress at which `ease` reaches `output`: 0 when the curve
+/// starts at or above it, 1 when it never gets there. Timelines use it to
+/// place a keyframe in time, because offsets live in eased progress.
+pub fn inverse(easing: Easing, output: f32) -> f32 {
+    const STEPS: u32 = 1024;
+    if ease(easing, 0.0) >= output {
+        return 0.0;
+    }
+    let mut previous = 0.0;
+    for step in 1..=STEPS {
+        let progress = step as f32 / STEPS as f32;
+        if ease(easing, progress) >= output {
+            let (mut low, mut high) = (previous, progress);
+            for _ in 0..24 {
+                let middle = (low + high) / 2.0;
+                if ease(easing, middle) >= output {
+                    high = middle;
+                } else {
+                    low = middle;
+                }
+            }
+            return high;
+        }
+        previous = progress;
+    }
+    1.0
+}
+
+/// One cubic-bezier piece of a curve: on progress `x0..x1` the curve runs
+/// from `y0` to `y1` along `cubic-bezier(control)` normalized to that box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CubicPiece {
+    pub x0: f32,
+    pub x1: f32,
+    pub y0: f32,
+    pub y1: f32,
+    pub control: [f32; 4],
+}
+
+impl CubicPiece {
+    /// The piece's value at `progress`, solving x precisely (no clamping).
+    pub fn eval(&self, progress: f32) -> f32 {
+        let span = (self.x1 - self.x0).max(f32::EPSILON);
+        let local = ((progress - self.x0) / span).clamp(0.0, 1.0);
+        let [x1, y1, x2, y2] = self.control;
+        let (mut low, mut high) = (0.0_f32, 1.0_f32);
+        for _ in 0..40 {
+            let t = (low + high) / 2.0;
+            if bezier(t, x1, x2) < local {
+                low = t;
+            } else {
+                high = t;
+            }
+        }
+        self.y0 + (self.y1 - self.y0) * bezier((low + high) / 2.0, y1, y2)
+    }
+}
+
+/// The curve as exact cubic-bezier pieces. The polynomial curves are cubic
+/// in disguise (x(t) = t with controls 1/3 and 2/3); `easeInOut` splits at
+/// 0.5. Bezier curves come back unclamped: the runtime also clamps their
+/// output to [0, 1], which the curve compiler handles separately.
+pub fn as_cubic(easing: Easing) -> Vec<CubicPiece> {
+    const THIRD: f32 = 1.0 / 3.0;
+    const TWO_THIRDS: f32 = 2.0 / 3.0;
+    let whole = |control: [f32; 4]| {
+        vec![CubicPiece {
+            x0: 0.0,
+            x1: 1.0,
+            y0: 0.0,
+            y1: 1.0,
+            control,
+        }]
+    };
+    match easing {
+        Easing::Linear => whole([THIRD, THIRD, TWO_THIRDS, TWO_THIRDS]),
+        Easing::Ease => whole([THIRD, 0.0, TWO_THIRDS, 1.0]),
+        Easing::EaseIn => whole([THIRD, 0.0, TWO_THIRDS, THIRD]),
+        Easing::EaseOut => whole([THIRD, TWO_THIRDS, TWO_THIRDS, 1.0]),
+        Easing::EaseInOut => vec![
+            CubicPiece {
+                x0: 0.0,
+                x1: 0.5,
+                y0: 0.0,
+                y1: 0.5,
+                control: [THIRD, 0.0, TWO_THIRDS, THIRD],
+            },
+            CubicPiece {
+                x0: 0.5,
+                x1: 1.0,
+                y0: 0.5,
+                y1: 1.0,
+                control: [THIRD, TWO_THIRDS, TWO_THIRDS, 1.0],
+            },
+        ],
+        Easing::Standard | Easing::Emphasized => whole([0.2, 0.0, 0.0, 1.0]),
+        Easing::EmphasizedDecelerate => whole([0.05, 0.7, 0.1, 1.0]),
+        Easing::EmphasizedAccelerate => whole([0.3, 0.0, 0.8, 0.15]),
+        Easing::CubicBezier(x1, y1, x2, y2) => whole([x1, y1, x2, y2]),
+    }
+}
+
 pub(crate) fn cubic_bezier(x1: f32, y1: f32, x2: f32, y2: f32, x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     let mut low = 0.0;
@@ -108,6 +210,81 @@ mod tests {
             assert_eq!(parse_easing_name(name), Some(expected), "{name}");
         }
         assert_eq!(parse_easing_name("bouncy"), None);
+    }
+
+    const ALL: [Easing; 12] = [
+        Easing::Linear,
+        Easing::Ease,
+        Easing::EaseIn,
+        Easing::EaseOut,
+        Easing::EaseInOut,
+        Easing::Standard,
+        Easing::Emphasized,
+        Easing::EmphasizedDecelerate,
+        Easing::EmphasizedAccelerate,
+        Easing::CubicBezier(0.25, 0.1, 0.25, 1.0),
+        Easing::CubicBezier(0.34, 1.56, 0.64, 1.0),
+        Easing::CubicBezier(0.6, -0.28, 0.735, 0.045),
+    ];
+
+    fn piece_value(pieces: &[CubicPiece], progress: f32) -> f32 {
+        let piece = pieces
+            .iter()
+            .find(|piece| progress <= piece.x1)
+            .unwrap_or_else(|| pieces.last().expect("pieces"));
+        piece.eval(progress)
+    }
+
+    #[test]
+    fn cubic_pieces_reproduce_the_runtime_curves() {
+        for easing in ALL {
+            let pieces = as_cubic(easing);
+            let polynomial = matches!(
+                easing,
+                Easing::Linear
+                    | Easing::Ease
+                    | Easing::EaseIn
+                    | Easing::EaseOut
+                    | Easing::EaseInOut
+            );
+            // The runtime solves bezier x with only 16 bisection steps.
+            let tolerance = if polynomial { 1e-5 } else { 5e-4 };
+            for step in 0..=1000 {
+                let progress = step as f32 / 1000.0;
+                let mut expected = piece_value(&pieces, progress);
+                if !polynomial {
+                    expected = expected.clamp(0.0, 1.0);
+                }
+                let actual = ease(easing, progress);
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "{easing:?} at {progress}: {actual} vs {expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_finds_the_first_time_a_curve_reaches_a_value() {
+        for easing in ALL {
+            for step in 1..100 {
+                let target = step as f32 / 100.0;
+                let progress = inverse(easing, target);
+                assert!(
+                    ease(easing, progress) >= target - 1e-4,
+                    "{easing:?} {target}"
+                );
+                if progress > 0.0 {
+                    assert!(
+                        ease(easing, progress - 2e-3) < target + 1e-4,
+                        "{easing:?} {target}"
+                    );
+                }
+            }
+        }
+        assert_eq!(inverse(Easing::Linear, 0.0), 0.0);
+        assert_eq!(inverse(Easing::Linear, 2.0), 1.0);
+        assert!((inverse(Easing::Linear, 0.25) - 0.25).abs() < 1e-5);
     }
 
     #[test]

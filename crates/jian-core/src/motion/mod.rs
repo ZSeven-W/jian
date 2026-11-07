@@ -14,5 +14,5 @@ pub mod curve;
 pub mod interpolate;
 pub mod timeline;
 
-pub use curve::{ease, ease_in_out_cubic, ease_out_cubic};
+pub use curve::{as_cubic, ease, ease_in_out_cubic, ease_out_cubic, inverse, CubicPiece};
 pub use timeline::{invalidation_for, sample_request, MotionObserver, MotionTimeline};
