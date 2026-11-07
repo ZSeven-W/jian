@@ -57,7 +57,7 @@ impl Runtime {
         }
         let now = self.now_ms;
         let focused_id = self.focused_widget_id();
-        let value_before = focused_id.as_deref().and_then(|id| self.widget_value(id));
+        let value_before = focused_id.as_deref().and_then(|id| self.edit_baseline(id));
         let focused_tabs = focused_id.as_deref().is_some_and(|id| {
             self.document
                 .as_ref()

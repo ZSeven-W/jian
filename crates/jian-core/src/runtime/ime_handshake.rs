@@ -148,12 +148,27 @@ impl Runtime {
     ) -> ImeConfirmOutcome {
         let snapshot = self.ime_registry.snapshot(request_id);
         let field = self.ime_registry.field_key(request_id);
+        let before = field
+            .as_ref()
+            .filter(|(page, _)| page == &self.active_page_key)
+            .and_then(|(_, node)| self.widget_value(node));
         let outcome = self
             .ime_registry
             .confirm_commit(request_id, text, &mut self.widget_states);
         if outcome == ImeConfirmOutcome::Applied {
             if let Some(snapshot) = snapshot.as_ref() {
                 self.position_confirmed_cursor(snapshot, text, new_cursor_position);
+            }
+            // A committed IME string is a user edit like typed text:
+            // write through and fire Change (only when the value moved).
+            if let Some((page, node)) = field.as_ref() {
+                if page == &self.active_page_key {
+                    self.commit_widget_edit(node, before);
+                    if outcome != ImeConfirmOutcome::NoOp {
+                        self.complete_parked_after_ime(request_id);
+                    }
+                    return outcome;
+                }
             }
         }
         self.sync_confirmed_field(field.as_ref(), outcome);

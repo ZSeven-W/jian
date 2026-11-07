@@ -224,8 +224,26 @@ impl Runtime {
                 .preview_cancel_compensations_except(&retained, &cancellation_state);
         }
         let live_state = cancellation_state.app_snapshot();
-        let (merged_state, mut conformance_warnings) =
+        let (mut merged_state, mut conformance_warnings) =
             crate::state::conformance::merge_scope(&live_state, &staged_defaults, &declared_state);
+        // `merge_scope` rebuilds the app scope from the NEW declaration, so a
+        // key an action created without any declaration (`set $app.qty` in a
+        // design that never declared `qty`) was silently dropped by the next
+        // reload — including the binding-reflow document swaps Preview does
+        // on every text change, which showed `null` right after a successful
+        // `set`. Keep such runtime-born keys; a key the PREVIOUS document
+        // declared and the new one removed is still pruned as before.
+        let previously_declared = self
+            .document
+            .as_ref()
+            .and_then(|document| document.schema.state.as_ref());
+        for (key, value) in &live_state {
+            let runtime_born = !declared_state.contains_key(key)
+                && previously_declared.map_or(true, |previous| !previous.contains_key(key));
+            if runtime_born {
+                merged_state.insert(key.clone(), value.clone());
+            }
+        }
         let mut page_merges = Vec::new();
         let mut self_merges = Vec::new();
         if conform_reload {

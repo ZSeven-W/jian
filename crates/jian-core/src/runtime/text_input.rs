@@ -238,6 +238,7 @@ impl Runtime {
         }
         let now = self.now_ms;
         let id = self.focused_widget_id();
+        let before = id.as_deref().and_then(|id| self.edit_baseline(id));
         {
             let Some(st) = self.focused_text_state() else {
                 return Ok(false);
@@ -245,7 +246,7 @@ impl Runtime {
             st.insert_str(text, now);
         }
         if let Some(id) = id.as_deref() {
-            self.sync_widget_binding(id);
+            self.commit_widget_edit(id, before);
         }
         Ok(true)
     }
@@ -259,6 +260,9 @@ impl Runtime {
         use crate::gesture::ime::ImeKind;
         let now = self.now_ms;
         let id = self.focused_widget_id();
+        // Preedit text is not a value yet: only a commit compares against
+        // (and fires Change relative to) the last committed value.
+        let before = id.as_deref().and_then(|id| self.edit_baseline(id));
         let committed;
         {
             let Some(st) = self.focused_text_state() else {
@@ -284,10 +288,37 @@ impl Runtime {
         }
         if committed {
             if let Some(id) = id.as_deref() {
-                self.sync_widget_binding(id);
+                self.commit_widget_edit(id, before);
             }
         }
         Ok(true)
+    }
+
+    /// The value an edit of widget `id` is compared against. Widget state
+    /// is created lazily on first touch, so read it only after making
+    /// sure it exists — otherwise the very first keystroke compares
+    /// against `None` and a no-op (Backspace in an empty field) fires
+    /// `onChange`.
+    pub(super) fn edit_baseline(&mut self, id: &str) -> Option<serde_json::Value> {
+        let schema = {
+            let document = self.document.as_ref()?;
+            let key = document.tree.get(id)?;
+            document.tree.nodes.get(key)?.schema.clone()
+        };
+        let _ = self.widget_states.get_or_init(&schema, &self.state);
+        self.widget_value(id)
+    }
+
+    /// Finish one user edit of widget `id`: write its value through
+    /// `bind:value`, then fire `onChange` iff the value differs from
+    /// `before` — the same contract the keyboard path keeps, so typing,
+    /// pasting, Backspace/Delete and IME commits behave alike and a
+    /// no-op edit never fires twice.
+    pub(super) fn commit_widget_edit(&mut self, id: &str, before: Option<serde_json::Value>) {
+        self.sync_widget_binding(id);
+        if self.widget_value(id) != before {
+            self.dispatch_widget_change(id);
+        }
     }
 
     /// Push the focused/edited widget's current value into the state graph via
@@ -374,11 +405,7 @@ impl Runtime {
         let node = self.document.as_ref()?.tree.nodes.get(key)?;
         let json = serde_json::to_value(&node.schema).ok()?;
         let raw = json.get("bindings")?.get("bind:value")?.as_str()?;
-        let rest = raw.trim().strip_prefix("$state.")?;
-        if rest.is_empty() || rest.contains(['.', '[']) || rest.contains(char::is_whitespace) {
-            return None;
-        }
-        Some(rest.to_owned())
+        crate::state::app_bind_key(raw).map(str::to_owned)
     }
 
     fn widget_is_number_input(&self, node_id: &str) -> bool {

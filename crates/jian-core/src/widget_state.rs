@@ -135,78 +135,7 @@ impl WidgetStateStore {
     /// never touched here.
     pub fn get_or_init(&mut self, node: &PenNode, state: &StateGraph) -> Option<&mut WidgetState> {
         self.bump_mutation();
-        let (id, kind, mut init) = match node {
-            PenNode::TextInput(n) => (
-                &n.base.id,
-                WidgetKind::TextInput,
-                WidgetState::TextInput(TextInputState::with_text(
-                    n.value.clone().unwrap_or_default(),
-                )),
-            ),
-            PenNode::TextArea(n) => (
-                &n.base.id,
-                WidgetKind::TextArea,
-                WidgetState::TextInput(TextInputState::with_text(
-                    n.value.clone().unwrap_or_default(),
-                )),
-            ),
-            PenNode::NumberInput(n) => (
-                &n.base.id,
-                WidgetKind::NumberInput,
-                WidgetState::TextInput(TextInputState::with_text(number_to_text(&n.value))),
-            ),
-            PenNode::Switch(n) => (
-                &n.base.id,
-                WidgetKind::Switch,
-                WidgetState::Toggle {
-                    on: bool_default(&n.checked),
-                },
-            ),
-            PenNode::Checkbox(n) => (
-                &n.base.id,
-                WidgetKind::Checkbox,
-                WidgetState::Toggle {
-                    on: bool_default(&n.checked),
-                },
-            ),
-            PenNode::Select(n) => (
-                &n.base.id,
-                WidgetKind::Select,
-                WidgetState::Select {
-                    open: false,
-                    value: n.value.clone(),
-                    hover_index: None,
-                },
-            ),
-            PenNode::RadioGroup(n) => (
-                &n.base.id,
-                WidgetKind::RadioGroup,
-                WidgetState::Radio {
-                    value: n.value.clone(),
-                    hover_index: None,
-                },
-            ),
-            PenNode::Slider(n) => (
-                &n.base.id,
-                WidgetKind::Slider,
-                WidgetState::Slider {
-                    value: number_default(&n.value, n.min.unwrap_or(0.0)),
-                    dragging: false,
-                },
-            ),
-            PenNode::Tabs(n) => (
-                &n.base.id,
-                WidgetKind::Tabs,
-                WidgetState::Tabs {
-                    active: n.value.clone(),
-                    hover_index: None,
-                },
-            ),
-            _ => return None,
-        };
-        if let Some(v) = bound_app_value(node, state) {
-            apply_bound(&mut init, &v);
-        }
+        let (id, kind, init) = seeded(node, state)?;
         let key = (self.page_key.clone(), id.clone());
         if self.kinds.get(&key) != Some(&kind) || !self.map.contains_key(&key) {
             self.map.insert(key.clone(), init);
@@ -403,8 +332,96 @@ fn widget_kind(node: &PenNode) -> Option<WidgetKind> {
     }
 }
 
-/// The node's `bind:value` target as an app-scope key (`$state.<key>`
-/// binds into app scope — see `Runtime::sync_bound_value`), when the
+/// The state a widget node would be created with right now: its authored
+/// value, overridden by the bound app-state value when one exists. Pure —
+/// creates nothing and bumps no counter — so a painter can show the true
+/// bound value of a widget that has not been instantiated yet (e.g. the
+/// first frame after navigating back to a screen) without side effects.
+pub fn seed_widget_state(node: &PenNode, state: &StateGraph) -> Option<WidgetState> {
+    seeded(node, state).map(|(_, _, init)| init)
+}
+
+fn seeded<'a>(
+    node: &'a PenNode,
+    state: &StateGraph,
+) -> Option<(&'a String, WidgetKind, WidgetState)> {
+    let (id, kind, mut init) = match node {
+        PenNode::TextInput(n) => (
+            &n.base.id,
+            WidgetKind::TextInput,
+            WidgetState::TextInput(TextInputState::with_text(
+                n.value.clone().unwrap_or_default(),
+            )),
+        ),
+        PenNode::TextArea(n) => (
+            &n.base.id,
+            WidgetKind::TextArea,
+            WidgetState::TextInput(TextInputState::with_text(
+                n.value.clone().unwrap_or_default(),
+            )),
+        ),
+        PenNode::NumberInput(n) => (
+            &n.base.id,
+            WidgetKind::NumberInput,
+            WidgetState::TextInput(TextInputState::with_text(number_to_text(&n.value))),
+        ),
+        PenNode::Switch(n) => (
+            &n.base.id,
+            WidgetKind::Switch,
+            WidgetState::Toggle {
+                on: bool_default(&n.checked),
+            },
+        ),
+        PenNode::Checkbox(n) => (
+            &n.base.id,
+            WidgetKind::Checkbox,
+            WidgetState::Toggle {
+                on: bool_default(&n.checked),
+            },
+        ),
+        PenNode::Select(n) => (
+            &n.base.id,
+            WidgetKind::Select,
+            WidgetState::Select {
+                open: false,
+                value: n.value.clone(),
+                hover_index: None,
+            },
+        ),
+        PenNode::RadioGroup(n) => (
+            &n.base.id,
+            WidgetKind::RadioGroup,
+            WidgetState::Radio {
+                value: n.value.clone(),
+                hover_index: None,
+            },
+        ),
+        PenNode::Slider(n) => (
+            &n.base.id,
+            WidgetKind::Slider,
+            WidgetState::Slider {
+                value: number_default(&n.value, n.min.unwrap_or(0.0)),
+                dragging: false,
+            },
+        ),
+        PenNode::Tabs(n) => (
+            &n.base.id,
+            WidgetKind::Tabs,
+            WidgetState::Tabs {
+                active: n.value.clone(),
+                hover_index: None,
+            },
+        ),
+        _ => return None,
+    };
+    if let Some(v) = bound_app_value(node, state) {
+        apply_bound(&mut init, &v);
+    }
+    Some((id, kind, init))
+}
+
+/// The node's `bind:value` target as an app-scope key (`$state.<key>` /
+/// `$app.<key>` bind into app scope — see `Runtime::sync_bound_value`), when the
 /// state graph currently holds a value for it.
 ///
 /// Once the bound key exists in app scope — whether from a declared
@@ -426,10 +443,7 @@ fn bound_app_value(node: &PenNode, state: &StateGraph) -> Option<serde_json::Val
         PenNode::Tabs(n) => n.bindings.as_ref(),
         _ => None,
     }?;
-    let key = bindings
-        .get("bind:value")?
-        .as_str()
-        .strip_prefix("$state.")?;
+    let key = crate::state::app_bind_key(bindings.get("bind:value")?.as_str())?;
     state.app_get(key).map(|rv| rv.0)
 }
 

@@ -1,10 +1,12 @@
 //! Runtime state graph — holds all Signals organized by scope, page, and node.
 
+pub mod bind_target;
 pub mod conformance;
 pub mod path;
 pub mod scope;
 pub mod storage_cache;
 
+pub use bind_target::{app_bind_key, parse_app_bind_key, BindTargetError};
 pub use path::{PathError, Segment, StatePath};
 pub use scope::Scope;
 

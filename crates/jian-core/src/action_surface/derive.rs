@@ -569,16 +569,18 @@ fn is_non_empty_action_list(handler: &Value) -> bool {
 }
 
 /// Extract `bindings["bind:value"]` and validate it points at a
-/// writable `$state.<path>` — bindings to `$route` / `$app` /
-/// computed expressions don't get a `set_*` action because the
-/// runtime can't write to them directly.
+/// writable app-state path (`$state.<path>` or its alias
+/// `$app.<path>`) — bindings to `$route` / computed expressions don't
+/// get a `set_*` action because the runtime can't write to them.
 fn bind_target(node: &Value) -> Option<String> {
     let raw = node
         .get("bindings")
         .and_then(|b| b.get("bind:value"))
         .and_then(|v| v.as_str())?;
     let trimmed = raw.trim();
-    let rest = trimmed.strip_prefix("$state.")?;
+    let rest = trimmed
+        .strip_prefix("$state.")
+        .or_else(|| trimmed.strip_prefix("$app."))?;
     if rest.is_empty() || rest.contains(|c: char| c.is_whitespace()) {
         return None;
     }
@@ -1046,7 +1048,7 @@ mod tests {
 
     #[test]
     fn bind_value_skips_non_state_targets() {
-        // Bindings that point at $route / $app / a computed expression
+        // Bindings that point at $route / a computed expression
         // can't be written through `set_*` — derive should skip them.
         let doc = doc_from(
             r#"{
