@@ -11,5 +11,6 @@
 //! `tests/golden/motion/` and pin its behaviour, quirks included.
 
 pub mod curve;
+pub mod interpolate;
 
 pub use curve::{ease, ease_in_out_cubic, ease_out_cubic};
