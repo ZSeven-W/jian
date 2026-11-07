@@ -7,7 +7,12 @@ use serde_json::{json, Value};
 use std::rc::Rc;
 use taffy::prelude::*;
 
-fn row_layout(width: f32, growth: &str, min_width: Option<f32>, responsive: bool) -> (Rect, Rect) {
+fn row_layout(
+    width: f32,
+    growth: Option<&str>,
+    min_width: Option<f32>,
+    responsive: bool,
+) -> (Rect, Rect) {
     let root: PenNode = serde_json::from_value(json!({
         "type": "frame", "id": "row", "layout": "horizontal",
         "width": width, "height": "fit_content",
@@ -45,7 +50,7 @@ fn row_layout(width: f32, growth: &str, min_width: Option<f32>, responsive: bool
 #[test]
 fn fill_text_uses_remaining_row_width_and_wraps() {
     for width in [116.0, 196.0] {
-        let (icon, text) = row_layout(width, "fixed-width", None, false);
+        let (icon, text) = row_layout(width, Some("fixed-width"), None, false);
         assert_eq!(icon.origin.x, 0.0);
         assert_eq!(icon.size.width, 36.0);
         assert_eq!(text.origin.x, 36.0);
@@ -55,12 +60,18 @@ fn fill_text_uses_remaining_row_width_and_wraps() {
 }
 
 #[test]
-fn fill_text_keeps_no_wrap_growth_modes() {
-    for growth in ["auto", "fixed-width-height"] {
+fn non_wrapping_fill_text_keeps_legacy_minimum_and_overflow() {
+    for growth in [None, Some("auto"), Some("fixed-width-height")] {
+        let node: PenNode = serde_json::from_value(json!({
+            "type": "text", "id": "text", "width": "fill_container",
+            "content": "label", "textGrowth": growth
+        }))
+        .unwrap();
+        assert_eq!(node_to_style(&node).min_size.width, Dimension::Auto);
         let (icon, text) = row_layout(116.0, growth, None, false);
         assert_eq!(icon.size.width, 36.0);
-        assert_eq!(text.size.width, 80.0);
-        assert_eq!(text.size.height, 16.0, "{growth} text must not wrap");
+        assert_eq!(text.size.width, 116.0);
+        assert_eq!(text.size.height, 16.0, "{growth:?} text must not wrap");
     }
 }
 
@@ -93,7 +104,7 @@ fn other_fill_leaves_keep_automatic_minimum() {
 fn responsive_explicit_minimum_overrides_fill_text_implicit_minimum() {
     let node: PenNode = serde_json::from_value(json!({
         "type": "text", "id": "text", "width": "fill_container",
-        "content": "label", "minWidth": 100
+        "content": "label", "minWidth": 100, "textGrowth": "fixed-width"
     }))
     .unwrap();
     let mut warnings = Vec::new();
@@ -101,9 +112,9 @@ fn responsive_explicit_minimum_overrides_fill_text_implicit_minimum() {
     assert_eq!(style.min_size.width, length(100.0_f32));
     assert!(warnings.is_empty());
 
-    let (_, legacy_text) = row_layout(116.0, "fixed-width", Some(100.0), false);
+    let (_, legacy_text) = row_layout(116.0, Some("fixed-width"), Some(100.0), false);
     assert_eq!(legacy_text.size.width, 80.0);
-    let (icon, responsive_text) = row_layout(116.0, "fixed-width", Some(100.0), true);
+    let (icon, responsive_text) = row_layout(116.0, Some("fixed-width"), Some(100.0), true);
     assert_eq!(icon.size.width, 36.0);
     assert_eq!(responsive_text.size.width, 100.0);
 }
