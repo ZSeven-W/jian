@@ -37,3 +37,28 @@ fn golden_vectors_have_the_recorded_shape() {
         .collect();
     assert_eq!(kinds, ["push", "pop", "replace"]);
 }
+
+#[test]
+fn ease_matches_the_recorded_curves() {
+    let curves = golden("curves.json");
+    for curve in curves["curves"].as_array().expect("curves") {
+        let schema: jian_ops_schema::motion::Easing =
+            serde_json::from_value(curve["easing"].clone()).expect("schema easing");
+        let easing = jian_core::action::services::Easing::from(&schema);
+        for (index, expected) in curve["values"]
+            .as_array()
+            .expect("values")
+            .iter()
+            .enumerate()
+        {
+            let progress = index as f32 / 1000.0;
+            let actual = f64::from(jian_core::motion::ease(easing, progress));
+            let expected = expected.as_f64().expect("number");
+            assert!(
+                (actual - expected).abs() <= EPSILON,
+                "{:?} at {progress}: {actual} != {expected}",
+                curve["easing"]
+            );
+        }
+    }
+}

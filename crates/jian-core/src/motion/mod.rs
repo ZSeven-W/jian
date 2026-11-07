@@ -9,3 +9,7 @@
 //! exporter, and the Jian hosts now share one implementation. Golden vectors
 //! recorded from the original implementation live in
 //! `tests/golden/motion/` and pin its behaviour, quirks included.
+
+pub mod curve;
+
+pub use curve::{ease, ease_in_out_cubic, ease_out_cubic};

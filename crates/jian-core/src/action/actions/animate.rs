@@ -222,18 +222,8 @@ fn validate_value(
 }
 
 fn parse_easing(authored: &str) -> Result<Easing, ActionError> {
-    match authored {
-        "linear" => Ok(Easing::Linear),
-        "ease" => Ok(Easing::Ease),
-        "ease_in" | "ease-in" => Ok(Easing::EaseIn),
-        "ease_out" | "ease-out" => Ok(Easing::EaseOut),
-        "ease_in_out" | "ease-in-out" => Ok(Easing::EaseInOut),
-        "standard" => Ok(Easing::Standard),
-        "emphasized" => Ok(Easing::Emphasized),
-        "emphasizedDecelerate" | "emphasized_decelerate" => Ok(Easing::EmphasizedDecelerate),
-        "emphasizedAccelerate" | "emphasized_accelerate" => Ok(Easing::EmphasizedAccelerate),
-        _ => Err(field_error("easing", "unknown easing")),
-    }
+    crate::motion::curve::parse_easing_name(authored)
+        .ok_or_else(|| field_error("easing", "unknown easing"))
 }
 
 fn parse_direction(authored: &str) -> Result<AnimationDirection, ActionError> {
