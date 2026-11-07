@@ -256,3 +256,82 @@ fn iterations_api_reports_infinite_and_caps_counts() {
         jian_ops_schema::Iterations::Count(1)
     );
 }
+
+fn animations_document(animations: &str) -> String {
+    motion_document(&format!(r##""animations":{animations}"##))
+}
+
+const FADE: &str =
+    r##""keyframes":[{"offset":0,"values":{"opacity":0}},{"offset":1,"values":{"opacity":1}}]"##;
+
+#[test]
+fn manual_trigger_with_id_round_trips() {
+    let source = animations_document(&format!(
+        r##"[{{"trigger":"manual","id":"reveal","durationMs":300,{FADE}}}]"##
+    ));
+    let animation = hero_animation_values(&source);
+    assert_eq!(animation["trigger"], "manual");
+    assert_eq!(animation["id"], "reveal");
+    let loaded = load_str(&source).expect("manual animation");
+    let (_, animations) = loaded.value.children[0].motion_declarations();
+    let animation = &animations.expect("animations")[0];
+    assert_eq!(animation.trigger, jian_ops_schema::MotionTrigger::Manual);
+    assert_eq!(animation.id.as_deref(), Some("reveal"));
+}
+
+#[test]
+fn animations_without_id_do_not_serialize_one() {
+    let source = animations_document(&format!(
+        r##"[{{"trigger":"mount","durationMs":300,{FADE}}}]"##
+    ));
+    assert!(hero_animation_values(&source).get("id").is_none());
+}
+
+#[test]
+fn mount_and_in_view_may_carry_ids_for_replay() {
+    let source = animations_document(&format!(
+        r##"[{{"trigger":"mount","id":"intro","durationMs":300,{FADE}}},{{"trigger":"inView","id":"rise","durationMs":300,{FADE}}}]"##
+    ));
+    assert!(load_str(&source).is_ok());
+}
+
+#[test]
+fn manual_ids_are_required_and_unique_per_node() {
+    for (name, animations) in [
+        (
+            "missing id",
+            format!(r##"[{{"trigger":"manual","durationMs":300,{FADE}}}]"##),
+        ),
+        (
+            "blank id",
+            format!(r##"[{{"trigger":"manual","id":"  ","durationMs":300,{FADE}}}]"##),
+        ),
+        (
+            "duplicate id",
+            format!(
+                r##"[{{"trigger":"manual","id":"a","durationMs":300,{FADE}}},{{"trigger":"mount","id":"a","durationMs":300,{FADE}}}]"##
+            ),
+        ),
+    ] {
+        match load_str(&animations_document(&animations)) {
+            Err(OpsSchemaError::MotionValidation { path, .. }) => {
+                assert!(path.contains("animations"), "{name}: {path}");
+            }
+            Ok(_) => panic!("{name}: expected a motion validation error"),
+            Err(other) => panic!("{name}: expected a motion validation error, got {other}"),
+        }
+    }
+}
+
+#[test]
+fn nodes_may_share_an_id_to_form_one_sequence() {
+    let source = format!(
+        r##"{{"version":"1.1","formatVersion":"1.1","children":[
+            {{"type":"rectangle","id":"a","width":10,"height":10,
+              "animations":[{{"trigger":"manual","id":"intro","durationMs":300,{FADE}}}]}},
+            {{"type":"rectangle","id":"b","width":10,"height":10,
+              "animations":[{{"trigger":"manual","id":"intro","delayMs":60,"durationMs":300,{FADE}}}]}}
+        ]}}"##
+    );
+    assert!(load_str(&source).is_ok());
+}

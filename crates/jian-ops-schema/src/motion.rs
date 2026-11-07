@@ -151,7 +151,8 @@ impl<'de> Deserialize<'de> for Keyframe {
     }
 }
 
-/// The two P1 lifecycle triggers.
+/// What starts a node animation: the screen mounting, the node scrolling into
+/// view, or an interaction (`play_motion`) naming the animation's `id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "export-ts", derive(ts_rs::TS))]
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
@@ -162,6 +163,9 @@ pub enum MotionTrigger {
     #[serde(rename = "inView")]
     #[cfg_attr(feature = "export-ts", ts(rename = "inView"))]
     InView,
+    #[serde(rename = "manual")]
+    #[cfg_attr(feature = "export-ts", ts(rename = "manual"))]
+    Manual,
 }
 
 /// Fill policy for a node declaration. P1 intentionally keeps only the CSS
@@ -188,6 +192,10 @@ pub enum NodeAnimationFillMode {
 #[serde(rename_all = "camelCase")]
 pub struct NodeAnimation {
     pub trigger: MotionTrigger,
+    /// Names the animation for `play_motion`. Required for `manual`, unique
+    /// within one node, and shared across nodes to form one sequence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(deserialize_with = "deserialize_keyframes")]
     pub keyframes: Vec<Keyframe>,
     pub duration_ms: u64,
@@ -422,16 +430,46 @@ fn validate_nodes(nodes: &[PenNode], path: &str) -> Result<(), (String, String)>
     for (index, node) in nodes.iter().enumerate() {
         let node_path = format!("{path}[{index}]");
         if let Some(animations) = node.motion_declarations().1 {
+            let mut ids = std::collections::BTreeSet::new();
             for (animation_index, animation) in animations.iter().enumerate() {
-                validate_keyframes(
-                    &animation.keyframes,
-                    &format!("{node_path}.animations[{animation_index}].keyframes"),
-                )?;
+                let animation_path = format!("{node_path}.animations[{animation_index}]");
+                validate_keyframes(&animation.keyframes, &format!("{animation_path}.keyframes"))?;
+                validate_animation_id(animation, &animation_path, &mut ids)?;
             }
         }
         if let Some(children) = node.children_ref() {
             validate_nodes(children, &format!("{node_path}.children"))?;
         }
+    }
+    Ok(())
+}
+
+fn validate_animation_id(
+    animation: &NodeAnimation,
+    path: &str,
+    ids: &mut std::collections::BTreeSet<String>,
+) -> Result<(), (String, String)> {
+    let Some(id) = animation.id.as_deref() else {
+        if animation.trigger == MotionTrigger::Manual {
+            return Err((
+                format!("{path}.id"),
+                "a manual animation needs an id for play_motion".to_owned(),
+            ));
+        }
+        return Ok(());
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        return Err((
+            format!("{path}.id"),
+            "animation id must not be blank".to_owned(),
+        ));
+    }
+    if !ids.insert(id.to_owned()) {
+        return Err((
+            format!("{path}.id"),
+            format!("animation id {id} is used twice on this node"),
+        ));
     }
     Ok(())
 }

@@ -505,9 +505,10 @@ export type MeshVertexStop = { row: number, col: number, color: string, };
 export type MotionPreference = "full" | "reduced";
 
 /**
- * The two P1 lifecycle triggers.
+ * What starts a node animation: the screen mounting, the node scrolling into
+ * view, or an interaction (`play_motion`) naming the animation's `id`.
  */
-export type MotionTrigger = "mount" | "inView";
+export type MotionTrigger = "mount" | "inView" | "manual";
 
 /**
  * Declarative per-node navigation: clicking the node pushes/replaces/pops a route.
@@ -518,7 +519,12 @@ export type NavigationRoute = { "push": string } | { "replace": string } | { "po
 /**
  * One time-based node animation declaration.
  */
-export type NodeAnimation = { trigger: MotionTrigger, keyframes: Array<Keyframe>, durationMs: bigint, delayMs: bigint, easing: Easing, iterations: number | "infinite", fillMode: NodeAnimationFillMode, once: boolean, } & ({ [key in string]?: JsonValue });
+export type NodeAnimation = { trigger: MotionTrigger,
+/**
+ * Names the animation for `play_motion`. Required for `manual`, unique
+ * within one node, and shared across nodes to form one sequence.
+ */
+id: string | null, keyframes: Array<Keyframe>, durationMs: bigint, delayMs: bigint, easing: Easing, iterations: number | "infinite", fillMode: NodeAnimationFillMode, once: boolean, } & ({ [key in string]?: JsonValue });
 
 /**
  * Fill policy for a node declaration. P1 intentionally keeps only the CSS

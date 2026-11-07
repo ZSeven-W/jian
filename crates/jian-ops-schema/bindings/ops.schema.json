@@ -8734,6 +8734,13 @@
         "trigger": {
           "$ref": "#/definitions/MotionTrigger"
         },
+        "id": {
+          "description": "Names the animation for `play_motion`. Required for `manual`, unique within one node, and shared across nodes to form one sequence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "keyframes": {
           "type": "array",
           "items": {
@@ -8771,11 +8778,12 @@
       "additionalProperties": true
     },
     "MotionTrigger": {
-      "description": "The two P1 lifecycle triggers.",
+      "description": "What starts a node animation: the screen mounting, the node scrolling into view, or an interaction (`play_motion`) naming the animation's `id`.",
       "type": "string",
       "enum": [
         "mount",
-        "inView"
+        "inView",
+        "manual"
       ]
     },
     "Keyframe": {
