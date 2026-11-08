@@ -170,12 +170,7 @@ fn number(value: &RuntimeValue) -> Option<f32> {
 
 fn color(value: &RuntimeValue) -> Option<Color> {
     let color = jian_core::scene::Color::from_hex(value.as_str()?)?;
-    Some(Color::rgba_u8(
-        color.r(),
-        color.g(),
-        color.b(),
-        f32::from(color.a()) / 255.0,
-    ))
+    Some(Color::from_jian(color))
 }
 
 fn scale_axis(node: &mut SceneNode, scale: f32, horizontal: bool) {
