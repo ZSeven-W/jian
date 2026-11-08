@@ -193,8 +193,9 @@ fn scale_axis(node: &mut SceneNode, scale: f32, horizontal: bool) {
 
 /// Shift a scene subtree by a visual offset: bounds, cached aggregate
 /// bounds, polygon points and path anchors all move together so
-/// strokes, fills and text stay attached to the node.
-fn translate_subtree(node: &mut SceneNode, dx: f32, dy: f32) {
+/// strokes, fills and text stay attached to the node. Non-finite or zero
+/// offsets leave the subtree untouched.
+pub fn translate_subtree(node: &mut SceneNode, dx: f32, dy: f32) {
     if !dx.is_finite() || !dy.is_finite() || (dx == 0.0 && dy == 0.0) {
         return;
     }
@@ -274,6 +275,16 @@ mod tests {
         apply_value(&mut parent, BindingTarget::ScaleX, &value(json!(0.5)));
         assert_eq!(parent.bounds.size.x, 50.0);
         assert_eq!(parent.bounds.origin.x, 35.0);
+    }
+
+    #[test]
+    fn translation_ignores_non_finite_offsets() {
+        let mut node = rect_node("n");
+        translate_subtree(&mut node, f32::NAN, 4.0);
+        translate_subtree(&mut node, 0.0, f32::INFINITY);
+        assert_eq!(node.bounds, Rect::xywh(10.0, 20.0, 100.0, 40.0));
+        translate_subtree(&mut node, -2.0, 4.0);
+        assert_eq!(node.bounds, Rect::xywh(8.0, 24.0, 100.0, 40.0));
     }
 
     #[test]
