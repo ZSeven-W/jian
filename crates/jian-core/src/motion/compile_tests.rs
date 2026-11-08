@@ -1,3 +1,4 @@
+use super::super::curve::ease;
 use super::*;
 use crate::scene::Color;
 use serde_json::json;
@@ -131,6 +132,23 @@ fn two_keyframes_with_a_named_curve_compile_to_its_own_bezier() {
             compiled.segments[0].bezier
         );
     }
+}
+
+#[test]
+fn segments_start_and_end_on_the_authored_values() {
+    // The runtime's coarse bezier solve starts this slide at 15.9997; the
+    // export starts at the authored 16.
+    let compiled = assert_compiles_faithfully(
+        "decelerate slide",
+        &animation(
+            json!("emphasizedDecelerate"),
+            json!({"from": {"translateY": 16}, "to": {"translateY": 0}}),
+        ),
+    );
+    let first = compiled.segments.first().expect("segments");
+    let last = compiled.segments.last().expect("segments");
+    assert_eq!(first.from["translateY"].as_f64(), Some(16.0));
+    assert_eq!(last.to["translateY"].as_f64(), Some(0.0));
 }
 
 #[test]

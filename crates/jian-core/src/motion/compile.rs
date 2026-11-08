@@ -8,7 +8,7 @@
 //! affine function of `E`, so one cubic-bezier (the matching slice of `E`,
 //! normalized) times all of them. Clamped stretches become holds.
 
-use super::curve::{as_cubic, bezier, ease, CubicPiece};
+use super::curve::{as_cubic, bezier, CubicPiece};
 use super::interpolate::{interpolate_kind, interpolate_stops};
 use crate::action::animation_registry::{animatable_property_registry, AnimationInterpolate};
 use crate::action::services::{AnimationProperty, Easing};
@@ -64,19 +64,11 @@ pub fn compile(declaration: &NodeAnimation) -> CompiledAnimation {
     let cuts = cut_points(&pieces, &levels);
     let mut segments = Vec::new();
     for window in cuts.windows(2) {
-        push_segments(
-            &mut segments,
-            &pieces,
-            &tracks,
-            easing,
-            window[0],
-            window[1],
-            0,
-        );
+        push_segments(&mut segments, &pieces, &tracks, window[0], window[1], 0);
     }
     if segments.len() > MAX_SEGMENTS {
         return CompiledAnimation {
-            segments: sampled_segments(&tracks, easing),
+            segments: sampled_segments(&tracks, &pieces),
             degraded: true,
         };
     }
@@ -111,9 +103,13 @@ fn tracks(declaration: &NodeAnimation) -> Vec<Track> {
         .collect()
 }
 
-/// The runtime's values for every property at iteration time `u`.
-fn values_at(tracks: &[Track], easing: Easing, u: f32) -> BTreeMap<String, Value> {
-    let progress = ease(easing, u);
+/// Every property's value at iteration time `u`, on the exact curve the
+/// segments' beziers are cut from (clamped like the runtime). The runtime
+/// solves a bezier's x with only 16 bisection steps, so it can differ by up
+/// to 5e-4 in progress; the export should not copy that noise (it would
+/// start a 16 px slide at 15.9997 px).
+fn values_at(tracks: &[Track], pieces: &[CubicPiece], u: f32) -> BTreeMap<String, Value> {
+    let progress = raw(pieces, u).clamp(0.0, 1.0);
     tracks
         .iter()
         .map(|track| {
@@ -136,6 +132,10 @@ fn piece_at(pieces: &[CubicPiece], u: f32) -> &CubicPiece {
 fn parameter_at(piece: &CubicPiece, u: f32) -> f32 {
     let span = (piece.x1 - piece.x0).max(f32::EPSILON);
     let local = ((u - piece.x0) / span).clamp(0.0, 1.0);
+    // Bisection never lands on the ends exactly; a piece's ends are exact.
+    if local <= 0.0 || local >= 1.0 {
+        return local;
+    }
     let (mut low, mut high) = (0.0_f32, 1.0_f32);
     for _ in 0..40 {
         let t = (low + high) / 2.0;
@@ -208,12 +208,10 @@ fn refine_crossing(
     (low + high) / 2.0
 }
 
-#[allow(clippy::too_many_arguments)]
 fn push_segments(
     out: &mut Vec<CompiledSegment>,
     pieces: &[CubicPiece],
     tracks: &[Track],
-    easing: Easing,
     u0: f32,
     u1: f32,
     depth: u32,
@@ -221,8 +219,8 @@ fn push_segments(
     let segment = |bezier| CompiledSegment {
         t0: u0,
         t1: u1,
-        from: values_at(tracks, easing, u0),
-        to: values_at(tracks, easing, u1),
+        from: values_at(tracks, pieces, u0),
+        to: values_at(tracks, pieces, u1),
         bezier,
     };
     let middle = raw(pieces, (u0 + u1) / 2.0);
@@ -235,8 +233,8 @@ fn push_segments(
         Some(bezier) => out.push(segment(bezier)),
         None if depth < 8 => {
             let half = (u0 + u1) / 2.0;
-            push_segments(out, pieces, tracks, easing, u0, half, depth + 1);
-            push_segments(out, pieces, tracks, easing, half, u1, depth + 1);
+            push_segments(out, pieces, tracks, u0, half, depth + 1);
+            push_segments(out, pieces, tracks, half, u1, depth + 1);
         }
         None => out.push(segment(LINEAR)),
     }
@@ -286,7 +284,7 @@ fn split_at(p: Polygon, t: f32) -> (Polygon, Polygon) {
     ([p[0], a, d, f], [f, e, c, p[3]])
 }
 
-fn sampled_segments(tracks: &[Track], easing: Easing) -> Vec<CompiledSegment> {
+fn sampled_segments(tracks: &[Track], pieces: &[CubicPiece]) -> Vec<CompiledSegment> {
     (0..DEGRADED_SEGMENTS)
         .map(|index| {
             let u0 = index as f32 / DEGRADED_SEGMENTS as f32;
@@ -294,8 +292,8 @@ fn sampled_segments(tracks: &[Track], easing: Easing) -> Vec<CompiledSegment> {
             CompiledSegment {
                 t0: u0,
                 t1: u1,
-                from: values_at(tracks, easing, u0),
-                to: values_at(tracks, easing, u1),
+                from: values_at(tracks, pieces, u0),
+                to: values_at(tracks, pieces, u1),
                 bezier: LINEAR,
             }
         })
