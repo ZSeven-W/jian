@@ -335,3 +335,36 @@ fn nodes_may_share_an_id_to_form_one_sequence() {
     );
     assert!(load_str(&source).is_ok());
 }
+
+#[test]
+fn editors_validate_an_animation_list_like_loading_does() {
+    use jian_ops_schema::motion::validate_animations;
+    let animations: Vec<NodeAnimation> = serde_json::from_value(serde_json::json!([
+        {"trigger": "mount", "keyframes": [
+            {"offset": 0, "values": {"opacity": 0}},
+            {"offset": 1, "values": {"opacity": 1}}
+        ], "durationMs": 300},
+        {"trigger": "manual", "id": "pulse", "keyframes": [
+            {"offset": 0, "values": {"scaleX": 1}},
+            {"offset": 1, "values": {"scaleX": 1.1}}
+        ], "durationMs": 200}
+    ]))
+    .expect("animations");
+    assert_eq!(validate_animations(&animations, "$.animations"), Ok(()));
+
+    let mut unsorted = animations.clone();
+    unsorted[0].keyframes.swap(0, 1);
+    let (path, _) = validate_animations(&unsorted, "$.animations").expect_err("unsorted");
+    assert_eq!(path, "$.animations[0].keyframes");
+
+    let mut duplicate = animations.clone();
+    duplicate[0].id = Some("pulse".to_owned());
+    let (path, reason) = validate_animations(&duplicate, "$.animations").expect_err("duplicate id");
+    assert_eq!(path, "$.animations[1].id");
+    assert!(reason.contains("used twice"), "{reason}");
+
+    let mut anonymous = animations;
+    anonymous[1].id = None;
+    let (path, _) = validate_animations(&anonymous, "$.animations").expect_err("manual without id");
+    assert_eq!(path, "$.animations[1].id");
+}

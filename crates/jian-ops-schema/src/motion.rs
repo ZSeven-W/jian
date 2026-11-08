@@ -430,16 +430,29 @@ fn validate_nodes(nodes: &[PenNode], path: &str) -> Result<(), (String, String)>
     for (index, node) in nodes.iter().enumerate() {
         let node_path = format!("{path}[{index}]");
         if let Some(animations) = node.motion_declarations().1 {
-            let mut ids = std::collections::BTreeSet::new();
-            for (animation_index, animation) in animations.iter().enumerate() {
-                let animation_path = format!("{node_path}.animations[{animation_index}]");
-                validate_keyframes(&animation.keyframes, &format!("{animation_path}.keyframes"))?;
-                validate_animation_id(animation, &animation_path, &mut ids)?;
-            }
+            validate_animations(animations, &format!("{node_path}.animations"))?;
         }
         if let Some(children) = node.children_ref() {
             validate_nodes(children, &format!("{node_path}.children"))?;
         }
+    }
+    Ok(())
+}
+
+/// Check one node's animation list the way loading a document does:
+/// keyframes run from offset 0 to 1 in order over registered properties,
+/// manual animations carry an id, and ids are unique on the node. Editors
+/// call it before writing an animation so they cannot save a document that
+/// would no longer load. Errors are `(json path under `path`, reason)`.
+pub fn validate_animations(
+    animations: &[NodeAnimation],
+    path: &str,
+) -> Result<(), (String, String)> {
+    let mut ids = std::collections::BTreeSet::new();
+    for (index, animation) in animations.iter().enumerate() {
+        let animation_path = format!("{path}[{index}]");
+        validate_keyframes(&animation.keyframes, &format!("{animation_path}.keyframes"))?;
+        validate_animation_id(animation, &animation_path, &mut ids)?;
     }
     Ok(())
 }
