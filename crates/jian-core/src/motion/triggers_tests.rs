@@ -365,3 +365,164 @@ fn pinned_nodes_fire_wherever_they_sit() {
     triggers.observe_in_view(&runtime, &scene, &timeline, MotionPreference::Full, 0);
     assert_eq!(timeline.track_count(), 1);
 }
+
+fn sequence_runtime() -> Runtime {
+    let manual = |id: &str, delay: u64| {
+        json!({"type": "rectangle", "id": id, "width": 10, "height": 10,
+            "animations": [{"trigger": "manual", "id": "intro", "durationMs": 100,
+                "delayMs": delay, "easing": "linear",
+                "keyframes": {"from": {"opacity": 0}, "to": {"opacity": 1}}}]})
+    };
+    runtime(
+        json!([{"type": "frame", "id": "list", "width": 100, "height": 100,
+        "children": [manual("a", 0), manual("b", 50),
+            {"type": "rectangle", "id": "c", "width": 10, "height": 10,
+             "animations": [{"trigger": "manual", "id": "other", "durationMs": 100,
+                "keyframes": {"from": {"opacity": 0}, "to": {"opacity": 1}}}]}]},
+        manual("outside", 0)]),
+    )
+}
+
+fn sequence_scene() -> StubScene {
+    let mut scene = StubScene::default()
+        .node("list", rect(0.0, 0.0, 100.0, 100.0))
+        .node("a", rect(0.0, 0.0, 10.0, 10.0))
+        .node("b", rect(0.0, 20.0, 10.0, 10.0))
+        .node("c", rect(0.0, 40.0, 10.0, 10.0))
+        .node("outside", rect(200.0, 0.0, 10.0, 10.0));
+    for child in ["a", "b", "c"] {
+        scene.parents.insert(child.into(), "list".into());
+    }
+    scene
+}
+
+fn control(mode: MotionControlMode) -> MotionControl {
+    MotionControl {
+        target: "list".into(),
+        animation: "intro".into(),
+        mode,
+    }
+}
+
+#[test]
+fn a_container_plays_every_matching_animation_as_a_staggered_sequence() {
+    let (runtime, scene) = (sequence_runtime(), sequence_scene());
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    let matched = triggers.control(
+        &control(MotionControlMode::Play),
+        &runtime,
+        &scene,
+        &timeline,
+        MotionPreference::Full,
+        0,
+    );
+    assert_eq!(
+        matched, 2,
+        "a and b share the id; c and outside do not match"
+    );
+    timeline.tick(50);
+    assert_eq!(timeline.current_override("a", &opacity()), Some(json!(0.5)));
+    assert_eq!(timeline.current_override("b", &opacity()), Some(json!(0)));
+    assert_eq!(timeline.current_override("outside", &opacity()), None);
+}
+
+#[test]
+fn play_leaves_a_running_animation_alone_but_restart_does_not() {
+    let (runtime, scene) = (sequence_runtime(), sequence_scene());
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    let full = MotionPreference::Full;
+    triggers.control(
+        &control(MotionControlMode::Play),
+        &runtime,
+        &scene,
+        &timeline,
+        full,
+        0,
+    );
+    timeline.tick(50);
+    triggers.control(
+        &control(MotionControlMode::Play),
+        &runtime,
+        &scene,
+        &timeline,
+        full,
+        50,
+    );
+    assert_eq!(timeline.current_override("a", &opacity()), Some(json!(0.5)));
+    triggers.control(
+        &control(MotionControlMode::Restart),
+        &runtime,
+        &scene,
+        &timeline,
+        full,
+        50,
+    );
+    assert_eq!(timeline.current_override("a", &opacity()), Some(json!(0)));
+}
+
+#[test]
+fn reverse_plays_back_and_stop_returns_to_the_authored_look() {
+    let (runtime, scene) = (sequence_runtime(), sequence_scene());
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    let full = MotionPreference::Full;
+    triggers.control(
+        &control(MotionControlMode::Reverse),
+        &runtime,
+        &scene,
+        &timeline,
+        full,
+        0,
+    );
+    timeline.tick(25);
+    assert_eq!(
+        timeline.current_override("a", &opacity()),
+        Some(json!(0.75))
+    );
+    triggers.control(
+        &control(MotionControlMode::Stop),
+        &runtime,
+        &scene,
+        &timeline,
+        full,
+        25,
+    );
+    assert_eq!(timeline.current_override("a", &opacity()), None);
+    assert_eq!(timeline.track_count(), 0);
+}
+
+#[test]
+fn reduced_reverse_lands_on_the_first_keyframe() {
+    let (runtime, scene) = (sequence_runtime(), sequence_scene());
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    triggers.control(
+        &control(MotionControlMode::Reverse),
+        &runtime,
+        &scene,
+        &timeline,
+        MotionPreference::Reduced,
+        0,
+    );
+    assert_eq!(timeline.current_override("a", &opacity()), Some(json!(0)));
+}
+
+#[test]
+fn an_unknown_id_matches_nothing() {
+    let (runtime, scene) = (sequence_runtime(), sequence_scene());
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    let missing = MotionControl {
+        animation: "missing".into(),
+        ..control(MotionControlMode::Play)
+    };
+    assert_eq!(
+        triggers.control(
+            &missing,
+            &runtime,
+            &scene,
+            &timeline,
+            MotionPreference::Full,
+            0
+        ),
+        0
+    );
+    assert_eq!(timeline.track_count(), 0);
+}

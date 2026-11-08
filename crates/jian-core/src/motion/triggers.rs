@@ -22,6 +22,27 @@ use std::rc::Rc;
 /// Animation tracks one screen may run at once.
 pub const MOTION_TRACK_BUDGET: usize = 32;
 
+/// What an interaction asks of the animations named by a `play_motion`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionControlMode {
+    /// Start unless the animation is already running.
+    Play,
+    /// Start from the beginning even if running.
+    Restart,
+    /// Play from the last keyframe back to the first.
+    Reverse,
+    /// Stop and return to the authored look.
+    Stop,
+}
+
+/// Animations with id `animation` on `target` or any node inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MotionControl {
+    pub target: String,
+    pub animation: String,
+    pub mode: MotionControlMode,
+}
+
 /// Per-screen trigger bookkeeping, cleared by [`MotionTriggers::reset_screen`].
 #[derive(Default)]
 struct MotionInner {
@@ -304,10 +325,66 @@ impl MotionTriggers {
                     animation,
                     effective,
                     now_ms,
+                    AnimationDirection::Normal,
                 );
             }
         }
         self.inner.borrow_mut().visible_in_view = visible_now;
+    }
+
+    /// Apply `control` to every animation with its id on the target or a
+    /// node inside it; each node keeps its own `delayMs`, so a shared id plays
+    /// as one staggered sequence. Returns how many animations matched.
+    pub fn control(
+        &self,
+        control: &MotionControl,
+        runtime: &Runtime,
+        view: &dyn MotionSceneView,
+        animation: &MotionTimeline,
+        effective: MotionPreference,
+        now_ms: u64,
+    ) -> usize {
+        let mut matched = 0;
+        for (target, _, animations) in node_declarations(runtime, false) {
+            if !view.subtree_contains(&control.target, &target) {
+                continue;
+            }
+            for declaration in animations
+                .iter()
+                .filter(|declaration| declaration.id.as_deref() == Some(control.animation.as_str()))
+            {
+                matched += 1;
+                let properties = declared_properties(declaration);
+                match control.mode {
+                    MotionControlMode::Stop => {
+                        for property in &properties {
+                            let _ = animation.cancel(&target, property);
+                        }
+                    }
+                    MotionControlMode::Play
+                        if properties
+                            .iter()
+                            .any(|property| animation.has_active(&target, property)) => {}
+                    mode => {
+                        let direction = if mode == MotionControlMode::Reverse {
+                            AnimationDirection::Reverse
+                        } else {
+                            AnimationDirection::Normal
+                        };
+                        self.start_node_animation(
+                            &target,
+                            declaration,
+                            view,
+                            animation,
+                            effective,
+                            now_ms,
+                            direction,
+                        );
+                    }
+                }
+            }
+        }
+        matched
     }
 
     /// Start every `mount` animation in the document.
@@ -329,6 +406,7 @@ impl MotionTriggers {
                         animation,
                         effective,
                         now_ms,
+                        AnimationDirection::Normal,
                     );
                 }
             }
@@ -394,6 +472,7 @@ impl MotionTriggers {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_node_animation(
         &self,
         target: &str,
@@ -402,6 +481,7 @@ impl MotionTriggers {
         animation: &MotionTimeline,
         effective: MotionPreference,
         now_ms: u64,
+        direction: AnimationDirection,
     ) {
         if view.node_rect(target).is_none() {
             return;
@@ -433,7 +513,13 @@ impl MotionTriggers {
             let final_value = stops.last().expect("first stop exists").1.clone();
             if effective == MotionPreference::Reduced {
                 if declaration.fill_mode == NodeAnimationFillMode::Forwards {
-                    animation.set_instant(target, &property, final_value, Some(&base));
+                    // A reversed animation ends on its first keyframe.
+                    let landing = if direction == AnimationDirection::Reverse {
+                        first.1.clone()
+                    } else {
+                        final_value
+                    };
+                    animation.set_instant(target, &property, landing, Some(&base));
                 }
                 continue;
             }
@@ -454,7 +540,7 @@ impl MotionTriggers {
                 easing: Easing::from(&declaration.easing),
                 // An infinite animation runs u32::MAX passes: effectively forever.
                 iterations: declaration.iterations.count_or(u32::MAX).max(1),
-                direction: AnimationDirection::Normal,
+                direction,
                 // Lifecycle keyframe 0 is the pre-reveal look. Schema P1 only
                 // has forwards|none, so map those onto Both|Backwards to hold
                 // the first keyframe for the whole delay instead of painting
@@ -472,6 +558,24 @@ impl MotionTriggers {
             }
         }
     }
+}
+
+/// The registered P1 properties an animation's keyframes touch.
+fn declared_properties(declaration: &NodeAnimation) -> Vec<AnimationProperty> {
+    let names: BTreeSet<&str> = declaration
+        .keyframes
+        .iter()
+        .flat_map(|keyframe| keyframe.values.keys().map(String::as_str))
+        .filter(|name| P1_MOTION_PROPERTIES.contains(name))
+        .collect();
+    names
+        .into_iter()
+        .filter_map(|name| {
+            animatable_property_registry()
+                .get(name)
+                .map(|descriptor| AnimationProperty::from_registered(name, descriptor.apply))
+        })
+        .collect()
 }
 
 #[cfg(test)]
