@@ -100,6 +100,17 @@ impl Color {
         Self { a, ..self }
     }
 
+    /// The widget colour for a jian scene colour: the inverse of
+    /// [`Self::to_jian`], with the 8-bit alpha mapped onto 0.0..=1.0.
+    pub fn from_jian(color: jian_core::scene::Color) -> Self {
+        Self::rgba_u8(
+            color.r(),
+            color.g(),
+            color.b(),
+            f32::from(color.a()) / 255.0,
+        )
+    }
+
     pub fn to_jian(self) -> jian_core::scene::Color {
         fn ch(v: f32) -> u8 {
             (v.clamp(0.0, 1.0) * 255.0).round() as u8
@@ -152,5 +163,12 @@ mod tests {
     fn to_jian_round_trips_named_colors() {
         let j = Color::WHITE.to_jian();
         assert_eq!(j, jian_core::scene::Color::rgba(255, 255, 255, 255));
+    }
+
+    #[test]
+    fn from_jian_inverts_to_jian() {
+        let scene = jian_core::scene::Color::rgba(12, 34, 56, 128);
+        assert_eq!(Color::from_jian(scene).to_jian(), scene);
+        assert_eq!(Color::from_jian(scene).a, 128.0 / 255.0);
     }
 }
