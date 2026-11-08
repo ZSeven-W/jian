@@ -22,6 +22,11 @@ use std::rc::Rc;
 /// Notified when a request reaches the timeline; hosts use it for traces.
 pub trait MotionObserver {
     fn animation_requested(&self, target: &str, property: &str, at_ms: u64);
+
+    /// A declaration was skipped (unsupported property, track budget).
+    /// jian-core carries no logging dependency, so hosts route these to
+    /// their own logs.
+    fn motion_warning(&self, _message: &str) {}
 }
 
 /// The invalidation an animated property causes. Properties outside the
@@ -116,6 +121,13 @@ impl MotionTimeline {
     /// Report every accepted request, for host debug traces.
     pub fn set_observer(&self, observer: Rc<dyn MotionObserver>) {
         *self.observer.borrow_mut() = Some(observer);
+    }
+
+    /// Forward a skipped-declaration warning to the observer, if any.
+    pub fn warn(&self, message: &str) {
+        if let Some(observer) = self.observer.borrow().as_ref() {
+            observer.motion_warning(message);
+        }
     }
 
     pub fn take_pending(&self) -> Vec<AnimationRequest> {

@@ -113,3 +113,20 @@ fn the_observer_hears_every_accepted_request() {
     timeline.request(&request("box", 1));
     assert_eq!(counter.0.get(), 1);
 }
+
+#[test]
+fn warnings_reach_the_observer_and_are_optional() {
+    struct Warnings(RefCell<Vec<String>>);
+    impl MotionObserver for Warnings {
+        fn animation_requested(&self, _: &str, _: &str, _: u64) {}
+        fn motion_warning(&self, message: &str) {
+            self.0.borrow_mut().push(message.to_owned());
+        }
+    }
+    let timeline = MotionTimeline::default();
+    timeline.warn("dropped before an observer exists");
+    let warnings = Rc::new(Warnings(RefCell::new(Vec::new())));
+    timeline.set_observer(warnings.clone());
+    timeline.warn("budget exceeded");
+    assert_eq!(*warnings.0.borrow(), ["budget exceeded"]);
+}
