@@ -10,8 +10,8 @@ use jian_ops_schema::PenDocument;
 /// Material 3 `md.sys.motion.duration.short3` (150 ms) with the
 /// `standard` curve (`md.sys.motion.easing.standard`, cubic-bezier(0.2, 0, 0, 1)).
 /// Used as the intrinsic switch on/off tween when the node has no `transition`.
-/// Sources: https://m3.material.io/styles/motion/easing-and-duration/tokens-specs
-/// and https://m3.material.io/components/switch/specs
+/// Sources: <https://m3.material.io/styles/motion/easing-and-duration/tokens-specs>
+/// and <https://m3.material.io/components/switch/specs>
 pub const SWITCH_TOGGLE_DURATION_MS: u64 = 150;
 
 /// A node's motion declarations, keyed by its schema id.
