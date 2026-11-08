@@ -15,6 +15,8 @@ pub mod declarations;
 pub mod in_view;
 pub mod interpolate;
 pub mod scene_view;
+#[cfg(test)]
+mod test_support;
 pub mod timeline;
 pub mod triggers;
 
