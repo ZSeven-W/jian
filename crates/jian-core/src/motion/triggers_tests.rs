@@ -190,3 +190,71 @@ fn lifecycle_animations_paint_keyframe_zero_before_they_start() {
     assert_eq!(timeline.current_override("played", &opacity()), None);
     assert_eq!(timeline.track_count(), 0);
 }
+
+fn transition_runtime(properties: Value) -> Runtime {
+    runtime(
+        json!([{"type": "rectangle", "id": "button", "width": 10, "height": 10,
+        "transition": {"durationMs": 200, "easing": "linear", "properties": properties}}]),
+    )
+}
+
+#[test]
+fn a_changed_painted_value_starts_a_transition_from_the_old_one() {
+    let runtime = transition_runtime(json!(["opacity"]));
+    let mut scene = StubScene::default().node("button", rect(0.0, 0.0, 10.0, 10.0));
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    triggers.observe_transitions(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(
+        timeline.track_count(),
+        0,
+        "the first observation only records"
+    );
+    scene
+        .values
+        .insert(("button".into(), "opacity".into()), json!(0.0));
+    triggers.observe_transitions(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    timeline.tick(100);
+    assert_eq!(
+        timeline.current_override("button", &opacity()),
+        Some(json!(0.5))
+    );
+    // Retarget mid-tween: the new tween starts from what is on screen.
+    scene
+        .values
+        .insert(("button".into(), "opacity".into()), json!(1.0));
+    triggers.observe_transitions(&runtime, &scene, &timeline, MotionPreference::Full, 100);
+    timeline.tick(200);
+    assert_eq!(
+        timeline.current_override("button", &opacity()),
+        Some(json!(0.75))
+    );
+}
+
+#[test]
+fn reduced_motion_applies_transitions_instantly() {
+    let runtime = transition_runtime(json!(["opacity"]));
+    let mut scene = StubScene::default().node("button", rect(0.0, 0.0, 10.0, 10.0));
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    triggers.observe_transitions(&runtime, &scene, &timeline, MotionPreference::Reduced, 0);
+    scene
+        .values
+        .insert(("button".into(), "opacity".into()), json!(0.2));
+    triggers.observe_transitions(&runtime, &scene, &timeline, MotionPreference::Reduced, 0);
+    assert_eq!(timeline.track_count(), 0);
+    // The instant value equals the painted base, so no override remains.
+    assert_eq!(timeline.current_override("button", &opacity()), None);
+}
+
+#[test]
+fn layout_properties_in_a_transition_are_rejected_with_a_warning() {
+    let runtime = transition_runtime(json!(["width", "opacity"]));
+    let scene = StubScene::default().node("button", rect(0.0, 0.0, 10.0, 10.0));
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    let warnings = Rc::new(Warnings::default());
+    timeline.set_observer(warnings.clone());
+    triggers.observe_transitions(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(
+        *warnings.0.borrow(),
+        ["motion property width on node button rejected"]
+    );
+}

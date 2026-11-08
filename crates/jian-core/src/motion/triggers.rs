@@ -26,6 +26,7 @@ pub const MOTION_TRACK_BUDGET: usize = 32;
 #[derive(Default)]
 struct MotionInner {
     lifecycle_started: bool,
+    observed: BTreeMap<(String, AnimationProperty), Value>,
     animation_tracks: BTreeSet<(String, AnimationProperty)>,
 }
 
@@ -92,6 +93,89 @@ impl MotionTriggers {
             .borrow_mut()
             .animation_tracks
             .insert((target.to_owned(), property.clone()));
+    }
+
+    /// Tween every `transition` property whose painted value changed since
+    /// the last observation. The first observation only records values; a
+    /// retarget starts from the value currently on screen.
+    pub fn observe_transitions(
+        &self,
+        runtime: &Runtime,
+        view: &dyn MotionSceneView,
+        animation: &MotionTimeline,
+        effective: MotionPreference,
+        now_ms: u64,
+    ) {
+        let declarations = node_declarations(runtime, true);
+        for (target, transition, _) in declarations {
+            let Some(transition) = transition else {
+                continue;
+            };
+            if view.node_rect(&target).is_none() {
+                continue;
+            }
+            let properties: Vec<&str> = transition
+                .properties
+                .as_ref()
+                .map(|properties| properties.iter().map(String::as_str).collect())
+                .unwrap_or_else(|| P1_MOTION_PROPERTIES.to_vec());
+            for name in properties {
+                if !P1_MOTION_PROPERTIES.contains(&name) {
+                    animation.warn(&format!("motion property {name} on node {target} rejected"));
+                    continue;
+                }
+                let Some(descriptor) = animatable_property_registry().get(name) else {
+                    continue;
+                };
+                let property = AnimationProperty::from_registered(name, descriptor.apply);
+                let Some(desired) = view.property(&target, &property) else {
+                    continue;
+                };
+                let key = (target.clone(), property.clone());
+                let previous = self
+                    .inner
+                    .borrow_mut()
+                    .observed
+                    .insert(key, desired.clone());
+                let Some(previous) = previous else {
+                    continue;
+                };
+                if previous == desired {
+                    continue;
+                }
+                let current = animation
+                    .current_override(&target, &property)
+                    .unwrap_or(previous);
+                let request = AnimationRequest {
+                    target: target.clone(),
+                    property: property.clone(),
+                    from: Some(current.clone()),
+                    to: desired.clone(),
+                    stops: None,
+                    duration_ms: if effective == MotionPreference::Reduced {
+                        0
+                    } else {
+                        transition.duration_ms
+                    },
+                    delay_ms: 0,
+                    easing: Easing::from(&transition.easing),
+                    iterations: 1,
+                    direction: AnimationDirection::Normal,
+                    fill_mode: AnimationFillMode::Forwards,
+                    requested_at_ms: now_ms,
+                };
+                if effective == MotionPreference::Reduced {
+                    animation.set_instant(
+                        &target,
+                        &property,
+                        desired,
+                        Some(&view.property(&target, &property).unwrap_or(Value::Null)),
+                    );
+                } else {
+                    let _ = animation.start_immediate(request, current, Some(desired), now_ms);
+                }
+            }
+        }
     }
 
     /// Start every `mount` animation in the document.
