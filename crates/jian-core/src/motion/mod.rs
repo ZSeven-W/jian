@@ -11,10 +11,12 @@
 //! `tests/golden/motion/` and pin its behaviour, quirks included.
 
 pub mod curve;
+pub mod in_view;
 pub mod interpolate;
 pub mod scene_view;
 pub mod timeline;
 
 pub use curve::{as_cubic, ease, ease_in_out_cubic, ease_out_cubic, inverse, CubicPiece};
+pub use in_view::InViewWindow;
 pub use scene_view::MotionSceneView;
 pub use timeline::{invalidation_for, sample_request, MotionObserver, MotionTimeline};
