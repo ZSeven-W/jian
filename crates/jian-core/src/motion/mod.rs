@@ -11,6 +11,7 @@
 //! `tests/golden/motion/` and pin its behaviour, quirks included.
 
 pub mod curve;
+pub mod declarations;
 pub mod in_view;
 pub mod interpolate;
 pub mod scene_view;
