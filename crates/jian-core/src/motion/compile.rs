@@ -187,7 +187,32 @@ fn cut_points(pieces: &[CubicPiece], levels: &[f32]) -> Vec<f32> {
     }
     cuts.sort_by(f32::total_cmp);
     cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
-    cuts
+    merge_near_cuts(cuts, pieces)
+}
+
+/// Drop cuts within a grid step and a half of a kept one. A steep curve
+/// reaches 1.0 in f32 a step before the end, and that touch would otherwise
+/// cut off a near-empty hold. The ends and the curve's piece boundaries
+/// always stay: a segment must not straddle two pieces.
+fn merge_near_cuts(cuts: Vec<f32>, pieces: &[CubicPiece]) -> Vec<f32> {
+    const NEAR: f32 = 1.5 / SCAN_STEPS as f32;
+    let fixed =
+        |u: f32| u <= 0.0 || u >= 1.0 || pieces.iter().any(|piece| (u - piece.x0).abs() < 1e-6);
+    let mut kept: Vec<f32> = Vec::with_capacity(cuts.len());
+    for cut in cuts {
+        if fixed(cut) {
+            while kept
+                .last()
+                .is_some_and(|&last| !fixed(last) && cut - last < NEAR)
+            {
+                kept.pop();
+            }
+            kept.push(cut);
+        } else if !kept.last().is_some_and(|&last| cut - last < NEAR) {
+            kept.push(cut);
+        }
+    }
+    kept
 }
 
 fn refine_crossing(

@@ -152,6 +152,28 @@ fn segments_start_and_end_on_the_authored_values() {
 }
 
 #[test]
+fn a_curve_that_reaches_one_early_compiles_to_its_own_bezier() {
+    // In f32 this curve hits 1.0 a grid step before the end; that touch
+    // must not cut off a near-empty hold segment.
+    let compiled = assert_compiles_faithfully(
+        "decelerate fade",
+        &animation(
+            json!("emphasizedDecelerate"),
+            json!({"from": {"opacity": 0}, "to": {"opacity": 1}}),
+        ),
+    );
+    assert_eq!(compiled.segments.len(), 1, "{:?}", compiled.segments);
+    let expected = [0.05, 0.7, 0.1, 1.0];
+    for (actual, expected) in compiled.segments[0].bezier.iter().zip(expected) {
+        assert!(
+            (actual - expected).abs() < 1e-4,
+            "{:?}",
+            compiled.segments[0].bezier
+        );
+    }
+}
+
+#[test]
 fn colours_sparse_properties_and_many_stops_compile() {
     assert_compiles_faithfully(
         "colour",
