@@ -253,6 +253,12 @@ impl MotionTimeline {
         !self.inner.borrow().overrides.is_empty()
     }
 
+    /// Every live override keyed by `(target, property)`: the frame a host
+    /// paints (jian-scene's `apply_motion_overrides` takes it as is).
+    pub fn overrides(&self) -> super::clip::MotionOverrides {
+        self.inner.borrow().overrides.clone()
+    }
+
     pub fn binding_values(&self) -> BTreeMap<(String, BindingTarget), serde_json::Value> {
         self.inner
             .borrow()

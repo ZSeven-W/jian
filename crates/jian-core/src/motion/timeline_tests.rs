@@ -55,8 +55,13 @@ fn a_started_track_overrides_until_it_finishes() {
         timeline.current_override("box", &property("opacity")),
         Some(json!(0.5))
     );
+    assert_eq!(
+        timeline.overrides(),
+        BTreeMap::from([(("box".to_owned(), property("opacity")), json!(0.5))])
+    );
     timeline.tick(100);
     assert_eq!(timeline.track_count(), 0);
+    assert!(timeline.overrides().is_empty());
     // Forwards fill lands on the base value, so no override remains.
     assert!(!timeline.has_visual_state());
     assert_eq!(timeline.next_deadline_ms(), None);
