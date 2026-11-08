@@ -2,7 +2,7 @@
 //! moved from OpenPencil's preview. They read the painted scene through
 //! [`MotionSceneView`] and start tracks on a [`MotionTimeline`].
 
-use super::declarations::node_declarations;
+use super::declarations::{node_declarations, toggle_timing};
 use super::in_view::InViewWindow;
 use super::scene_view::MotionSceneView;
 use super::timeline::MotionTimeline;
@@ -174,6 +174,71 @@ impl MotionTriggers {
                 } else {
                     let _ = animation.start_immediate(request, current, Some(desired), now_ms);
                 }
+            }
+        }
+    }
+
+    /// Tween each switch's on/off look when its checked state changes, using
+    /// the switch's own transition or the Material 3 default.
+    pub fn observe_toggle_progress(
+        &self,
+        runtime: &Runtime,
+        view: &dyn MotionSceneView,
+        animation: &MotionTimeline,
+        effective: MotionPreference,
+        now_ms: u64,
+    ) {
+        let property = AnimationProperty::ToggleProgress;
+        for (target, checked) in view.switches() {
+            let desired = serde_json::json!(if checked { 1.0 } else { 0.0 });
+            let key = (target.clone(), property.clone());
+            let previous = self
+                .inner
+                .borrow_mut()
+                .observed
+                .insert(key, desired.clone());
+            let Some(previous) = previous else {
+                continue;
+            };
+            if previous == desired {
+                continue;
+            }
+            let current = animation
+                .current_override(&target, &property)
+                .unwrap_or(previous);
+            if current == desired {
+                continue;
+            }
+            if effective == MotionPreference::Reduced {
+                animation.set_instant(&target, &property, desired.clone(), Some(&desired));
+                continue;
+            }
+            if !self.track_budget_available(animation, &target, &property) {
+                animation.warn(&format!(
+                    "motion track budget exceeded for toggleProgress on node {target}"
+                ));
+                animation.set_instant(&target, &property, desired.clone(), Some(&desired));
+                continue;
+            }
+            let (duration_ms, easing) = toggle_timing(runtime, &target);
+            let request = AnimationRequest {
+                target: target.clone(),
+                property: property.clone(),
+                from: Some(current.clone()),
+                to: desired.clone(),
+                stops: None,
+                duration_ms,
+                delay_ms: 0,
+                easing,
+                iterations: 1,
+                direction: AnimationDirection::Normal,
+                fill_mode: AnimationFillMode::Forwards,
+                requested_at_ms: now_ms,
+            };
+            if animation.start_immediate(request, current, Some(desired), now_ms)
+                && animation.has_active(&target, &property)
+            {
+                self.remember_track(&target, &property);
             }
         }
     }

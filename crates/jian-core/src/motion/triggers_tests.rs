@@ -258,3 +258,28 @@ fn layout_properties_in_a_transition_are_rejected_with_a_warning() {
         ["motion property width on node button rejected"]
     );
 }
+
+#[test]
+fn a_toggled_switch_tweens_with_the_material_default() {
+    let runtime = runtime(json!([{"type": "switch", "id": "toggle", "width": 60, "height": 32}]));
+    let mut scene = StubScene::default().node("toggle", rect(0.0, 0.0, 60.0, 32.0));
+    scene.switches = vec![("toggle".into(), false)];
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    let progress = AnimationProperty::ToggleProgress;
+    triggers.observe_toggle_progress(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(
+        timeline.track_count(),
+        0,
+        "the first observation only records"
+    );
+    scene.switches = vec![("toggle".into(), true)];
+    triggers.observe_toggle_progress(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(timeline.track_count(), 1);
+    timeline.tick(crate::motion::declarations::SWITCH_TOGGLE_DURATION_MS);
+    assert_eq!(timeline.track_count(), 0);
+    // Reduced motion snaps straight to the new state.
+    scene.switches = vec![("toggle".into(), false)];
+    triggers.observe_toggle_progress(&runtime, &scene, &timeline, MotionPreference::Reduced, 200);
+    assert_eq!(timeline.track_count(), 0);
+    assert_eq!(timeline.current_override("toggle", &progress), None);
+}
