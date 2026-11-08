@@ -119,6 +119,65 @@ impl MotionTriggers {
         }
     }
 
+    /// Paint mount and in-view animations at their first keyframe before the
+    /// lifecycle starts. Manual animations keep the authored look until an
+    /// interaction plays them.
+    pub fn set_initial_lifecycle_values(
+        &self,
+        runtime: &Runtime,
+        view: &dyn MotionSceneView,
+        animation: &MotionTimeline,
+    ) {
+        for (target, _, animations) in node_declarations(runtime, false) {
+            for declaration in animations {
+                if !matches!(
+                    declaration.trigger,
+                    MotionTrigger::Mount | MotionTrigger::InView
+                ) {
+                    continue;
+                }
+                self.set_node_animation_initial_values(&target, &declaration, view, animation);
+            }
+        }
+    }
+
+    fn set_node_animation_initial_values(
+        &self,
+        target: &str,
+        declaration: &NodeAnimation,
+        view: &dyn MotionSceneView,
+        animation: &MotionTimeline,
+    ) {
+        if view.node_rect(target).is_none() {
+            return;
+        }
+        let mut by_property: BTreeMap<String, Vec<(f32, Value)>> = BTreeMap::new();
+        for keyframe in &declaration.keyframes {
+            for (property, value) in &keyframe.values {
+                by_property
+                    .entry(property.clone())
+                    .or_default()
+                    .push((keyframe.offset, value.clone()));
+            }
+        }
+        for (name, stops) in by_property {
+            if !P1_MOTION_PROPERTIES.contains(&name.as_str()) {
+                continue;
+            }
+            let Some(descriptor) = animatable_property_registry().get(&name) else {
+                continue;
+            };
+            let property = AnimationProperty::from_registered(&name, descriptor.apply);
+            let Some(base) = view.property(target, &property) else {
+                continue;
+            };
+            let Some((_, first)) = stops.first() else {
+                continue;
+            };
+            animation.set_instant(target, &property, first.clone(), Some(&base));
+        }
+    }
+
     fn start_node_animation(
         &self,
         target: &str,

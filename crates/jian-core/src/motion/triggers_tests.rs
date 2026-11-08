@@ -163,3 +163,30 @@ fn missing_nodes_are_skipped_and_the_budget_caps_tracks() {
     assert_eq!(timeline.track_count(), MOTION_TRACK_BUDGET);
     assert_eq!(warnings.0.borrow().len(), 1, "{:?}", warnings.0.borrow());
 }
+
+#[test]
+fn lifecycle_animations_paint_keyframe_zero_before_they_start() {
+    let runtime = runtime(json!([
+        fade("mounted", "mount", 0),
+        fade("revealed", "inView", 0),
+        {"type": "rectangle", "id": "played", "width": 10, "height": 10,
+         "animations": [{"trigger": "manual", "id": "pop", "durationMs": 100,
+            "keyframes": {"from": {"opacity": 0}, "to": {"opacity": 1}}}]}
+    ]));
+    let scene = StubScene::default()
+        .node("mounted", rect(0.0, 0.0, 10.0, 10.0))
+        .node("revealed", rect(0.0, 20.0, 10.0, 10.0))
+        .node("played", rect(0.0, 40.0, 10.0, 10.0));
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    triggers.set_initial_lifecycle_values(&runtime, &scene, &timeline);
+    assert_eq!(
+        timeline.current_override("mounted", &opacity()),
+        Some(json!(0))
+    );
+    assert_eq!(
+        timeline.current_override("revealed", &opacity()),
+        Some(json!(0))
+    );
+    assert_eq!(timeline.current_override("played", &opacity()), None);
+    assert_eq!(timeline.track_count(), 0);
+}
