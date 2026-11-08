@@ -11,6 +11,7 @@
 //! `tests/golden/motion/` and pin its behaviour, quirks included.
 
 pub mod clip;
+pub mod compile;
 pub mod curve;
 pub mod declarations;
 pub mod in_view;
@@ -22,6 +23,7 @@ pub mod timeline;
 pub mod triggers;
 
 pub use clip::{Clip, ClipKeyframe, ClipTrigger, MotionOverrides};
+pub use compile::{compile, CompiledAnimation, CompiledSegment};
 pub use curve::{as_cubic, ease, ease_in_out_cubic, ease_out_cubic, inverse, CubicPiece};
 pub use in_view::InViewWindow;
 pub use scene_view::MotionSceneView;
