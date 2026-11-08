@@ -73,8 +73,15 @@ pub fn ease_in_out_cubic(t: f32) -> f32 {
 /// The first progress at which `ease` reaches `output`: 0 when the curve
 /// starts at or above it, 1 when it never gets there. Timelines use it to
 /// place a keyframe in time, because offsets live in eased progress.
+///
+/// The endpoints are exact: output 1 maps to progress 1 even though a steep
+/// curve like `standard` saturates to 1.0 in f32 well before the end, so a
+/// last keyframe always sits at the end of its animation.
 pub fn inverse(easing: Easing, output: f32) -> f32 {
     const STEPS: u32 = 1024;
+    if output >= 1.0 {
+        return 1.0;
+    }
     if ease(easing, 0.0) >= output {
         return 0.0;
     }
@@ -284,6 +291,9 @@ mod tests {
         }
         assert_eq!(inverse(Easing::Linear, 0.0), 0.0);
         assert_eq!(inverse(Easing::Linear, 2.0), 1.0);
+        // `standard` saturates to 1.0 early in f32; the last keyframe still
+        // belongs at the end.
+        assert_eq!(inverse(Easing::Standard, 1.0), 1.0);
         assert!((inverse(Easing::Linear, 0.25) - 0.25).abs() < 1e-5);
     }
 
