@@ -8,6 +8,7 @@ pub mod layout_scene_binding;
 mod layout_scene_bounds;
 mod layout_scene_fill;
 pub mod layout_scene_hit;
+pub mod layout_scene_motion;
 pub mod path_geometry;
 mod scene_geometry;
 pub use layout_scene::{SceneTextAlign, SceneTextVerticalAlign};
