@@ -283,3 +283,85 @@ fn a_toggled_switch_tweens_with_the_material_default() {
     assert_eq!(timeline.track_count(), 0);
     assert_eq!(timeline.current_override("toggle", &progress), None);
 }
+
+fn in_view_runtime(once: bool) -> Runtime {
+    runtime(
+        json!([{"type": "frame", "id": "screen", "width": 390, "height": 1600,
+        "children": [{"type": "rectangle", "id": "row", "width": 390, "height": 80,
+            "animations": [{"trigger": "inView", "durationMs": 100, "once": once,
+                "fillMode": "none",
+                "keyframes": {"from": {"opacity": 0}, "to": {"opacity": 1}}}]}]}]),
+    )
+}
+
+fn page_scene() -> StubScene {
+    let mut scene = StubScene::default()
+        .node("screen", rect(0.0, 0.0, 390.0, 1600.0))
+        .node("row", rect(0.0, 1200.0, 390.0, 80.0));
+    scene.root = Some(rect(0.0, 0.0, 390.0, 1600.0));
+    scene
+}
+
+#[test]
+fn in_view_waits_for_the_lifecycle_and_the_window() {
+    let runtime = in_view_runtime(true);
+    let scene = page_scene();
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    triggers.set_in_view_window(Some(InViewWindow::new(0.0, 0.0, 844.0, Vec::new())));
+    triggers.observe_in_view(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(
+        timeline.track_count(),
+        0,
+        "nothing fires before the lifecycle"
+    );
+    triggers.begin_lifecycle();
+    triggers.observe_in_view(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(
+        timeline.track_count(),
+        0,
+        "the row is below the first screen"
+    );
+    triggers.set_in_view_window(Some(InViewWindow::new(900.0, 0.0, 844.0, Vec::new())));
+    triggers.observe_in_view(&runtime, &scene, &timeline, MotionPreference::Full, 10);
+    assert_eq!(timeline.track_count(), 1);
+}
+
+#[test]
+fn without_a_window_the_whole_root_counts_as_visible() {
+    let runtime = in_view_runtime(true);
+    let scene = page_scene();
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    triggers.begin_lifecycle();
+    triggers.observe_in_view(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(timeline.track_count(), 1);
+}
+
+#[test]
+fn once_fires_a_single_time_and_repeat_fires_after_leaving() {
+    for (once, expected_fires) in [(true, 1), (false, 2)] {
+        let runtime = in_view_runtime(once);
+        let scene = page_scene();
+        let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+        triggers.begin_lifecycle();
+        let mut fires = 0;
+        for (scroll, now) in [(900.0, 0), (0.0, 500), (900.0, 1000)] {
+            triggers.set_in_view_window(Some(InViewWindow::new(scroll, 0.0, 844.0, Vec::new())));
+            let before = timeline.track_count();
+            triggers.observe_in_view(&runtime, &scene, &timeline, MotionPreference::Full, now);
+            fires += usize::from(timeline.track_count() > before);
+            timeline.tick(now + 200);
+        }
+        assert_eq!(fires, expected_fires, "once = {once}");
+    }
+}
+
+#[test]
+fn pinned_nodes_fire_wherever_they_sit() {
+    let runtime = in_view_runtime(true);
+    let scene = page_scene();
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    triggers.begin_lifecycle();
+    triggers.set_in_view_window(Some(InViewWindow::new(0.0, 0.0, 844.0, vec!["row".into()])));
+    triggers.observe_in_view(&runtime, &scene, &timeline, MotionPreference::Full, 0);
+    assert_eq!(timeline.track_count(), 1);
+}

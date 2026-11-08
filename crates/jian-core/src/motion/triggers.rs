@@ -3,7 +3,7 @@
 //! [`MotionSceneView`] and start tracks on a [`MotionTimeline`].
 
 use super::declarations::{node_declarations, toggle_timing};
-use super::in_view::InViewWindow;
+use super::in_view::{intersects_viewport, InViewWindow};
 use super::scene_view::MotionSceneView;
 use super::timeline::MotionTimeline;
 use crate::action::animation_registry::animatable_property_registry;
@@ -27,6 +27,8 @@ pub const MOTION_TRACK_BUDGET: usize = 32;
 struct MotionInner {
     lifecycle_started: bool,
     observed: BTreeMap<(String, AnimationProperty), Value>,
+    fired_in_view: BTreeSet<String>,
+    visible_in_view: BTreeSet<String>,
     animation_tracks: BTreeSet<(String, AnimationProperty)>,
 }
 
@@ -241,6 +243,71 @@ impl MotionTriggers {
                 self.remember_track(&target, &property);
             }
         }
+    }
+
+    /// Start `inView` animations whose node shows in the host's window (or
+    /// the framed root when the host gave none). `once` animations fire a
+    /// single time per screen; the rest fire again after leaving the window.
+    pub fn observe_in_view(
+        &self,
+        runtime: &Runtime,
+        view: &dyn MotionSceneView,
+        animation: &MotionTimeline,
+        effective: MotionPreference,
+        now_ms: u64,
+    ) {
+        if !self.lifecycle_started() {
+            return;
+        }
+        let Some(root) = view.root_rect() else {
+            return;
+        };
+        let window = self.in_view_window.borrow().clone();
+        let viewport = window
+            .as_ref()
+            .map_or(root, |window| window.rect_for_root(root));
+        let declarations = node_declarations(runtime, false);
+        let mut visible_now = BTreeSet::new();
+        for (target, _, animations) in declarations {
+            let Some(node) = view.node_rect(&target) else {
+                continue;
+            };
+            let visible = intersects_viewport(node, viewport)
+                || window
+                    .as_ref()
+                    .is_some_and(|window| window.is_pinned(view, &target));
+            if !visible {
+                continue;
+            }
+            for (index, declaration) in animations.iter().enumerate() {
+                if declaration.trigger != MotionTrigger::InView {
+                    continue;
+                }
+                let key = format!("{target}:{index}");
+                visible_now.insert(key.clone());
+                let once = declaration.once;
+                let should_fire = if once {
+                    !self.inner.borrow().fired_in_view.contains(&key)
+                } else {
+                    !self.inner.borrow().visible_in_view.contains(&key)
+                };
+                if !should_fire {
+                    continue;
+                }
+                if once {
+                    self.inner.borrow_mut().fired_in_view.insert(key);
+                }
+                self.start_node_animation(
+                    target.as_str(),
+                    declaration,
+                    view,
+                    animation,
+                    effective,
+                    now_ms,
+                );
+            }
+        }
+        self.inner.borrow_mut().visible_in_view = visible_now;
     }
 
     /// Start every `mount` animation in the document.
