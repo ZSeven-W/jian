@@ -7,7 +7,7 @@ use crate::layout_scene::{LayoutScene, SceneNode};
 use crate::layout_scene_binding::apply_value;
 use jian_core::action::services::AnimationProperty;
 use jian_core::motion::interpolate::color_hex;
-use jian_core::motion::MotionOverrides;
+use jian_core::motion::{MotionOverrides, MotionSceneView};
 use jian_core::value::RuntimeValue;
 use jian_widgets::Color;
 use serde_json::{json, Value};
@@ -99,6 +99,57 @@ fn apply_node_overrides(node: &mut SceneNode, overrides: &MotionOverrides) {
     }
 }
 
+/// The scene Motion triggers watch: OpenPencil's Preview and Jian hosts
+/// both paint a `LayoutScene`, so they share this view.
+impl MotionSceneView for LayoutScene {
+    fn node_rect(&self, id: &str) -> Option<jian_core::geometry::Rect> {
+        let node = self.active_page()?.find(id)?;
+        Some(core_rect(node.bounds))
+    }
+
+    fn property(&self, id: &str, property: &AnimationProperty) -> Option<Value> {
+        sample_scene_property(self, id, property)
+    }
+
+    fn root_rect(&self) -> Option<jian_core::geometry::Rect> {
+        let root = self.active_page()?.children.first()?;
+        Some(core_rect(root.bounds))
+    }
+
+    fn switches(&self) -> Vec<(String, bool)> {
+        let mut out = Vec::new();
+        if let Some(page) = self.active_page() {
+            collect_switches(&page.children, &mut out);
+        }
+        out
+    }
+
+    fn subtree_contains(&self, ancestor: &str, id: &str) -> bool {
+        ancestor == id
+            || self
+                .active_page()
+                .and_then(|page| page.find(ancestor))
+                .is_some_and(|node| node.find(id).is_some())
+    }
+}
+
+fn core_rect(rect: jian_widgets::Rect) -> jian_core::geometry::Rect {
+    jian_core::geometry::rect(rect.origin.x, rect.origin.y, rect.size.x, rect.size.y)
+}
+
+fn collect_switches(nodes: &[SceneNode], out: &mut Vec<(String, bool)>) {
+    for node in nodes {
+        if let Some(widget) = node
+            .widget
+            .as_ref()
+            .filter(|widget| widget.kind == "switch")
+        {
+            out.push((node.id.clone(), widget.checked.unwrap_or(false)));
+        }
+        collect_switches(&node.children, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -182,6 +233,25 @@ mod tests {
                 .as_ref()
                 .and_then(|widget| widget.toggle_progress),
             Some(0.5)
+        );
+    }
+
+    #[test]
+    fn the_scene_view_reads_the_active_page() {
+        let scene = scene();
+        let view: &dyn MotionSceneView = &scene;
+        let rect = view.node_rect("card").expect("card");
+        assert_eq!((rect.origin.x, rect.origin.y), (10.0, 20.0));
+        assert_eq!((rect.size.width, rect.size.height), (100.0, 40.0));
+        assert_eq!(view.root_rect(), Some(rect));
+        assert_eq!(view.node_rect("missing"), None);
+        assert_eq!(view.switches(), vec![("toggle".to_owned(), true)]);
+        assert!(view.subtree_contains("card", "toggle"));
+        assert!(view.subtree_contains("toggle", "toggle"));
+        assert!(!view.subtree_contains("toggle", "card"));
+        assert_eq!(
+            view.property("card", &AnimationProperty::Opacity),
+            Some(json!(1.0))
         );
     }
 }
