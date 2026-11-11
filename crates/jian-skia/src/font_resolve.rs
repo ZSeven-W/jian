@@ -55,6 +55,35 @@ pub struct ResolvedTypeface {
 #[derive(Default)]
 struct FontResolverCache {
     chars: HashMap<FontKey, Option<ResolvedTypeface>>,
+    /// Family-level lookups, shared by every codepoint. Resolving a family
+    /// (`match_family` / `match_family_style`) is a full fontconfig sort on
+    /// Linux — hundreds of ms on machines with thousands of installed fonts —
+    /// and its answer does not depend on the character, so caching it only
+    /// per codepoint repeated that cost for every new glyph.
+    family_faces: HashMap<FamilyFaceKey, Option<Typeface>>,
+    /// Canonical spelling per (manager, ASCII-folded family). Style-free, so
+    /// a family queried at several weights canonicalizes once.
+    canonical_families: HashMap<(FaceSource, String), Option<String>>,
+    /// System character-fallback restyle: (fallback family, weight, italic)
+    /// to the family's face at that style. Many codepoints fall back to the
+    /// same family, so the by-name rematch is shared across them.
+    fallback_restyles: HashMap<(String, u16, bool), Option<Typeface>>,
+}
+
+/// Which manager a [`FamilyFaceKey`] lookup ran against.
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+enum FaceSource {
+    Imported,
+    System,
+    Bundled,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct FamilyFaceKey {
+    source: FaceSource,
+    family: String,
+    weight: u16,
+    italic: bool,
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -160,7 +189,13 @@ impl FontResolver {
         *self.bundled_family_names.borrow_mut() = bundled_family_names;
         *self.imported_mgr.borrow_mut() = imported_mgr;
         *self.imported_family_names.borrow_mut() = imported_family_names;
-        self.cache.borrow_mut().chars.clear();
+        {
+            let mut cache = self.cache.borrow_mut();
+            cache.chars.clear();
+            cache.family_faces.clear();
+            cache.canonical_families.clear();
+            cache.fallback_restyles.clear();
+        }
         self.built_generation.set(current);
     }
 
@@ -323,6 +358,61 @@ impl FontResolver {
         self.cache.borrow().chars.len()
     }
 
+    /// [`family_typeface_covering`] with the family lookup memoized per
+    /// (manager, family, style); only the cheap glyph-coverage check runs
+    /// per character.
+    #[allow(clippy::too_many_arguments)]
+    fn cached_family_face_covering(
+        &self,
+        source: FaceSource,
+        mgr: &FontMgr,
+        family_names: &HashMap<String, String>,
+        family: &str,
+        weight: u16,
+        italic: bool,
+        c: char,
+    ) -> Option<Typeface> {
+        let key = FamilyFaceKey {
+            source,
+            family: family.to_ascii_lowercase(),
+            weight,
+            italic,
+        };
+        let cached = self.cache.borrow().family_faces.get(&key).cloned();
+        let face = match cached {
+            Some(face) => face,
+            None => {
+                let canonical_key = (source, key.family.clone());
+                let cached_canonical = self
+                    .cache
+                    .borrow()
+                    .canonical_families
+                    .get(&canonical_key)
+                    .cloned();
+                let canonical = match cached_canonical {
+                    Some(canonical) => canonical,
+                    None => {
+                        let canonical = canonical_font_family(mgr, family_names, family);
+                        self.cache
+                            .borrow_mut()
+                            .canonical_families
+                            .insert(canonical_key, canonical.clone());
+                        canonical
+                    }
+                };
+                let face = canonical.and_then(|canonical| {
+                    mgr.match_family_style(&canonical, font_style_for(weight, italic))
+                });
+                self.cache
+                    .borrow_mut()
+                    .family_faces
+                    .insert(key, face.clone());
+                face
+            }
+        };
+        face.filter(|typeface| covers(typeface, c))
+    }
+
     fn resolve_uncached(
         &self,
         families: &[String],
@@ -339,25 +429,39 @@ impl FontResolver {
             // Preserve CSS family order. Within one authored candidate, an
             // imported face wins over the same-named system or bundled face.
             if let Some(imported) = &*imported_mgr {
-                if let Some(typeface) =
-                    family_typeface_covering(imported, &imported_names, family, style, c)
-                {
+                if let Some(typeface) = self.cached_family_face_covering(
+                    FaceSource::Imported,
+                    imported,
+                    &imported_names,
+                    family,
+                    weight,
+                    italic,
+                    c,
+                ) {
                     return Some(resolved(typeface, weight, italic));
                 }
             }
-            if let Some(typeface) = family_typeface_covering(
+            if let Some(typeface) = self.cached_family_face_covering(
+                FaceSource::System,
                 &self.system_mgr,
                 &self.system_family_names,
                 family,
-                style,
+                weight,
+                italic,
                 c,
             ) {
                 return Some(resolved(typeface, weight, italic));
             }
             if let Some(bundled) = &*bundled_mgr {
-                if let Some(typeface) =
-                    family_typeface_covering(bundled, &bundled_names, family, style, c)
-                {
+                if let Some(typeface) = self.cached_family_face_covering(
+                    FaceSource::Bundled,
+                    bundled,
+                    &bundled_names,
+                    family,
+                    weight,
+                    italic,
+                    c,
+                ) {
                     return Some(resolved(typeface, weight, italic));
                 }
             }
@@ -380,9 +484,25 @@ impl FontResolver {
             // weight-700 run resolves to the family's real Semibold face
             // instead of Regular plus a synthetic-bold stroke.
             let family = typeface.family_name();
-            let styled = self
-                .system_mgr
-                .match_family_style(&family, style)
+            let restyle_key = (family, weight, italic);
+            let cached_restyle = self
+                .cache
+                .borrow()
+                .fallback_restyles
+                .get(&restyle_key)
+                .cloned();
+            let restyled = match cached_restyle {
+                Some(restyled) => restyled,
+                None => {
+                    let restyled = self.system_mgr.match_family_style(&restyle_key.0, style);
+                    self.cache
+                        .borrow_mut()
+                        .fallback_restyles
+                        .insert(restyle_key, restyled.clone());
+                    restyled
+                }
+            };
+            let styled = restyled
                 .filter(|candidate| covers(candidate, c))
                 .unwrap_or(typeface);
             return Some(resolved(styled, weight, italic));
@@ -395,9 +515,15 @@ impl FontResolver {
         // authored family names it.
         if let Some(imported) = &*imported_mgr {
             for family in imported_names.values() {
-                if let Some(typeface) =
-                    family_typeface_covering(imported, &imported_names, family, style, c)
-                {
+                if let Some(typeface) = self.cached_family_face_covering(
+                    FaceSource::Imported,
+                    imported,
+                    &imported_names,
+                    family,
+                    weight,
+                    italic,
+                    c,
+                ) {
                     return Some(resolved(typeface, weight, italic));
                 }
             }
@@ -418,6 +544,9 @@ pub fn font_style_for(weight: u16, italic: bool) -> FontStyle {
     )
 }
 
+/// Uncached reference for [`FontResolver::cached_family_face_covering`]; the
+/// tests pin the lookup contract against it.
+#[cfg(test)]
 fn family_typeface_covering(
     mgr: &FontMgr,
     family_names: &HashMap<String, String>,
