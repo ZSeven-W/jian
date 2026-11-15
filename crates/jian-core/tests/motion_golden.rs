@@ -63,6 +63,35 @@ fn ease_matches_the_recorded_curves() {
     }
 }
 
+#[test]
+fn transition_clock_matches_the_recorded_progress() {
+    let transitions = golden("transitions.json");
+    for transition in transitions["transitions"].as_array().expect("transitions") {
+        let kind = transition["kind"].as_str().expect("kind");
+        let duration = transition["durationMs"].as_u64().expect("duration");
+        let clock = jian_core::motion::TimedTransition::new(0, duration);
+        for sample in transition["samples"].as_array().expect("samples") {
+            let t = sample["t"].as_u64().expect("t");
+            let linear = f64::from(clock.linear_t(t));
+            let expected = sample["linear"].as_f64().expect("linear");
+            assert!(
+                (linear - expected).abs() <= EPSILON,
+                "{kind} at {t}: {linear} != {expected}"
+            );
+            assert_eq!(
+                clock.is_active(t),
+                sample["active"].as_bool().expect("active"),
+                "{kind} at {t}"
+            );
+            assert_eq!(
+                clock.next_deadline_ms(t),
+                sample["nextDeadlineMs"].as_u64(),
+                "{kind} at {t}"
+            );
+        }
+    }
+}
+
 fn request_from_case(case: &Value) -> jian_core::action::services::AnimationRequest {
     use jian_core::action::animation_registry::animatable_property_registry;
     use jian_core::action::services::{

@@ -19,6 +19,7 @@ pub mod interpolate;
 pub mod scene_view;
 #[cfg(test)]
 mod test_support;
+pub mod timed_transition;
 pub mod timeline;
 pub mod triggers;
 
@@ -27,5 +28,6 @@ pub use compile::{compile, CompiledAnimation, CompiledSegment};
 pub use curve::{as_cubic, ease, ease_in_out_cubic, ease_out_cubic, inverse, CubicPiece};
 pub use in_view::InViewWindow;
 pub use scene_view::MotionSceneView;
+pub use timed_transition::TimedTransition;
 pub use timeline::{invalidation_for, sample_request, MotionObserver, MotionTimeline};
 pub use triggers::{MotionControl, MotionControlMode, MotionTriggers};
