@@ -121,9 +121,17 @@ impl Clip {
             let Some(base) = view.property(target, property) else {
                 continue;
             };
-            if let (Some(value), _) = sample_request(&track.request, t_ms) {
-                if value != base {
-                    overrides.insert((target.clone(), property.clone()), value);
+            // Play replaces the previous track as soon as a later track
+            // claims the same property, including during its authored delay.
+            // Returning to the base or ending with no fill clears that
+            // property's override without reviving the superseded track.
+            let key = (target.clone(), property.clone());
+            match sample_request(&track.request, t_ms).0 {
+                Some(value) if value != base => {
+                    overrides.insert(key, value);
+                }
+                _ => {
+                    overrides.remove(&key);
                 }
             }
         }

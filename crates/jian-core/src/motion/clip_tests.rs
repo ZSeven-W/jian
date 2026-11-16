@@ -49,7 +49,17 @@ fn root(children: &Value) -> PenNode {
 
 #[test]
 fn sampling_matches_the_runtime_timeline_frame_for_frame() {
-    let children = screen();
+    let mut children = screen();
+    // The second track owns translateY through its delay and after its
+    // no-fill end, even while the first track would still be running.
+    children[0]["children"][0]["animations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "trigger": "mount", "delayMs": 40, "durationMs": 100,
+            "fillMode": "none", "easing": "linear",
+            "keyframes": {"from": {"translateY": 0.0}, "to": {"translateY": 12.0}}
+        }));
     let runtime = runtime(children.clone());
     let scene = scene();
     let clip = Clip::build(&root(&children), &ClipTrigger::Mount);
