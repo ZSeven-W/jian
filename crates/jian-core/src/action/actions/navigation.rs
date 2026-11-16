@@ -6,6 +6,7 @@ use crate::action::error::{ActionError, ActionResult};
 use crate::action::services::effect_sink::{EffectOutcome, EffectRequest};
 use crate::capability::Capability;
 use crate::expression::Expression;
+use crate::motion::screen_transition::ScreenTransitionSpec;
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -38,6 +39,7 @@ async fn eval_path(ctx: &ActionContext, path_expr: &Option<Expression>) -> Optio
 
 struct Push {
     path_expr: Option<Expression>,
+    transition: Option<ScreenTransitionSpec>,
 }
 #[async_trait(?Send)]
 impl ActionImpl for Push {
@@ -46,13 +48,14 @@ impl ActionImpl for Push {
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
         let path = eval_path(ctx, &self.path_expr).await.unwrap_or_default();
-        ctx.router.push(&path);
+        ctx.router.push_with(&path, self.transition.clone());
         Ok(())
     }
 }
 
 struct Replace {
     path_expr: Option<Expression>,
+    transition: Option<ScreenTransitionSpec>,
 }
 #[async_trait(?Send)]
 impl ActionImpl for Replace {
@@ -61,7 +64,7 @@ impl ActionImpl for Replace {
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
         let path = eval_path(ctx, &self.path_expr).await.unwrap_or_default();
-        ctx.router.replace(&path);
+        ctx.router.replace_with(&path, self.transition.clone());
         Ok(())
     }
 }
@@ -81,14 +84,14 @@ impl ActionImpl for ResetTo {
     }
 }
 
-struct Pop;
+struct Pop(Option<ScreenTransitionSpec>);
 #[async_trait(?Send)]
 impl ActionImpl for Pop {
     fn name(&self) -> &'static str {
         "pop"
     }
     async fn execute(&self, ctx: &ActionContext) -> ActionResult {
-        ctx.router.pop();
+        ctx.router.pop_with(self.0.clone());
         Ok(())
     }
 }
@@ -156,14 +159,44 @@ impl ActionImpl for OpenUrl {
     }
 }
 
+fn nav_body(
+    body: &Value,
+) -> Result<(Option<Expression>, Option<ScreenTransitionSpec>), ActionError> {
+    if let Some(object) = body.as_object() {
+        let path = object.get("path").ok_or(ActionError::MissingField {
+            name: "nav",
+            field: "path",
+        })?;
+        return Ok((expr_from_value(path)?, transition_from_body(body)?));
+    }
+    Ok((expr_from_value(body)?, None))
+}
+
+fn transition_from_body(body: &Value) -> Result<Option<ScreenTransitionSpec>, ActionError> {
+    let Some(value) = body.get("transition").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|error| ActionError::FieldType {
+            name: "nav",
+            field: "transition",
+            message: error.to_string(),
+        })
+}
+
 pub fn factory_push(body: &Value) -> Result<BoxedAction, ActionError> {
+    let (path_expr, transition) = nav_body(body)?;
     Ok(Box::new(Push {
-        path_expr: expr_from_value(body)?,
+        path_expr,
+        transition,
     }))
 }
 pub fn factory_replace(body: &Value) -> Result<BoxedAction, ActionError> {
+    let (path_expr, transition) = nav_body(body)?;
     Ok(Box::new(Replace {
-        path_expr: expr_from_value(body)?,
+        path_expr,
+        transition,
     }))
 }
 pub fn factory_reset_nav(body: &Value) -> Result<BoxedAction, ActionError> {
@@ -171,8 +204,8 @@ pub fn factory_reset_nav(body: &Value) -> Result<BoxedAction, ActionError> {
         path_expr: expr_from_value(body)?,
     }))
 }
-pub fn factory_pop(_body: &Value) -> Result<BoxedAction, ActionError> {
-    Ok(Box::new(Pop))
+pub fn factory_pop(body: &Value) -> Result<BoxedAction, ActionError> {
+    Ok(Box::new(Pop(transition_from_body(body)?)))
 }
 pub fn factory_open_url(body: &Value) -> Result<BoxedAction, ActionError> {
     let obj = body.as_object().ok_or(ActionError::FieldType {

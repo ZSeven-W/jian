@@ -143,3 +143,33 @@ fn reset_scope_still_works() {
     // Router should not have been called.
     assert!(rec.ops.borrow().is_empty());
 }
+
+#[test]
+fn navigation_actions_carry_transitions_and_back_reuses_the_entry_spec() {
+    use jian_core::motion::screen_transition::ScreenTransitionKind;
+    let router = Rc::new(jian_core::screens::ScreenRouter::new(
+        "/",
+        ["/".into(), "/detail".into()],
+    ));
+    let (_, ctx) = setup(router.clone());
+    let reg = default_registry();
+    let run = |action| execute_list_blocking_for_test(&reg, &json!([action]), &ctx);
+    run(json!({"push":{"path":"'/detail'","transition":{"kind":"slideUp","durationMs":300}}}));
+    assert_eq!(router.current().path, "/detail");
+    let transition = router.last_transition().unwrap();
+    assert_eq!(transition.kind, ScreenTransitionKind::SlideUp);
+    assert_eq!(transition.duration_ms, Some(300));
+    run(json!({"pop":null}));
+    assert_eq!(router.current().path, "/");
+    assert_eq!(router.last_transition(), Some(transition));
+    run(json!({"push":{"path":"'/detail'","transition":{"kind":"fade"}}}));
+    run(json!({"pop":{"transition":{"kind":"none"}}}));
+    assert_eq!(
+        router.last_transition().unwrap().kind,
+        ScreenTransitionKind::None
+    );
+    assert!(reg
+        .borrow()
+        .parse_single(&json!({"push":{"path":"'/detail'","transition":{"kind":"unknown"}}}))
+        .is_err());
+}
