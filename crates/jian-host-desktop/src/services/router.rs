@@ -2,26 +2,27 @@
 //!
 //! No HTTP history integration (that belongs to the web host, Plan 12).
 //! `push` / `replace` / `pop` / `reset` all operate on an internal
-//! `Vec<String>` guarded by a `RefCell` so `&self` mutation stays
+//! navigation history so `&self` mutation stays
 //! compatible with the `Router` trait signature.
 
+use jian_core::action::services::router::NavigationHistory;
 use jian_core::action::services::{RouteState, Router};
-use std::cell::RefCell;
+use jian_core::motion::screen_transition::ScreenTransitionSpec;
 use std::collections::BTreeMap;
 
 pub struct HistoryRouter {
-    stack: RefCell<Vec<String>>,
+    history: NavigationHistory,
 }
 
 impl HistoryRouter {
     pub fn new(initial: impl Into<String>) -> Self {
         Self {
-            stack: RefCell::new(vec![initial.into()]),
+            history: NavigationHistory::new(initial.into()),
         }
     }
 
     pub fn snapshot(&self) -> Vec<String> {
-        self.stack.borrow().clone()
+        self.history.paths()
     }
 }
 
@@ -33,40 +34,46 @@ impl Default for HistoryRouter {
 
 impl Router for HistoryRouter {
     fn current(&self) -> RouteState {
-        let stack = self.stack.borrow();
+        let stack = self.history.paths();
         let path = stack.last().cloned().unwrap_or_else(|| "/".to_owned());
         RouteState {
             path,
             params: BTreeMap::new(),
             query: BTreeMap::new(),
-            stack: stack.clone(),
+            stack,
         }
     }
 
     fn push(&self, path: &str) {
-        self.stack.borrow_mut().push(path.to_owned());
+        self.push_with(path, None);
     }
 
     fn replace(&self, path: &str) {
-        let mut s = self.stack.borrow_mut();
-        if let Some(last) = s.last_mut() {
-            *last = path.to_owned();
-        } else {
-            s.push(path.to_owned());
-        }
+        self.replace_with(path, None);
     }
 
     fn pop(&self) {
-        let mut s = self.stack.borrow_mut();
-        if s.len() > 1 {
-            s.pop();
-        }
+        self.pop_with(None);
+    }
+
+    fn push_with(&self, path: &str, transition: Option<ScreenTransitionSpec>) {
+        self.history.push(path, transition);
+    }
+
+    fn replace_with(&self, path: &str, transition: Option<ScreenTransitionSpec>) {
+        self.history.replace(path, transition);
+    }
+
+    fn pop_with(&self, transition: Option<ScreenTransitionSpec>) {
+        self.history.pop(transition);
+    }
+
+    fn last_transition(&self) -> Option<ScreenTransitionSpec> {
+        self.history.last_transition()
     }
 
     fn reset(&self, path: &str) {
-        let mut s = self.stack.borrow_mut();
-        s.clear();
-        s.push(path.to_owned());
+        self.history.restore(vec![path.to_owned()]);
     }
 }
 

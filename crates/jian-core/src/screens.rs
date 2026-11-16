@@ -3,7 +3,9 @@
 //! changes. Shared by the OP editor preview and `jian player` so both
 //! run the same code path.
 
+use crate::action::services::router::NavigationHistory;
 use crate::action::services::{RouteState, Router};
+use crate::motion::screen_transition::ScreenTransitionSpec;
 use jian_ops_schema::PenDocument;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -21,7 +23,7 @@ pub struct RejectedNav {
 /// paths, so the mounted-screen reconcile never has to roll back.
 pub struct ScreenRouter {
     known: RefCell<BTreeSet<String>>,
-    stack: RefCell<Vec<String>>,
+    history: NavigationHistory,
     params: RefCell<BTreeMap<String, String>>,
     query: RefCell<BTreeMap<String, String>>,
     /// Accumulates until drained by `take_rejections()`.
@@ -35,7 +37,7 @@ impl ScreenRouter {
     pub fn new(entry: &str, known: impl IntoIterator<Item = String>) -> Self {
         Self {
             known: RefCell::new(known.into_iter().collect()),
-            stack: RefCell::new(vec![entry.to_owned()]),
+            history: NavigationHistory::new(entry.to_owned()),
             params: RefCell::new(BTreeMap::new()),
             query: RefCell::new(BTreeMap::new()),
             rejections: RefCell::new(Vec::new()),
@@ -61,44 +63,50 @@ impl ScreenRouter {
 
 impl Router for ScreenRouter {
     fn current(&self) -> RouteState {
-        let stack = self.stack.borrow();
+        let stack = self.history.paths();
         RouteState {
             path: stack.last().cloned().unwrap_or_else(|| "/".to_owned()),
             params: self.params.borrow().clone(),
             query: self.query.borrow().clone(),
-            stack: stack.clone(),
+            stack,
         }
     }
 
     fn push(&self, path: &str) {
-        if self.check("push", path) {
-            self.stack.borrow_mut().push(path.to_owned());
-        }
+        self.push_with(path, None);
     }
 
     fn replace(&self, path: &str) {
-        if self.check("replace", path) {
-            let mut s = self.stack.borrow_mut();
-            if let Some(last) = s.last_mut() {
-                *last = path.to_owned();
-            } else {
-                s.push(path.to_owned());
-            }
-        }
+        self.replace_with(path, None);
     }
 
     fn pop(&self) {
-        let mut s = self.stack.borrow_mut();
-        if s.len() > 1 {
-            s.pop();
+        self.pop_with(None);
+    }
+
+    fn push_with(&self, path: &str, transition: Option<ScreenTransitionSpec>) {
+        if self.check("push", path) {
+            self.history.push(path, transition);
         }
+    }
+
+    fn replace_with(&self, path: &str, transition: Option<ScreenTransitionSpec>) {
+        if self.check("replace", path) {
+            self.history.replace(path, transition);
+        }
+    }
+
+    fn pop_with(&self, transition: Option<ScreenTransitionSpec>) {
+        self.history.pop(transition);
+    }
+
+    fn last_transition(&self) -> Option<ScreenTransitionSpec> {
+        self.history.last_transition()
     }
 
     fn reset(&self, path: &str) {
         if self.check("reset", path) {
-            let mut s = self.stack.borrow_mut();
-            s.clear();
-            s.push(path.to_owned());
+            self.history.restore(vec![path.to_owned()]);
         }
     }
 
@@ -120,7 +128,7 @@ impl Router for ScreenRouter {
             let entry = valid_paths.first().cloned().unwrap_or_else(|| "/".into());
             (vec![entry], BTreeMap::new(), BTreeMap::new())
         };
-        *self.stack.borrow_mut() = stack;
+        self.history.restore(stack);
         *self.params.borrow_mut() = params;
         *self.query.borrow_mut() = query;
     }
