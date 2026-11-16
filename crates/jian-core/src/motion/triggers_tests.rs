@@ -442,3 +442,43 @@ fn an_unknown_id_matches_nothing() {
     );
     assert_eq!(timeline.track_count(), 0);
 }
+
+#[test]
+fn stopping_another_clip_does_not_cancel_the_current_clip() {
+    let runtime = runtime(json!([{
+        "type": "rectangle", "id": "card", "width": 10, "height": 10,
+        "animations": [
+            {"trigger": "manual", "id": "dim", "durationMs": 100,
+             "keyframes": {"from": {"opacity": 1}, "to": {"opacity": 0.5}}},
+            {"trigger": "manual", "id": "hide", "durationMs": 100,
+             "keyframes": {"from": {"opacity": 1}, "to": {"opacity": 0}}}
+        ]
+    }]));
+    let scene = StubScene::default().node("card", rect(0.0, 0.0, 10.0, 10.0));
+    let (triggers, timeline) = (MotionTriggers::default(), MotionTimeline::default());
+    let control = |animation: &str, mode: MotionControlMode, now_ms: u64| {
+        triggers.control(
+            &MotionControl {
+                target: "card".into(),
+                animation: animation.into(),
+                mode,
+            },
+            &runtime,
+            &scene,
+            &timeline,
+            MotionPreference::Full,
+            now_ms,
+        )
+    };
+    assert_eq!(control("dim", MotionControlMode::Play, 0), 1);
+    assert_eq!(control("hide", MotionControlMode::Play, 10), 1);
+    assert_eq!(control("dim", MotionControlMode::Stop, 20), 1);
+    assert_eq!(timeline.track_count(), 1);
+    timeline.tick(110);
+    assert_eq!(
+        timeline.current_override("card", &opacity()),
+        Some(json!(0.0))
+    );
+    control("hide", MotionControlMode::Stop, 120);
+    assert_eq!(timeline.current_override("card", &opacity()), None);
+}

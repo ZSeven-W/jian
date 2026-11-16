@@ -70,6 +70,7 @@ struct TimelineInner {
     tracks: Vec<Track>,
     overrides: BTreeMap<TrackKey, serde_json::Value>,
     override_invalidation: BTreeMap<TrackKey, InvalidationKind>,
+    manual_owners: BTreeMap<TrackKey, String>,
     now_ms: u64,
     last_invalidation: InvalidationKind,
 }
@@ -145,6 +146,7 @@ impl MotionTimeline {
         inner.tracks.retain(|track| track_key(track) != key);
         inner.overrides.remove(&key);
         inner.override_invalidation.remove(&key);
+        inner.manual_owners.remove(&key);
         request.from = Some(from.clone());
         inner.tracks.push(Track {
             request,
@@ -176,6 +178,7 @@ impl MotionTimeline {
         inner.pending.retain(|pending| request_key(pending) != key);
         inner.overrides.remove(&key);
         inner.override_invalidation.remove(&key);
+        inner.manual_owners.remove(&key);
         request.from = Some(from.clone());
         inner.tracks.push(Track {
             request,
@@ -198,6 +201,7 @@ impl MotionTimeline {
         let mut inner = self.inner.borrow_mut();
         inner.tracks.retain(|track| track_key(track) != key);
         inner.pending.retain(|request| request_key(request) != key);
+        inner.manual_owners.remove(&key);
         if base == Some(&value) {
             inner.overrides.remove(&key);
             inner.override_invalidation.remove(&key);
@@ -238,6 +242,8 @@ impl MotionTimeline {
             }
             if !sample.finished {
                 retained.push(track);
+            } else if after.is_none() {
+                inner.manual_owners.remove(&key);
             }
         }
         inner.tracks = retained;
@@ -284,6 +290,24 @@ impl MotionTimeline {
             .cloned()
     }
 
+    pub(super) fn mark_manual_owner(&self, target: &str, property: &AnimationProperty, id: &str) {
+        let key = (target.to_owned(), property.clone());
+        let mut inner = self.inner.borrow_mut();
+        if inner.overrides.contains_key(&key)
+            || inner.tracks.iter().any(|track| track_key(track) == key)
+        {
+            inner.manual_owners.insert(key, id.to_owned());
+        }
+    }
+
+    pub(super) fn manual_owns(&self, target: &str, property: &AnimationProperty, id: &str) -> bool {
+        self.inner
+            .borrow()
+            .manual_owners
+            .get(&(target.to_owned(), property.clone()))
+            .is_some_and(|owner| owner == id)
+    }
+
     pub fn cancel(&self, target: &str, property: &AnimationProperty) -> Option<InvalidationKind> {
         let key = (target.to_owned(), property.clone());
         let mut inner = self.inner.borrow_mut();
@@ -293,6 +317,7 @@ impl MotionTimeline {
         inner.pending.retain(|request| request_key(request) != key);
         let removed_override = inner.overrides.remove(&key).is_some();
         let invalidation = inner.override_invalidation.remove(&key);
+        inner.manual_owners.remove(&key);
         let removed_track = inner.tracks.len() != before_tracks;
         let removed_pending = inner.pending.len() != before_pending;
         if removed_override || removed_track {
@@ -313,6 +338,7 @@ impl MotionTimeline {
         inner.tracks.clear();
         inner.overrides.clear();
         inner.override_invalidation.clear();
+        inner.manual_owners.clear();
         inner.last_invalidation = InvalidationKind::None;
     }
 

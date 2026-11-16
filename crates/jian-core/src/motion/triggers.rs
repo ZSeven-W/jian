@@ -361,13 +361,16 @@ impl MotionTriggers {
                 match control.mode {
                     MotionControlMode::Stop => {
                         for property in &properties {
-                            let _ = animation.cancel(&target, property);
+                            if animation.manual_owns(&target, property, &control.animation) {
+                                let _ = animation.cancel(&target, property);
+                            }
                         }
                     }
                     MotionControlMode::Play
-                        if properties
-                            .iter()
-                            .any(|property| animation.has_active(&target, property)) => {}
+                        if properties.iter().any(|property| {
+                            animation.manual_owns(&target, property, &control.animation)
+                                && animation.has_active(&target, property)
+                        }) => {}
                     mode => {
                         let direction = if mode == MotionControlMode::Reverse {
                             AnimationDirection::Reverse
@@ -489,6 +492,11 @@ impl MotionTriggers {
         if view.node_rect(target).is_none() {
             return;
         }
+        let manual_id = if declaration.trigger == MotionTrigger::Manual {
+            declaration.id.as_deref()
+        } else {
+            None
+        };
         let mut by_property: BTreeMap<String, Vec<(f32, Value)>> = BTreeMap::new();
         for keyframe in &declaration.keyframes {
             for (property, value) in &keyframe.values {
@@ -523,6 +531,9 @@ impl MotionTriggers {
                         final_value
                     };
                     animation.set_instant(target, &property, landing, Some(&base));
+                    if let Some(id) = manual_id {
+                        animation.mark_manual_owner(target, &property, id);
+                    }
                 }
                 continue;
             }
@@ -554,10 +565,13 @@ impl MotionTriggers {
                 },
                 requested_at_ms: now_ms.saturating_add(declaration.delay_ms),
             };
-            if animation.start_immediate(request, base.clone(), Some(base), now_ms)
-                && animation.has_active(target, &property)
-            {
-                self.remember_track(target, &property);
+            if animation.start_immediate(request, base.clone(), Some(base), now_ms) {
+                if let Some(id) = manual_id {
+                    animation.mark_manual_owner(target, &property, id);
+                }
+                if animation.has_active(target, &property) {
+                    self.remember_track(target, &property);
+                }
             }
         }
     }
