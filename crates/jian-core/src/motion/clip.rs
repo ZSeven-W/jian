@@ -130,6 +130,29 @@ impl Clip {
         overrides
     }
 
+    /// Settle the clip immediately using the same fill behavior as the
+    /// runtime's reduced-motion triggers. Tracks without a terminal fill
+    /// leave the authored scene in place.
+    pub fn sample_reduced(&self, view: &dyn MotionSceneView) -> MotionOverrides {
+        let mut overrides = MotionOverrides::new();
+        for track in &self.tracks {
+            let request = &track.request;
+            if request.fill_mode != AnimationFillMode::Both {
+                continue;
+            }
+            let Some(base) = view.property(&request.target, &request.property) else {
+                continue;
+            };
+            let key = (request.target.clone(), request.property.clone());
+            if request.to != base {
+                overrides.insert(key, request.to.clone());
+            } else {
+                overrides.remove(&key);
+            }
+        }
+        overrides
+    }
+
     /// When the last finite animation ends; `None` when every animation
     /// loops forever.
     pub fn duration_ms(&self) -> Option<u64> {

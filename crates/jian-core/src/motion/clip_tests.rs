@@ -117,3 +117,27 @@ fn manual_clips_gather_a_shared_id_and_infinite_loops_have_no_end() {
     assert_eq!(only_loop.duration_ms(), None);
     assert!(Clip::build(&root, &ClipTrigger::Manual("other".into())).is_empty());
 }
+
+#[test]
+fn reduced_clip_matches_the_runtime_terminal_state() {
+    let children = screen();
+    let runtime = runtime(children.clone());
+    let mut scene = scene();
+    scene
+        .values
+        .insert(("title".into(), "opacity".into()), json!(0.4));
+    let clip = Clip::build(&root(&children), &ClipTrigger::Mount);
+    let timeline = MotionTimeline::default();
+    MotionTriggers::default().start_mount_animations(
+        &runtime,
+        &scene,
+        &timeline,
+        MotionPreference::Reduced,
+        0,
+    );
+    assert_eq!(clip.sample_reduced(&scene), timeline.overrides());
+    assert_eq!(
+        clip.sample_reduced(&scene)[&("title".into(), AnimationProperty::Opacity)],
+        json!(1)
+    );
+}
