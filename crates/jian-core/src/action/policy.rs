@@ -75,6 +75,7 @@ impl PreviewActionPolicy {
         "blur",
         "scroll_to",
         "animate",
+        "play_motion",
         "toast",
         "alert",
         "confirm",

@@ -208,6 +208,7 @@ fn complete_preview_authorable_vocabulary_is_ordered() {
         "blur",
         "scroll_to",
         "animate",
+        "play_motion",
         "toast",
         "alert",
         "confirm",
@@ -289,6 +290,10 @@ fn every_authorable_action_is_constructible() {
                 "target": "panel", "property": "opacity", "to": 1,
                 "durationMs": 100
             } }),
+        ),
+        (
+            "play_motion",
+            json!({ "play_motion": { "target": "panel", "animation": "reveal" } }),
         ),
         ("toast", json!({ "toast": "'saved'" })),
         (

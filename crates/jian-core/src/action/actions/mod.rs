@@ -15,6 +15,7 @@ pub mod logic;
 pub mod navigation;
 pub mod network;
 pub mod platform;
+pub mod play_motion;
 pub mod scroll;
 pub mod state;
 pub mod storage_ops;
@@ -95,6 +96,7 @@ pub fn register_all(reg: &Rc<RefCell<ActionRegistry>>) {
     );
     r.register("scroll_to", Box::new(scroll::factory_scroll_to));
     r.register("animate", Box::new(animate::factory_animate));
+    r.register("play_motion", Box::new(play_motion::factory_play_motion));
 
     // Control (nested — via weak registry upgrade)
     let w = weak.clone();

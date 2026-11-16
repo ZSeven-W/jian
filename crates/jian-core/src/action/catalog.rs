@@ -46,6 +46,7 @@ pub static ACTION_DESCRIPTORS: &[ActionDescriptor] = &[
     descriptor("blur", "ui", "empty", Some("focus"), true),
     descriptor("scroll_to", "ui", "scroll_target", None, true),
     descriptor("animate", "ui", "animation", None, true),
+    descriptor("play_motion", "ui", "motion_control", None, true),
     descriptor(
         "toast",
         "feedback",

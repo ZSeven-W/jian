@@ -141,6 +141,10 @@ pub enum AnimationOutcome {
 
 pub trait AnimationSink {
     fn request(&self, request: &AnimationRequest) -> AnimationOutcome;
+
+    fn control(&self, _control: &crate::motion::MotionControl, _now_ms: u64) -> AnimationOutcome {
+        AnimationOutcome::Unsupported
+    }
 }
 
 pub struct NullAnimationSink;

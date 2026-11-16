@@ -23,9 +23,11 @@ use std::rc::Rc;
 pub const MOTION_TRACK_BUDGET: usize = 32;
 
 /// What an interaction asks of the animations named by a `play_motion`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MotionControlMode {
     /// Start unless the animation is already running.
+    #[default]
     Play,
     /// Start from the beginning even if running.
     Restart,
@@ -36,10 +38,11 @@ pub enum MotionControlMode {
 }
 
 /// Animations with id `animation` on `target` or any node inside it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MotionControl {
     pub target: String,
     pub animation: String,
+    #[serde(default)]
     pub mode: MotionControlMode,
 }
 
@@ -349,10 +352,10 @@ impl MotionTriggers {
             if !view.subtree_contains(&control.target, &target) {
                 continue;
             }
-            for declaration in animations
-                .iter()
-                .filter(|declaration| declaration.id.as_deref() == Some(control.animation.as_str()))
-            {
+            for declaration in animations.iter().filter(|declaration| {
+                declaration.trigger == MotionTrigger::Manual
+                    && declaration.id.as_deref() == Some(control.animation.as_str())
+            }) {
                 matched += 1;
                 let properties = declared_properties(declaration);
                 match control.mode {
