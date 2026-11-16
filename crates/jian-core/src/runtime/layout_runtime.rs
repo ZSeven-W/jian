@@ -117,6 +117,7 @@ impl Runtime {
         }
         self.layout_mutation_seen = self.mutation_counter.get();
         self.font_generation_seen = font_generation_at_build;
+        self.clamp_standalone_scroll();
         self.mark_dirty();
         Ok(())
     }
@@ -149,8 +150,11 @@ impl Runtime {
                 if let Err(error) = self.relayout() {
                     self.push_layout_error(format!("viewport relayout failed: {error}"));
                 }
-            } else if !relayout {
-                self.layout_mutation_seen = self.mutation_counter.get();
+            } else {
+                if !relayout {
+                    self.layout_mutation_seen = self.mutation_counter.get();
+                }
+                self.clamp_standalone_scroll();
             }
         }
     }

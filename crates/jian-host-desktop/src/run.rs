@@ -790,7 +790,7 @@ impl ApplicationHandler for RunApp {
                 } else {
                     pos
                 };
-                self.host.runtime.dispatch_wheel(JianWheel {
+                self.host.runtime.dispatch_standalone_wheel(JianWheel {
                     position: logical_pos,
                     delta: jian_core::geometry::point(dx, dy),
                     // winit does not surface a z-axis scroll; web hosts
@@ -851,7 +851,7 @@ impl ApplicationHandler for RunApp {
                     pe.phase, pe.kind, pe.position.x, pe.position.y, pe.buttons
                 );
             }
-            let emitted = self.host.runtime.dispatch_pointer(pe);
+            let emitted = self.host.runtime.dispatch_standalone_pointer(pe);
             if trace && !emitted.is_empty() {
                 eprintln!("  emitted {} semantic events:", emitted.len());
                 for ev in &emitted {

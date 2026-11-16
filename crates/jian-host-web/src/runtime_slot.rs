@@ -179,10 +179,10 @@ impl RuntimeSlot {
 fn apply_input(runtime: &mut Runtime, input: PendingInput) {
     match input {
         PendingInput::Pointer(event) => {
-            runtime.dispatch_pointer(event);
+            runtime.dispatch_standalone_pointer(event);
         }
         PendingInput::Wheel(event) => {
-            runtime.dispatch_wheel(event);
+            runtime.dispatch_standalone_wheel(event);
         }
         PendingInput::Keyboard {
             key,

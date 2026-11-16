@@ -1,5 +1,7 @@
 //! Clock, action sink, and screen compositing for standalone render hosts.
 
+mod scroll;
+
 use super::Runtime;
 use crate::action::services::{AnimationSink, Router};
 use crate::binding::InvalidationKind;
@@ -21,6 +23,7 @@ pub(super) struct Playback {
     generation: Option<u64>,
     reduced: bool,
     window: Option<InViewWindow>,
+    scroll_y: Option<f32>,
     presentation_size: Option<(f32, f32)>,
     transition: Option<ScreenChange>,
     stack_depth: Option<usize>,
@@ -46,6 +49,7 @@ impl Runtime {
                 generation: None,
                 reduced: false,
                 window: None,
+                scroll_y: None,
                 presentation_size: None,
                 transition: None,
                 stack_depth: None,
@@ -98,7 +102,10 @@ impl Runtime {
     /// their original steady frame path.
     pub fn standalone_has_motion_paint(&self) -> bool {
         self.playback.as_ref().is_some_and(|p| {
-            p.transition.is_some() || p.has_style_transitions || p.sink.timeline.has_visual_state()
+            p.transition.is_some()
+                || p.has_style_transitions
+                || p.sink.timeline.has_visual_state()
+                || p.scroll_y.is_some_and(|offset| offset != 0.0)
         })
     }
 
@@ -205,13 +212,13 @@ impl Runtime {
                 overrides: &overrides,
                 interaction: &p.interaction,
             });
-        crate::render::scene_commands::collect(
+        self.scroll_paint_commands(crate::render::scene_commands::collect(
             doc,
             &self.layout,
             &self.state,
             Some(&widgets),
             motion.as_ref(),
-        )
+        ))
     }
 
     fn playback_widget_context<'a>(
@@ -379,6 +386,7 @@ impl Playback {
         if let Some((width, height)) = self.presentation_size {
             viewport.size = crate::geometry::size(width, height);
         }
+        viewport.pan.1 -= self.scroll_y.unwrap_or(0.0);
         let visible = viewport.visible_rect();
         let window = self.window.clone().or_else(|| {
             let root = view.root_rect()?;

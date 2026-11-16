@@ -374,6 +374,7 @@ impl Runtime {
         // state, including defaults merged above. Do not make the next pump
         // redundantly rebuild the layout that was just committed.
         self.layout_mutation_seen = self.mutation_counter.get();
+        self.clamp_standalone_scroll();
         Ok(())
     }
 

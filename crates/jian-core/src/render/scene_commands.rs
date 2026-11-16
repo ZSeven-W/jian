@@ -412,6 +412,45 @@ fn subtree_content_bounds(
     aggregate
 }
 
+/// Extent of the visible layout, including children overflowing an unclipped
+/// container. Motion transforms and paint effects don't change scroll limits.
+pub(crate) fn content_bottom(
+    doc: &crate::document::RuntimeDocument,
+    layout: &crate::layout::LayoutEngine,
+    state: &crate::state::StateGraph,
+    widgets: &WidgetRenderCtx,
+) -> f32 {
+    let mut pending = doc.tree.roots.clone();
+    let mut bottom = 0.0_f32;
+    while let Some(key) = pending.pop() {
+        let Some(bounds) = layout.node_rect(key) else {
+            continue;
+        };
+        let node = &doc.tree.nodes[key];
+        let Ok(mut json) = serde_json::to_value(&node.schema) else {
+            continue;
+        };
+        let binding = apply_bindings(&mut json, state, doc.schema.is_responsive());
+        apply_live_widget_state(&mut json, widgets);
+        if json["visible"].as_bool() == Some(false) {
+            continue;
+        }
+        bottom = bottom.max(binding.apply_to_rect(bounds).max_y());
+        if !clip_content(&json) {
+            if is_tabs_node(&json) {
+                pending.extend(
+                    active_tab_index(&json)
+                        .and_then(|index| node.children.get(index))
+                        .copied(),
+                );
+            } else {
+                pending.extend(node.children.iter().copied());
+            }
+        }
+    }
+    bottom
+}
+
 fn painted_node_bounds(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,

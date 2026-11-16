@@ -429,6 +429,7 @@ impl Runtime {
         self.widget_states
             .set_page_key(self.active_page_key.clone());
         self.image_store.begin_reload_ownership();
+        self.reset_standalone_scroll();
         self.document = Some(doc);
         self.text_geometry_ready = staged_geometry.is_some();
         if let Some((layout, spatial, layout_warnings)) = staged_geometry {

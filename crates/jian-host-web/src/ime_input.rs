@@ -216,6 +216,7 @@ impl ImeInput {
             self.set_focused(false);
             return;
         };
+        let rect = runtime.standalone_surface_rect(rect);
         let viewport = runtime.viewport.size;
         drop(runtime);
         // Focusing a DOM input is allowed to scroll the document. Focus first,
