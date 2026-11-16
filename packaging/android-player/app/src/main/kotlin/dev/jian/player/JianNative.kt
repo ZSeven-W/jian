@@ -29,6 +29,7 @@ object JianNative {
     external fun nativeAttachSurface(engine: Long, surface: Surface): Int
     external fun nativeSuspend(engine: Long): Int // blocking barrier
     external fun nativeResume(engine: Long, surface: Surface?): Int
+    external fun nativeSetReduceMotion(engine: Long, reduced: Boolean): Int
     external fun nativeResize(engine: Long, w: Float, h: Float, dpr: Float): Int
     external fun nativeSetSafeArea(engine: Long, t: Float, r: Float, b: Float, l: Float): Int
     external fun nativeSetKeyboard(engine: Long, h: Float): Int

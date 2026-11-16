@@ -93,6 +93,15 @@ impl Runtime {
         conform_reload: bool,
         install_layout: bool,
     ) -> CoreResult<()> {
+        let mut projection_warnings = Vec::new();
+        if self.playback.is_some() && !schema.is_responsive() && schema.routes.is_none() {
+            let (projected, warnings) =
+                jian_ops_schema::screen_projection::project_screens(&schema);
+            if let Some((normalized, _)) = projected {
+                schema = normalized;
+            }
+            projection_warnings.extend(warnings.into_iter().map(|warning| warning.to_string()));
+        }
         let route_snapshot = conform_reload.then(|| self.nav.current());
         let reload_declaration_schema = schema.clone();
         let prepared = prepare_document(
@@ -404,6 +413,7 @@ impl Runtime {
         self.action_surface_inputs = action_surface_inputs;
         self.action_surface_generation = self.action_surface_generation.wrapping_add(1);
         self.load_warnings = prepared.warnings;
+        self.load_warnings.extend(projection_warnings);
         if conform_reload {
             self.load_warnings.extend(conformance_warnings);
         }

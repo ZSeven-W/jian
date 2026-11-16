@@ -789,3 +789,6 @@ async fn mount_fifo_hot_reload_and_dispose_contract() {
         .unwrap());
     Reflect::set(&global, &JsValue::from_str("fetch"), &original_fetch).unwrap();
 }
+
+#[path = "browser_tests/motion.rs"]
+mod motion;

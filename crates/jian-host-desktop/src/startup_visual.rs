@@ -337,10 +337,11 @@ fn register_render_splash(driver: &mut StartupDriver, shared: &Rc<VisualShared>)
 fn register_render_first_frame(driver: &mut StartupDriver, shared: &Rc<VisualShared>) {
     let shared = Rc::clone(shared);
     driver.register(StartupPhase::RenderFirstFrame, move || async move {
-        let runtime_cell = shared.runtime.borrow();
+        let mut runtime_cell = shared.runtime.borrow_mut();
         let runtime = runtime_cell
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| "RenderFirstFrame: runtime absent".to_owned())?;
+        runtime.pump(runtime.last_now_ms());
         let Some(doc) = runtime.document.as_ref() else {
             return Err("RenderFirstFrame: no document loaded".to_owned());
         };
@@ -357,8 +358,15 @@ fn register_render_first_frame(driver: &mut StartupDriver, shared: &Rc<VisualSha
         if dpr_scaled {
             backend.push_transform(&jian_core::geometry::Affine2::scale(scale, scale));
         }
-        for op in &ops {
-            backend.draw(op);
+        if runtime.standalone_has_motion_paint() {
+            jian_core::render::paint_scene_commands(
+                &mut *backend,
+                runtime.standalone_paint_commands(),
+            );
+        } else {
+            for op in &ops {
+                backend.draw(op);
+            }
         }
         if dpr_scaled {
             backend.pop();

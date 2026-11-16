@@ -1,5 +1,10 @@
 //! Pump-driven rAF/timeout scheduler with paint-idle semantics.
+mod motion_preference;
+mod navigation;
 mod surface_lifecycle;
+
+use self::motion_preference::MotionPreferenceListener;
+use self::navigation::{pump_runtime, refresh_navigation, NavigationState};
 
 use self::surface_lifecycle::{apply_metrics, context_lost, context_restored, recreate_surface};
 use crate::backend::{CanvasKitBackend, CanvasKitSurface};
@@ -8,12 +13,10 @@ use crate::ime_input::ImeInput;
 use crate::mount::Callbacks;
 use crate::runtime_slot::RuntimeSlot;
 use crate::viewport::ViewportBridge;
-use jian_core::action::services::{NullRouter, RouteState, Router};
 use jian_core::render::{
-    collect_rich_draws_with_state, collect_scene_paint_commands_with_state, DrawOp, RenderBackend,
-    RichDrawList, ScenePaintCommand,
+    collect_rich_draws_with_state, paint_scene_commands, DrawOp, RenderBackend, RichDrawList,
+    ScenePaintCommand,
 };
-use jian_core::screens::{reconcile_screens_with_layout, ScreenRouter, ScreenTable};
 use js_sys::Function;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -21,17 +24,11 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{HtmlCanvasElement, Window};
 pub(crate) type RuntimeHandle = Rc<RuntimeSlot>;
-struct NavigationState {
-    router: Rc<ScreenRouter>,
-    table: ScreenTable,
-    current_path: String,
-}
-
 enum FramePaintCommands {
     /// The pre-responsive production path. Keeping this replay separate is
     /// required by the §1.1 no-output-change contract for legacy documents.
     Legacy(RichDrawList),
-    Responsive(Vec<ScenePaintCommand>),
+    Structured(Vec<ScenePaintCommand>),
 }
 struct State {
     window: Window,
@@ -77,6 +74,7 @@ impl State {
 pub(crate) struct RafPump {
     state: Rc<RefCell<State>>,
     viewport: Option<ViewportBridge>,
+    motion_preference: Option<MotionPreferenceListener>,
 }
 impl RafPump {
     pub(crate) fn start_with_clock(
@@ -116,6 +114,7 @@ impl RafPump {
             warning_count: 0,
             navigation: None,
         }));
+        let motion_preference = MotionPreferenceListener::install(&state, &window)?;
         install_callbacks(&state);
         let weak = Rc::downgrade(&state);
         let on_metrics = Rc::new(move |metrics| {
@@ -140,6 +139,7 @@ impl RafPump {
         Ok(Self {
             state,
             viewport: Some(viewport),
+            motion_preference,
         })
     }
 
@@ -247,6 +247,7 @@ impl RafPump {
 
     pub(crate) fn dispose(&mut self) {
         self.viewport.take();
+        self.motion_preference.take();
         let resources = {
             let mut state = self.state.borrow_mut();
             if state.disposed {
@@ -407,10 +408,7 @@ fn pump_without_paint(state: &Rc<RefCell<State>>) {
     // before this queued wake polls any task. Apply the router projection on
     // every production wake just as the rAF path does; otherwise a completed
     // `push` with no remaining dirty/deadline signal can go permanently idle.
-    reconcile_navigation(state, &runtime);
-    let mut live = runtime.take();
-    let directive = live.pump(now);
-    runtime.put(live);
+    let directive = pump_runtime(state, &runtime, now);
     report_runtime(state, &runtime);
     if state.borrow().disposed {
         return;
@@ -426,10 +424,7 @@ fn tick(state: &Rc<RefCell<State>>) {
         }
         (host.runtime.clone(), host.now_ms())
     };
-    reconcile_navigation(state, &runtime);
-    let mut live = runtime.take();
-    let first = live.pump(now);
-    runtime.put(live);
+    let first = pump_runtime(state, &runtime, now);
     report_runtime(state, &runtime);
     if state.borrow().disposed {
         return;
@@ -438,122 +433,9 @@ fn tick(state: &Rc<RefCell<State>>) {
         render_if_possible(state, &runtime);
     }
     sync_ime(state);
-    let mut live = runtime.take();
-    let directive = live.pump(now);
-    runtime.put(live);
+    let directive = pump_runtime(state, &runtime, now);
     report_runtime(state, &runtime);
     schedule(state, directive.needs_paint, directive.next_wake_ms, now);
-}
-
-fn refresh_navigation(state: &Rc<RefCell<State>>) {
-    let (runtime, previous) = {
-        let mut host = state.borrow_mut();
-        if host.disposed {
-            return;
-        }
-        (host.runtime.clone(), host.navigation.take())
-    };
-    let mut live = runtime.take();
-    let Some(table) = live.screen_table() else {
-        live.nav = Rc::new(NullRouter);
-        runtime.put(live);
-        return;
-    };
-    let paths = table.paths();
-    let active_path = live
-        .active_screen_path()
-        .unwrap_or(table.entry_path())
-        .to_owned();
-    let router = if let Some(previous) = previous {
-        let saved = previous.router.current();
-        previous.router.restore(saved, &paths);
-        previous.router
-    } else {
-        let router = Rc::new(ScreenRouter::new(table.entry_path(), paths.clone()));
-        if active_path != table.entry_path() {
-            router.restore(
-                RouteState {
-                    path: active_path.clone(),
-                    params: Default::default(),
-                    query: Default::default(),
-                    stack: vec![active_path.clone()],
-                },
-                &paths,
-            );
-        }
-        router
-    };
-    live.nav = router.clone();
-    let mut navigation = NavigationState {
-        router,
-        table,
-        current_path: active_path,
-    };
-    match reconcile_screens_with_layout(
-        &mut live,
-        &navigation.router,
-        &navigation.table,
-        &mut navigation.current_path,
-    ) {
-        Ok(outcome) => {
-            for rejected in outcome.rejections {
-                live.push_load_warning(format!(
-                    "unknown route `{}` ({}) ignored",
-                    rejected.path, rejected.verb
-                ));
-            }
-            if outcome.switched.is_some() {
-                live.mark_dirty();
-            }
-        }
-        Err(error) => live.push_layout_error(format!("route refresh failed: {error}")),
-    }
-    runtime.put(live);
-    let mut host = state.borrow_mut();
-    if !host.disposed {
-        host.navigation = Some(navigation);
-    }
-}
-
-fn reconcile_navigation(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
-    let Some(mut navigation) = ({
-        let mut host = state.borrow_mut();
-        (!host.disposed).then(|| host.navigation.take()).flatten()
-    }) else {
-        return;
-    };
-    let mut switched = false;
-    let mut live = runtime.take();
-    match reconcile_screens_with_layout(
-        &mut live,
-        &navigation.router,
-        &navigation.table,
-        &mut navigation.current_path,
-    ) {
-        Ok(outcome) => {
-            for rejected in outcome.rejections {
-                live.push_load_warning(format!(
-                    "unknown route `{}` ({}) ignored",
-                    rejected.path, rejected.verb
-                ));
-            }
-            if outcome.switched.is_some() {
-                switched = true;
-                live.mark_dirty();
-            }
-        }
-        Err(error) => live.push_layout_error(format!("route reconcile failed: {error}")),
-    }
-    runtime.put(live);
-    let mut host = state.borrow_mut();
-    if !host.disposed {
-        if switched {
-            // Route projection replaces the document warning vector, so its
-            // host cursor belongs to the previous document generation.
-            host.warning_count = 0;
-        }
-        host.navigation = Some(navigation);
-    }
 }
 
 fn report_runtime(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
@@ -605,12 +487,8 @@ fn render_if_possible(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
     let commands = {
         let runtime = runtime.borrow();
         runtime.document.as_ref().map(|document| {
-            if document.schema.is_responsive() {
-                FramePaintCommands::Responsive(collect_scene_paint_commands_with_state(
-                    document,
-                    &runtime.layout,
-                    &runtime.state,
-                ))
+            if document.schema.is_responsive() || runtime.standalone_has_motion_paint() {
+                FramePaintCommands::Structured(runtime.standalone_paint_commands())
             } else {
                 FramePaintCommands::Legacy(collect_rich_draws_with_state(
                     document,
@@ -662,24 +540,8 @@ fn render_if_possible(state: &Rc<RefCell<State>>, runtime: &RuntimeHandle) {
                     }
                 }
             }
-            FramePaintCommands::Responsive(commands) => {
-                for command in commands {
-                    match command {
-                        ScenePaintCommand::PushClip(rect) => backend.push_clip(rect),
-                        ScenePaintCommand::PushTransform(transform) => {
-                            backend.push_transform(&transform);
-                        }
-                        ScenePaintCommand::Pop => backend.pop(),
-                        ScenePaintCommand::ApplyBlur(sigma) => backend.apply_blur(sigma),
-                        ScenePaintCommand::ApplyShadow(shadow) => backend.apply_shadow(&shadow),
-                        ScenePaintCommand::PushLayer(bounds) => backend.push_layer(bounds),
-                        ScenePaintCommand::PopLayer => backend.pop_layer(),
-                        ScenePaintCommand::Draw(op) => backend.draw(&op),
-                        ScenePaintCommand::RichText { run, plan } => {
-                            backend.draw_text_plan(&run, &plan);
-                        }
-                    }
-                }
+            FramePaintCommands::Structured(commands) => {
+                paint_scene_commands(&mut backend, commands);
             }
         }
     }
@@ -737,8 +599,13 @@ fn sync_ime(state: &Rc<RefCell<State>>) {
 }
 
 fn schedule(state: &Rc<RefCell<State>>, needs_paint: bool, next_wake_ms: Option<u64>, now: u64) {
-    let can_paint = state.borrow().paintable();
-    if needs_paint && can_paint {
+    let (can_paint, motion_wake) = {
+        let host = state.borrow();
+        let wake = host.runtime.borrow().standalone_motion_deadline_ms();
+        (host.paintable(), wake)
+    };
+    if can_paint && (needs_paint || motion_wake.is_some_and(|wake| wake <= now.saturating_add(16)))
+    {
         request_frame(state);
         return;
     }

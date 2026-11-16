@@ -25,6 +25,7 @@ enum Command {
     Transform(Affine2),
     Pop,
     Layer(Rect, Option<Filter>),
+    Opacity(f32),
     PopLayer,
     Draw(DrawOp),
     RichText(TextRun, Vec<TextSpan>, Rect, RichTextGrowth),
@@ -233,6 +234,7 @@ impl CanvasKitBackend {
             Command::Layer(_, Some(Filter::Blur(_))) => "surface.push_blur_layer",
             Command::Layer(_, Some(Filter::Shadow(_))) => "surface.push_shadow_layer",
             Command::Layer(_, None) => "surface.push_layer",
+            Command::Opacity(_) => "surface.push_opacity",
             Command::PopLayer => "surface.pop_layer",
             Command::Draw(DrawOp::ShadowedRect { .. }) => "surface.draw_shadowed_rect",
             Command::Draw(_) => "surface.draw",
@@ -257,6 +259,7 @@ impl CanvasKitBackend {
                 self.trace_layer("surface", layer_kind(kind), bounds);
                 surface.push_layer(&rect_values(bounds), kind, &values);
             }
+            Command::Opacity(alpha) => surface.push_opacity(alpha),
             Command::PopLayer => surface.pop(),
             Command::Draw(op) => self.replay_draw(surface, op),
             Command::RichText(run, spans, bounds, growth) => {
@@ -495,6 +498,14 @@ impl RenderBackend for CanvasKitBackend {
         self.commands
             .push(Command::Layer(bounds, self.pending_filter.take()));
     }
+    fn draw_text_plan(&mut self, run: &TextRun, plan: &RichTextPlan) {
+        CanvasKitBackend::draw_text_plan(self, run, plan);
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        self.commands.push(Command::Opacity(alpha));
+    }
+
     fn pop_layer(&mut self) {
         self.trace("backend.pop_layer");
         self.commands.push(Command::PopLayer);

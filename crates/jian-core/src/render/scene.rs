@@ -1077,7 +1077,13 @@ fn emit_widget_visual(
                 paint: solid(track),
             });
             let d = (h - 4.0).max(2.0);
-            let kx = if on { x + w - d - 2.0 } else { x + 2.0 };
+            let kx = if let Some(progress) = json["toggleProgress"].as_f64() {
+                x + 2.0 + (w - d - 4.0) * progress as f32
+            } else if on {
+                x + w - d - 2.0
+            } else {
+                x + 2.0
+            };
             out.push(DrawOp::RoundedRect {
                 rect: rect(kx, y + 2.0, d, d),
                 radii: BorderRadii::uniform(d / 2.0),
@@ -1709,7 +1715,7 @@ fn first_shadow(json: &Value) -> Option<ShadowSpec> {
     None
 }
 
-fn first_solid_color(v: Option<&Value>) -> Option<Color> {
+pub(super) fn first_solid_color(v: Option<&Value>) -> Option<Color> {
     let arr = v?.as_array()?;
     for fill in arr {
         let obj = fill.as_object()?;
@@ -1723,7 +1729,7 @@ fn first_solid_color(v: Option<&Value>) -> Option<Color> {
     None
 }
 
-fn stroke_op(json: &Value) -> Option<StrokeOp> {
+pub(super) fn stroke_op(json: &Value) -> Option<StrokeOp> {
     let stroke = json.get("stroke")?.as_object()?;
     let thickness = stroke.get("thickness").and_then(|t| {
         if let Some(n) = t.as_f64() {

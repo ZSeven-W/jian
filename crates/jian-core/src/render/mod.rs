@@ -8,13 +8,14 @@ pub mod commands;
 pub mod image_store;
 pub mod paint;
 pub mod scene;
-mod scene_commands;
+pub(crate) mod scene_commands;
+pub(crate) mod scene_motion;
 pub mod text;
 pub mod text_geometry;
 pub mod widget_metrics;
 pub mod widget_style;
 
-pub use commands::{affine_to_array, RenderCommand, ScenePaintCommand};
+pub use commands::{affine_to_array, paint_scene_commands, RenderCommand, ScenePaintCommand};
 pub use paint::{
     BorderRadii, DrawOp, GradientStop, ImageSource, LinearGradient, MeshGradient, Paint,
     PathCommand, RadialGradient, ShaderSpec, ShaderUniform, ShadowSpec, StrokeOp, TextAlign,
@@ -283,6 +284,11 @@ pub trait RenderBackend {
 
     fn push_layer(&mut self, bounds: Rect);
     fn pop_layer(&mut self);
+    /// Composite the following commands together with one alpha.
+    fn push_opacity(&mut self, _alpha: f32) {
+        self.push_transform(&Affine2::identity());
+    }
+
     fn apply_blur(&mut self, sigma: f32);
     fn apply_shadow(&mut self, shadow: &ShadowSpec);
 
@@ -292,6 +298,9 @@ pub trait RenderBackend {
     fn draw_text_runs(&mut self, run: &TextRun, spans: &[TextSpan]) {
         let _ = spans;
         self.draw(&DrawOp::Text(run.clone()));
+    }
+    fn draw_text_plan(&mut self, run: &TextRun, plan: &RichTextPlan) {
+        self.draw_text_runs(run, &plan.spans);
     }
     fn register_image(&mut self, url_key: &str, bytes: &[u8]) -> Result<(), DecodeError> {
         let _ = url_key;
@@ -363,6 +372,10 @@ impl RenderBackend for CaptureBackend {
         self.commands
             .push(RenderCommand::ApplyShadow(shadow.clone()));
     }
+    fn push_opacity(&mut self, alpha: f32) {
+        self.commands.push(RenderCommand::PushOpacity(alpha));
+    }
+
     fn draw(&mut self, op: &DrawOp) {
         self.commands.push(RenderCommand::Draw(op.clone()));
     }

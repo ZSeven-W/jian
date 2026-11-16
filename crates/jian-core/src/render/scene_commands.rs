@@ -4,8 +4,11 @@ use super::scene::{
     active_tab_index, apply_bindings, apply_live_widget_state, emit_for_node, emit_live_text_input,
     is_tabs_node, WidgetRenderCtx,
 };
+use super::scene_motion::SceneMotion;
 use super::{DrawOp, RichTextPlan, ScenePaintCommand, ShadowSpec};
+use crate::action::services::AnimationProperty;
 use crate::geometry::{Affine2, Rect};
+use crate::motion::MotionOverrides;
 use crate::scene::Color;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -22,7 +25,7 @@ pub fn collect_scene_paint_commands_with_state(
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
 ) -> Vec<ScenePaintCommand> {
-    collect(doc, layout, state, None)
+    collect(doc, layout, state, None, None)
 }
 
 /// Like [`collect_scene_paint_commands_with_state`] but paints live widget
@@ -36,14 +39,15 @@ pub fn collect_scene_paint_commands_with_widgets(
     state: &crate::state::StateGraph,
     widgets: &WidgetRenderCtx,
 ) -> Vec<ScenePaintCommand> {
-    collect(doc, layout, state, Some(widgets))
+    collect(doc, layout, state, Some(widgets), None)
 }
 
-fn collect(
+pub(crate) fn collect(
     doc: &crate::document::RuntimeDocument,
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
     widgets: Option<&WidgetRenderCtx>,
+    motion: Option<&SceneMotion>,
 ) -> Vec<ScenePaintCommand> {
     let mut commands = Vec::with_capacity(doc.tree.nodes.len() * 2);
     let mut visited = HashSet::with_capacity(doc.tree.nodes.len());
@@ -53,6 +57,7 @@ fn collect(
             layout,
             state,
             widgets,
+            motion,
             root,
             &mut commands,
             &mut visited,
@@ -67,6 +72,7 @@ fn walk(
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
     widgets: Option<&WidgetRenderCtx>,
+    motion: Option<&SceneMotion>,
     key: crate::document::NodeKey,
     commands: &mut Vec<ScenePaintCommand>,
     visited: &mut HashSet<crate::document::NodeKey>,
@@ -92,24 +98,39 @@ fn walk(
     }
     bounds = overrides.apply_to_rect(bounds);
 
-    let transformed = node_transform(&json, bounds);
+    let mut transform = MotionTransform::default();
+    if let Some(motion) = motion {
+        motion
+            .interaction
+            .apply(key, &mut json, widgets.and_then(|ctx| ctx.focused_id));
+        transform = apply_motion(&mut json, &mut bounds, motion.overrides);
+    }
+    let transformed = node_transform(&json, bounds, transform);
     if let Some(transform) = transformed {
         commands.push(ScenePaintCommand::PushTransform(transform));
     }
 
+    if let Some(alpha) = transform.alpha {
+        commands.push(ScenePaintCommand::PushOpacity(alpha));
+    }
     let effects = layer_effects(&json);
-    let mut bounds_visited = HashSet::with_capacity(doc.tree.nodes.len());
-    let content_bounds = subtree_content_bounds(
-        doc,
-        layout,
-        state,
-        widgets,
-        key,
-        bounds,
-        &json,
-        &mut bounds_visited,
-    );
-    let layer_bounds = nested_effect_bounds(content_bounds, &effects);
+    let layer_bounds = if effects.is_empty() {
+        Vec::new()
+    } else {
+        let mut bounds_visited = HashSet::with_capacity(doc.tree.nodes.len());
+        let content_bounds = subtree_content_bounds(
+            doc,
+            layout,
+            state,
+            widgets,
+            motion,
+            key,
+            bounds,
+            &json,
+            &mut bounds_visited,
+        );
+        nested_effect_bounds(content_bounds, &effects)
+    };
     for (effect, layer_bounds) in effects.iter().zip(layer_bounds) {
         match effect {
             LayerEffect::Blur(sigma) => commands.push(ScenePaintCommand::ApplyBlur(*sigma)),
@@ -181,13 +202,18 @@ fn walk(
         if tabs_node && active_tab != Some(index) {
             continue;
         }
-        walk(doc, layout, state, widgets, child, commands, visited);
+        walk(
+            doc, layout, state, widgets, motion, child, commands, visited,
+        );
     }
     if clipped {
         commands.push(ScenePaintCommand::Pop);
     }
 
     commands.extend((0..effects.len()).map(|_| ScenePaintCommand::PopLayer));
+    if transform.alpha.is_some() {
+        commands.push(ScenePaintCommand::PopLayer);
+    }
     if transformed.is_some() {
         commands.push(ScenePaintCommand::Pop);
     }
@@ -214,17 +240,85 @@ fn append_draws(
     }
 }
 
-fn node_transform(json: &Value, bounds: Rect) -> Option<Affine2> {
+#[derive(Clone, Copy)]
+struct MotionTransform {
+    dx: f32,
+    dy: f32,
+    sx: f32,
+    sy: f32,
+    alpha: Option<f32>,
+}
+
+impl Default for MotionTransform {
+    fn default() -> Self {
+        Self {
+            dx: 0.0,
+            dy: 0.0,
+            sx: 1.0,
+            sy: 1.0,
+            alpha: None,
+        }
+    }
+}
+
+fn apply_motion(
+    json: &mut Value,
+    bounds: &mut Rect,
+    overrides: &MotionOverrides,
+) -> MotionTransform {
+    use AnimationProperty::*;
+    let mut result = MotionTransform::default();
+    let id = json["id"].as_str().unwrap_or_default().to_owned();
+    for ((target, property), value) in overrides {
+        if *target != id {
+            continue;
+        }
+        let number = value.as_f64().unwrap_or_default() as f32;
+        match property {
+            TranslateX => result.dx = number,
+            TranslateY => result.dy = number,
+            ScaleX => result.sx = number,
+            ScaleY => result.sy = number,
+            X => bounds.origin.x = number,
+            Y => bounds.origin.y = number,
+            Width => bounds.size.width = number.max(0.0),
+            Height => bounds.size.height = number.max(0.0),
+            Rotation | CornerRadius | ToggleProgress => json[property.name()] = value.clone(),
+            Opacity => {
+                json["opacity"] = serde_json::json!(1.0);
+                let alpha = number.clamp(0.0, 1.0);
+                result.alpha = (alpha < 1.0).then_some(alpha);
+            }
+            Fill => json["fill"] = solid_fill(value),
+            Stroke if json["stroke"].is_object() => json["stroke"]["fill"] = solid_fill(value),
+            _ => {}
+        }
+    }
+    result
+}
+
+fn solid_fill(value: &Value) -> Value {
+    serde_json::json!([{"type":"solid", "color":value}])
+}
+
+fn node_transform(json: &Value, bounds: Rect, motion: MotionTransform) -> Option<Affine2> {
     let degrees = json.get("rotation").and_then(Value::as_f64).unwrap_or(0.0) as f32;
     let flip_x = json.get("flipX").and_then(Value::as_bool).unwrap_or(false);
     let flip_y = json.get("flipY").and_then(Value::as_bool).unwrap_or(false);
-    if degrees.abs() <= f32::EPSILON && !flip_x && !flip_y {
+    if degrees.abs() <= f32::EPSILON
+        && !flip_x
+        && !flip_y
+        && motion.dx == 0.0
+        && motion.dy == 0.0
+        && motion.sx == 1.0
+        && motion.sy == 1.0
+    {
         return None;
     }
     let center = bounds.center();
     let local = Affine2::scale(
-        if flip_x { -1.0 } else { 1.0 },
-        if flip_y { -1.0 } else { 1.0 },
+        motion.sx * if flip_x { -1.0 } else { 1.0 },
+        motion.sy * if flip_y { -1.0 } else { 1.0 },
     )
     .then(&Affine2::rotation(euclid::Angle::radians(
         degrees.to_radians(),
@@ -232,7 +326,10 @@ fn node_transform(json: &Value, bounds: Rect) -> Option<Affine2> {
     Some(
         Affine2::translation(-center.x, -center.y)
             .then(&local)
-            .then(&Affine2::translation(center.x, center.y)),
+            .then(&Affine2::translation(
+                center.x + motion.dx,
+                center.y + motion.dy,
+            )),
     )
 }
 
@@ -283,6 +380,7 @@ fn subtree_content_bounds(
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
     widgets: Option<&WidgetRenderCtx>,
+    motion: Option<&SceneMotion>,
     key: crate::document::NodeKey,
     bounds: Rect,
     json: &Value,
@@ -305,7 +403,8 @@ fn subtree_content_bounds(
         if tabs_node && active_tab != Some(index) {
             continue;
         }
-        if let Some(child_bounds) = painted_node_bounds(doc, layout, state, widgets, child, visited)
+        if let Some(child_bounds) =
+            painted_node_bounds(doc, layout, state, widgets, motion, child, visited)
         {
             aggregate = union(aggregate, child_bounds);
         }
@@ -318,6 +417,7 @@ fn painted_node_bounds(
     layout: &crate::layout::LayoutEngine,
     state: &crate::state::StateGraph,
     widgets: Option<&WidgetRenderCtx>,
+    motion: Option<&SceneMotion>,
     key: crate::document::NodeKey,
     visited: &mut HashSet<crate::document::NodeKey>,
 ) -> Option<Rect> {
@@ -336,15 +436,25 @@ fn painted_node_bounds(
     }
     bounds = overrides.apply_to_rect(bounds);
 
-    let content = subtree_content_bounds(doc, layout, state, widgets, key, bounds, &json, visited);
+    let transform = motion.map_or_else(MotionTransform::default, |values| {
+        values
+            .interaction
+            .apply(key, &mut json, widgets.and_then(|ctx| ctx.focused_id));
+        apply_motion(&mut json, &mut bounds, values.overrides)
+    });
+    let content = subtree_content_bounds(
+        doc, layout, state, widgets, motion, key, bounds, &json, visited,
+    );
     let effects = layer_effects(&json);
     let painted = nested_effect_bounds(content, &effects)
         .first()
         .copied()
         .unwrap_or(content);
-    Some(node_transform(&json, bounds).map_or(painted, |transform| {
-        outer_transformed_rect(painted, &transform)
-    }))
+    Some(
+        node_transform(&json, bounds, transform).map_or(painted, |transform| {
+            outer_transformed_rect(painted, &transform)
+        }),
+    )
 }
 
 fn union(a: Rect, b: Rect) -> Rect {
@@ -439,3 +549,7 @@ fn expand_for_effect(mut bounds: Rect, effect: &LayerEffect) -> Rect {
     bounds.size.height += top + bottom;
     bounds
 }
+
+#[cfg(test)]
+#[path = "scene_motion_tests.rs"]
+mod motion_tests;

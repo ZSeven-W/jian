@@ -280,6 +280,7 @@ fn reconcile_screens_mode(
     let rejections = router.take_rejections();
     let state = router.current();
     if state.path == *current_path {
+        runtime.note_motion_stack_depth(state.stack.len());
         sync_route_state(runtime, &state);
         return Ok(ReconcileOutcome {
             switched: None,
@@ -294,6 +295,8 @@ fn reconcile_screens_mode(
             rejections,
         });
     };
+    runtime.tick_playback();
+    let transition = runtime.prepare_screen_motion(router.as_ref(), state.stack.len());
     if install_layout {
         runtime.replace_document_for_path_and_relayout(doc, Some(&state.path), &state)?;
     } else {
@@ -304,6 +307,7 @@ fn reconcile_screens_mode(
         state.path.clone(),
         table.variants.clone(),
     );
+    runtime.mount_screen_motion(state.stack.len(), transition);
     *current_path = state.path.clone();
     Ok(ReconcileOutcome {
         switched: Some(state.path),

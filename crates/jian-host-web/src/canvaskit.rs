@@ -60,6 +60,9 @@ extern "C" {
     pub fn push_transform(this: &CkSurface, matrix: &[f32]);
     #[wasm_bindgen(method)]
     pub fn pop(this: &CkSurface);
+    #[wasm_bindgen(method, js_name = pushOpacity)]
+    pub fn push_opacity(this: &CkSurface, alpha: f32);
+
     #[wasm_bindgen(method, js_name = pushLayer)]
     pub fn push_layer(this: &CkSurface, bounds: &[f32], filter_kind: u8, filter: &[f32]);
     #[wasm_bindgen(method, js_name = drawRect)]

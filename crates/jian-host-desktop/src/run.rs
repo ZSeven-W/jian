@@ -272,7 +272,18 @@ impl RunApp {
 
         // 1. Collect draw ops and rasterize via SkiaBackend. The canvas
         // is scaled by DPR so logical-unit rects fill physical pixels.
-        let ops = if let Some(doc) = self.host.runtime.document.as_ref() {
+        let commands = self
+            .host
+            .runtime
+            .standalone_has_motion_paint()
+            .then(|| self.host.runtime.standalone_paint_commands());
+        let ops = if let Some(doc) = self
+            .host
+            .runtime
+            .document
+            .as_ref()
+            .filter(|_| commands.is_none())
+        {
             collect_draws_with_state(doc, &self.host.runtime.layout, &self.host.runtime.state)
         } else {
             Vec::new()
@@ -289,9 +300,16 @@ impl RunApp {
         if dpr_scaled {
             backend.push_transform(&jian_core::geometry::Affine2::scale(scale, scale));
         }
-        for op in &ops {
-            backend.draw(op);
-        }
+        let draw_count = if let Some(commands) = commands {
+            let count = commands.len();
+            jian_core::render::paint_scene_commands(&mut backend, commands);
+            count
+        } else {
+            for op in &ops {
+                backend.draw(op);
+            }
+            ops.len()
+        };
         if dpr_scaled {
             backend.pop();
         }
@@ -299,7 +317,7 @@ impl RunApp {
             // Draw the HUD in physical pixel space (after the DPR pop)
             // so the strip is the same size on every monitor regardless
             // of OS scale.
-            for hud in build_debug_overlay(w, h, scale, ops.len()) {
+            for hud in build_debug_overlay(w, h, scale, draw_count) {
                 backend.draw(&hud);
             }
         }
@@ -730,10 +748,18 @@ impl ApplicationHandler for RunApp {
                 }
                 return;
             }
+            WindowEvent::Focused(true) => {
+                self.host
+                    .runtime
+                    .set_standalone_reduce_motion(crate::reduced_motion::system_reduced_motion());
+            }
             WindowEvent::RedrawRequested => {
+                let now = self.host.launch_epoch.elapsed().as_millis() as u64;
+                self.host.runtime.note_time(now);
                 if let Some(hook) = self.host.frame_hook.as_mut() {
                     hook(&mut self.host.runtime);
                 }
+                self.host.runtime.pump(now);
                 self.redraw(event_loop);
                 return;
             }
@@ -954,11 +980,18 @@ impl ApplicationHandler for RunApp {
             || self.has_mcp_drain()
             || self.has_asp_drain()
             || self.host.pending_deeplinks.is_some();
-        if needs_polling {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now() + RELOAD_POLL_INTERVAL,
-            ));
-        }
+        let poll = needs_polling.then(|| Instant::now() + RELOAD_POLL_INTERVAL);
+        let wake = directive.next_wake_ms.and_then(|ms| {
+            self.host
+                .launch_epoch
+                .checked_add(Duration::from_millis(ms))
+        });
+        event_loop.set_control_flow(
+            poll.into_iter()
+                .chain(wake)
+                .min()
+                .map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
+        );
 
         if needs_redraw {
             if let Some(w) = self.window.as_ref() {

@@ -16,6 +16,7 @@ pub enum RenderCommand {
     Pop,
     Draw(DrawOp),
     PushLayer { bounds: Rect },
+    PushOpacity(f32),
     PopLayer,
     ApplyBlur { sigma: f32 },
     ApplyShadow(ShadowSpec),
@@ -31,6 +32,7 @@ pub enum ScenePaintCommand {
     ApplyBlur(f32),
     ApplyShadow(ShadowSpec),
     PushLayer(Rect),
+    PushOpacity(f32),
     PopLayer,
     Draw(DrawOp),
     RichText { run: TextRun, plan: RichTextPlan },
@@ -38,4 +40,25 @@ pub enum ScenePaintCommand {
 
 pub fn affine_to_array(a: &Affine2) -> [f32; 6] {
     [a.m11, a.m12, a.m21, a.m22, a.m31, a.m32]
+}
+
+/// Replay the same scene stream on the desktop, embedded and web backends.
+pub fn paint_scene_commands(
+    backend: &mut impl super::RenderBackend,
+    commands: Vec<ScenePaintCommand>,
+) {
+    for command in commands {
+        match command {
+            ScenePaintCommand::PushClip(rect) => backend.push_clip(rect),
+            ScenePaintCommand::PushTransform(transform) => backend.push_transform(&transform),
+            ScenePaintCommand::Pop => backend.pop(),
+            ScenePaintCommand::ApplyBlur(sigma) => backend.apply_blur(sigma),
+            ScenePaintCommand::ApplyShadow(shadow) => backend.apply_shadow(&shadow),
+            ScenePaintCommand::PushLayer(bounds) => backend.push_layer(bounds),
+            ScenePaintCommand::PushOpacity(alpha) => backend.push_opacity(alpha),
+            ScenePaintCommand::PopLayer => backend.pop_layer(),
+            ScenePaintCommand::Draw(op) => backend.draw(&op),
+            ScenePaintCommand::RichText { run, plan } => backend.draw_text_plan(&run, &plan),
+        }
+    }
 }

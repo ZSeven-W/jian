@@ -265,6 +265,8 @@ impl Default for HostConfig {
 impl DesktopHost {
     #[allow(unused_mut)]
     pub fn new(mut runtime: Runtime, title: impl Into<String>) -> Self {
+        runtime.enable_standalone_motion();
+        runtime.set_standalone_reduce_motion(crate::reduced_motion::system_reduced_motion());
         let confirm_overlay = crate::confirm_overlay::ConfirmOverlay::default();
         #[cfg(feature = "feedback")]
         {
@@ -314,6 +316,8 @@ impl DesktopHost {
 
     #[allow(unused_mut)]
     pub fn with_config(mut runtime: Runtime, config: HostConfig) -> Self {
+        runtime.enable_standalone_motion();
+        runtime.set_standalone_reduce_motion(crate::reduced_motion::system_reduced_motion());
         let confirm_overlay = crate::confirm_overlay::ConfirmOverlay::default();
         #[cfg(feature = "feedback")]
         {

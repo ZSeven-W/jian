@@ -142,6 +142,7 @@ impl Runtime {
         // Up/Cancel disarms it. This runs *before* the arena dispatch so
         // a drag and a tap don't double-set the value — a clean Down+Up
         // still lands as a Tap.
+        self.note_playback_pointer(&event);
         self.handle_slider_drag(&event);
 
         let emitted = {

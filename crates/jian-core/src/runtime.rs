@@ -61,6 +61,7 @@ mod keyboard_input;
 mod layout_runtime;
 mod lifecycle;
 mod lifecycle_dispatch;
+mod playback;
 mod pointer_input;
 mod pump;
 mod reload_resources;
@@ -162,6 +163,7 @@ pub struct Runtime {
     pub ui_mutation_sink: Rc<dyn UiMutationSink>,
     /// R7 structured animation requests. Preview installs one bounded
     /// session timeline; ordinary runtimes keep a diagnostic null sink.
+    playback: Option<playback::Playback>,
     pub animation_sink: Rc<dyn AnimationSink>,
     /// R9 action start/result observer used by Preview tracing.
     pub observer: Rc<dyn ActionObserver>,

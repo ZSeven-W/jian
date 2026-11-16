@@ -1,8 +1,5 @@
 use jian_core::geometry::Affine2;
-use jian_core::render::{
-    collect_scene_paint_commands_with_widgets, RenderBackend, ScenePaintCommand, WidgetRenderCtx,
-    WidgetTheme,
-};
+use jian_core::render::{paint_scene_commands, RenderBackend, ScenePaintCommand};
 use jian_core::runtime::Runtime;
 use jian_skia::{InstanceImageRegistry, RegisteredBackend, SkiaBackend, SkiaSurface};
 
@@ -20,32 +17,7 @@ pub(crate) fn prepare_commands(
         images,
     };
     runtime.prepare_frame(&mut registered, backend_generation);
-    // WITH widgets: this host takes input, so a text field must paint what the
-    // user typed rather than the value the document was authored with. The
-    // state-only collector leaves every edit invisible.
-    let theme = WidgetTheme::default();
-    let focused = runtime.focused_widget_id();
-    let widgets = WidgetRenderCtx {
-        states: &runtime.widget_states,
-        theme: &theme,
-        focused_id: focused.as_deref(),
-        now_ms: runtime.last_now_ms(),
-        // Measured, not estimated: the per-character estimate drifts further
-        // right the more is typed, leaving the caret visibly off the glyphs.
-        caret_x: runtime.focused_caret_rect().map(|r| r.min_x()),
-    };
-    runtime
-        .document
-        .as_ref()
-        .map(|document| {
-            collect_scene_paint_commands_with_widgets(
-                document,
-                &runtime.layout,
-                &runtime.state,
-                &widgets,
-            )
-        })
-        .unwrap_or_default()
+    runtime.standalone_paint_commands()
 }
 
 pub(crate) fn paint_commands(
@@ -64,21 +36,7 @@ pub(crate) fn paint_commands(
     if scaled {
         backend.push_transform(&Affine2::scale(dpr, dpr));
     }
-    for command in commands {
-        match command {
-            ScenePaintCommand::PushClip(rect) => backend.push_clip(rect),
-            ScenePaintCommand::PushTransform(transform) => backend.push_transform(&transform),
-            ScenePaintCommand::Pop => backend.pop(),
-            ScenePaintCommand::ApplyBlur(sigma) => backend.apply_blur(sigma),
-            ScenePaintCommand::ApplyShadow(shadow) => backend.apply_shadow(&shadow),
-            ScenePaintCommand::PushLayer(bounds) => backend.push_layer(bounds),
-            ScenePaintCommand::PopLayer => backend.pop_layer(),
-            ScenePaintCommand::Draw(op) => backend.draw(&op),
-            ScenePaintCommand::RichText { run, plan } => {
-                backend.draw_text_runs(&run, &plan.spans);
-            }
-        }
-    }
+    paint_scene_commands(backend, commands);
     if scaled {
         backend.pop();
     }

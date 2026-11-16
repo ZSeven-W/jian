@@ -120,7 +120,7 @@ semver          = { version = "1", optional = true }
 # .icns by default; we override it from the schema's `app.icon` PNG).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
-objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSImage"] }
+objc2-app-kit = { version = "0.2", features = ["NSApplication", "NSImage", "NSWorkspace"] }
 # `NSAppleEventManager` + `NSAppleEventDescriptor` features added for
 # Plan 8 §T8 deep-link receiver — registers a `kAEGetURL` handler so
 # `open jian://...` URLs land in `app_delegate::dispatch_url`.

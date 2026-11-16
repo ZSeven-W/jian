@@ -1,0 +1,15 @@
+{
+  "version":"1.2","responsive":true,"children":[{
+    "type":"frame","id":"root","width":64,"height":64,"children":[{
+      "type":"frame","id":"group","width":48,"height":48,
+      "animations":[{"trigger":"mount","durationMs":160,"easing":"linear",
+        "keyframes":{"from":{"opacity":0},"to":{"opacity":1}}}],
+      "children":[
+        {"type":"rectangle","id":"a","x":4,"y":4,"width":16,"height":16,
+         "fill":[{"type":"solid","color":"#000000"}]},
+        {"type":"rectangle","id":"b","x":12,"y":4,"width":16,"height":16,
+         "fill":[{"type":"solid","color":"#000000"}]}
+      ]
+    }]
+  }]
+}

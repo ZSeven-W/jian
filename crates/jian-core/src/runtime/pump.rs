@@ -203,6 +203,7 @@ impl Runtime {
                 self.layout_mutation_seen = mutation;
             }
         }
+        self.tick_playback();
         FrameDirective {
             needs_paint: self.dirty,
             next_wake_ms: self.next_runtime_wake_ms(),
@@ -227,6 +228,7 @@ impl Runtime {
             self.gestures.next_wake_ms(),
             self.task_queue.next_wake_ms(self.now_ms),
             self.task_clock.next_deadline(),
+            self.standalone_motion_deadline_ms(),
         ]
         .into_iter()
         .flatten()

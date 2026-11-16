@@ -15,13 +15,13 @@ use std::ptr;
 use std::sync::{Arc, OnceLock};
 
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString};
-use jni::sys::{jfloat, jint, jlong};
+use jni::sys::{jboolean, jfloat, jint, jlong};
 use jni::{JNIEnv, JavaVM};
 
 use jian_engine_ffi::{
-    jian_attach_surface, jian_create, jian_destroy, jian_frame, jian_pointer, jian_register_font,
-    jian_resize, jian_resume, jian_set_keyboard, jian_set_safe_area, jian_suspend, JianCreateDesc,
-    JianEngine, JianStatus, JianSurfaceDesc,
+    jian_attach_surface, jian_create, jian_destroy, jian_engine_set_reduce_motion, jian_frame,
+    jian_pointer, jian_register_font, jian_resize, jian_resume, jian_set_keyboard,
+    jian_set_safe_area, jian_suspend, JianCreateDesc, JianEngine, JianStatus, JianSurfaceDesc,
 };
 
 use crate::callbacks::{build_callbacks, drop_ctx, EngineCtx};
@@ -470,6 +470,18 @@ pub extern "system" fn Java_dev_jian_player_JianNative_nativeSuspend<'local>(
         status as jint
     })
     .unwrap_or(STATUS_CLOSING)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_dev_jian_player_JianNative_nativeSetReduceMotion<'local>(
+    _env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    engine: jlong,
+    reduced: jboolean,
+) -> jint {
+    call_status(engine, move |e| unsafe {
+        jian_engine_set_reduce_motion(e, reduced != 0)
+    })
 }
 
 #[no_mangle]

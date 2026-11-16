@@ -70,6 +70,10 @@ impl RenderBackend for RegisteredBackend<'_> {
     fn push_layer(&mut self, bounds: Rect) {
         self.inner.push_layer(bounds);
     }
+    fn push_opacity(&mut self, alpha: f32) {
+        self.inner.push_opacity(alpha);
+    }
+
     fn pop_layer(&mut self) {
         self.inner.pop_layer();
     }

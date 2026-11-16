@@ -293,6 +293,17 @@ class Surface {
 
   pop() { if (this.canvas.getSaveCount() > 1) this.canvas.restore(); }
 
+  pushOpacity(alpha) {
+    if (alpha >= 1) {
+      this.canvas.save();
+      return;
+    }
+    const paint = new this.ck.Paint();
+    paint.setAlphaf(Math.max(0, alpha));
+    this.canvas.saveLayer(paint, null);
+    paint.delete();
+  }
+
   pushLayer(bounds, filterKind, filter) {
     let paint = null;
     let imageFilter = null;

@@ -318,6 +318,7 @@ pub async fn mount_jian(
     }
     let measure = backend.measure_backend();
     let mut runtime = jian_core::Runtime::new();
+    runtime.enable_standalone_motion();
     runtime.enable_action_reporting();
     runtime.set_now_ms(clock.now_ms());
     runtime.image_resolver = Rc::new(WebImageResolver::new(

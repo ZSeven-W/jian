@@ -58,3 +58,5 @@ mod run;
 pub use host::DesktopHost;
 pub use menus::{MenuItem, MenuSpec};
 pub use scene::collect_draws;
+
+mod reduced_motion;

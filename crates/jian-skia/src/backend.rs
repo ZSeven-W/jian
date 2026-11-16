@@ -35,6 +35,7 @@ enum Cmd {
         bounds: Rect,
         filter: Option<ImageFilter>,
     },
+    PushOpacity(f32),
     PopLayer,
     Draw(DrawOp),
 }
@@ -126,6 +127,15 @@ impl RenderBackend for SkiaBackend {
                     }
                     canvas.save_layer(&rec);
                 }
+                Cmd::PushOpacity(alpha) => {
+                    if alpha >= 1.0 {
+                        canvas.save();
+                    } else {
+                        let mut paint = SkPaint::default();
+                        paint.set_alpha_f(alpha.clamp(0.0, 1.0));
+                        canvas.save_layer(&SaveLayerRec::default().paint(&paint));
+                    }
+                }
                 Cmd::PopLayer => {
                     canvas.restore();
                 }
@@ -154,6 +164,10 @@ impl RenderBackend for SkiaBackend {
     fn push_layer(&mut self, bounds: Rect) {
         let filter = self.pending_filter.take();
         self.record(Cmd::PushLayer { bounds, filter });
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        self.record(Cmd::PushOpacity(alpha));
     }
 
     fn pop_layer(&mut self) {

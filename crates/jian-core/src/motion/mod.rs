@@ -10,6 +10,7 @@
 //! recorded from the original implementation live in
 //! `tests/golden/motion/` and pin its behaviour, quirks included.
 
+mod action_sink;
 pub mod clip;
 pub mod compile;
 pub mod curve;
@@ -24,6 +25,7 @@ pub mod timed_transition;
 pub mod timeline;
 pub mod triggers;
 
+pub use action_sink::MotionActionSink;
 pub use clip::{Clip, ClipKeyframe, ClipTrigger, MotionOverrides};
 pub use compile::{compile, CompiledAnimation, CompiledSegment};
 pub use curve::{as_cubic, ease, ease_in_out_cubic, ease_out_cubic, inverse, CubicPiece};

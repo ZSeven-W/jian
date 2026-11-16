@@ -474,6 +474,15 @@ JianStatus jian_create(const JianCreateDesc *desc, JianEngine **out);
 JianStatus jian_destroy(JianEngine *engine);
 
 /**
+ * Set the host accessibility preference for document playback.
+ *
+ * # Safety
+ *
+ * `engine` must be live and called on its owner thread.
+ */
+JianStatus jian_engine_set_reduce_motion(JianEngine *engine, bool reduced);
+
+/**
  * Pump and present one GPU frame.
  *
  * # Safety

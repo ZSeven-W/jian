@@ -216,6 +216,19 @@ pub unsafe extern "C" fn jian_frame_cpu(
     }
 }
 
+/// Set the host accessibility preference for document playback.
+///
+/// # Safety
+///
+/// `engine` must be live and called on its owner thread.
+#[no_mangle]
+pub unsafe extern "C" fn jian_engine_set_reduce_motion(
+    engine: *mut JianEngine,
+    reduced: bool,
+) -> JianStatus {
+    unsafe { call_engine(engine, |lifecycle| lifecycle.set_reduce_motion(reduced)) }
+}
+
 /// Change the logical viewport and device-pixel ratio.
 ///
 /// # Safety

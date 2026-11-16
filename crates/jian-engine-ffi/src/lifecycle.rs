@@ -12,12 +12,15 @@ use crate::viewport::JianInsets;
 #[cfg(debug_assertions)]
 use crate::viewport::JianRect;
 use crate::JianStatus;
+use jian_core::action::services::Router;
 use jian_core::geometry::point;
 use jian_core::gesture::{PointerEvent, PointerPhase};
 use jian_core::runtime::{FrameDirective, Runtime};
+use jian_core::screens::{reconcile_screens_with_layout, ScreenRouter, ScreenTable};
 use jian_skia::{SkiaBackend, SkiaSurface};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::rc::Rc;
 use std::thread::ThreadId;
 
 const MAX_PHYSICAL_AXIS: u32 = 16_384;
@@ -30,8 +33,15 @@ enum RenderMode {
     Gpu,
 }
 
+struct Navigation {
+    router: Rc<ScreenRouter>,
+    table: ScreenTable,
+    mounted_path: String,
+}
+
 pub(crate) struct Lifecycle {
     pub(crate) runtime: Runtime,
+    navigation: Option<Navigation>,
     backend: SkiaBackend,
     image_registry: jian_skia::InstanceImageRegistry,
     // Bumped whenever the GPU surface/context is (re)attached: registered
@@ -69,6 +79,7 @@ impl Lifecycle {
     pub(crate) fn new(options: CreateOptions) -> FfiResult<Self> {
         let physical = validate_viewport(options.width, options.height, options.dpr)?;
         let mut runtime = Runtime::new();
+        runtime.enable_standalone_motion();
         let capabilities = CapabilityBridge::new(options.callbacks.capability_request.is_some());
         runtime.network = capabilities.clone();
         runtime.async_feedback = capabilities.clone();
@@ -111,6 +122,19 @@ impl Lifecycle {
             )
         })?;
         runtime.enable_action_reporting();
+        let navigation = runtime.screen_table().map(|table| {
+            let path = runtime
+                .active_screen_path()
+                .unwrap_or_else(|| table.entry_path())
+                .to_owned();
+            let router = Rc::new(ScreenRouter::new(&path, table.paths()));
+            runtime.nav = router.clone();
+            Navigation {
+                router,
+                table,
+                mounted_path: path,
+            }
+        });
         runtime
             .state
             .set_viewport(options.width, options.height, options.dpr);
@@ -151,6 +175,7 @@ impl Lifecycle {
 
         let mut lifecycle = Self {
             runtime,
+            navigation,
             backend: SkiaBackend::new(),
             image_registry: jian_skia::InstanceImageRegistry::default(),
             backend_generation: 0,
@@ -562,7 +587,7 @@ impl Lifecycle {
 
     #[cfg(all(feature = "metal", any(target_os = "macos", target_os = "ios")))]
     fn frame_gpu_selected(&mut self, now_ms: u64) -> FfiResult<()> {
-        let directive = self.runtime.pump(now_ms);
+        let directive = self.pump_frame(now_ms);
         let commands = prepare_commands(
             &mut self.runtime,
             &mut self.backend,
@@ -595,7 +620,7 @@ impl Lifecycle {
 
     #[cfg(all(feature = "gl", target_os = "android"))]
     fn frame_gpu_selected(&mut self, now_ms: u64) -> FfiResult<()> {
-        let mut directive = self.runtime.pump(now_ms);
+        let mut directive = self.pump_frame(now_ms);
         let commands = prepare_commands(
             &mut self.runtime,
             &mut self.backend,
@@ -706,7 +731,7 @@ impl Lifecycle {
                 FfiError::new(JianStatus::OutOfMemory, "CPU raster allocation failed")
             })?,
         };
-        let directive = self.runtime.pump(now_ms);
+        let directive = self.pump_frame(now_ms);
         let commands = prepare_commands(
             &mut self.runtime,
             &mut self.backend,
@@ -832,6 +857,54 @@ impl Lifecycle {
             | JianTestCallClass::CapabilityResult
             | JianTestCallClass::RegisterFont => JianStatus::Ok,
         }
+    }
+
+    fn pump_frame(&mut self, now_ms: u64) -> FrameDirective {
+        self.runtime.set_standalone_presentation_size(self.logical);
+        self.runtime.note_time(now_ms);
+        self.reconcile_navigation();
+        let directive = self.runtime.pump(now_ms);
+        if self
+            .navigation
+            .as_ref()
+            .is_some_and(|nav| nav.router.current().path != nav.mounted_path)
+        {
+            // An input deadline or an async action may navigate during pump.
+            // Mount before presenting, even when that was the last pending task.
+            self.reconcile_navigation();
+            self.runtime.pump(now_ms)
+        } else {
+            directive
+        }
+    }
+
+    fn reconcile_navigation(&mut self) {
+        if let Some(nav) = &mut self.navigation {
+            match reconcile_screens_with_layout(
+                &mut self.runtime,
+                &nav.router,
+                &nav.table,
+                &mut nav.mounted_path,
+            ) {
+                Ok(outcome) => {
+                    for rejected in outcome.rejections {
+                        self.runtime.push_load_warning(format!(
+                            "unknown route `{}` ({}) ignored",
+                            rejected.path, rejected.verb
+                        ));
+                    }
+                }
+                Err(error) => self
+                    .runtime
+                    .push_layout_error(format!("route reconcile failed: {error}")),
+            }
+        }
+    }
+
+    pub(crate) fn set_reduce_motion(&mut self, reduced: bool) -> FfiResult<()> {
+        self.runtime.set_standalone_reduce_motion(reduced);
+        self.notify(None);
+        Ok(())
     }
 
     fn notify(&self, directive: Option<FrameDirective>) {
