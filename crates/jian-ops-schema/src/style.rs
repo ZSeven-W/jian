@@ -176,8 +176,8 @@ pub struct MeshGradientBody {
 pub enum ShaderUniformValue {
     /// `float` uniform.
     Float(f32),
-    /// `vec2` / `vec3` / `vec4` uniform — the length picks the SkSL
-    /// type (RuntimeShaderBuilder rejects a mismatched arity).
+    /// Float vector, matrix or flattened array. The declared SkSL uniform
+    /// determines the expected arity; mismatches are left at zero.
     Vec(Vec<f32>),
     /// `color` uniform — a `#rgb` / `#rrggbb` / `#rrggbbaa` hex string
     /// the backend expands into a `vec4` before binding.
@@ -192,11 +192,15 @@ pub enum ShaderUniformValue {
 #[schemars(rename_all = "snake_case")]
 pub enum ShaderPresetV1 {
     Turbulence,
+    #[schemars(rename = "candlesticks_3d")]
+    Candlesticks3d,
+    SparkBurst,
+    IridescentGlass,
 }
 
 /// Native SkSL shader fill (v1). Authors may provide RAW source in `sksl`
 /// or ask the loader to expand a built-in source through `preset`. The
-/// loader currently recognizes only `"turbulence"`; a recognized preset
+/// loader recognizes noise and motion-graphics presets; a recognized preset
 /// wins when both fields are present, so the authored `sksl` is ignored at
 /// render time. Unknown preset strings remain on the wire for forward
 /// compatibility and are treated by the loader as if no preset were set.
@@ -214,13 +218,13 @@ pub enum ShaderPresetV1 {
 #[cfg_attr(feature = "export-ts", ts(export, export_to = "ops.ts"))]
 #[serde(rename_all = "camelCase")]
 pub struct ShaderFillBody {
-    /// Loader-expanded source selector. Only `"turbulence"` is recognized
-    /// in v1; expansion is runtime-only and is never serialized into `sksl`.
+    /// Loader-expanded source selector. Expansion is runtime-only and is
+    /// never serialized into `sksl`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<ShaderPresetV1>")]
     #[cfg_attr(
         feature = "export-ts",
-        ts(type = "\"turbulence\" | null", optional = nullable)
+        ts(type = "\"turbulence\" | \"candlesticks_3d\" | \"spark_burst\" | \"iridescent_glass\" | null", optional = nullable)
     )]
     pub preset: Option<String>,
     /// Optional RAW SkSL source. Entrypoint: `half4 main(float2 fragCoord)`.

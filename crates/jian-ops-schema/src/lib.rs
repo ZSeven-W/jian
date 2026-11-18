@@ -1,6 +1,7 @@
 //! `jian-ops-schema` — canonical types + JSON Schema for Jian `.op` files.
 
 pub mod app;
+pub mod audio;
 pub mod breakpoint;
 pub mod comment;
 pub mod compat;

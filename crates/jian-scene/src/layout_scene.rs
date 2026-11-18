@@ -174,6 +174,8 @@ pub struct SceneShaderUniform {
 /// `opacity` folds into the paint alpha.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneShader {
+    /// Timeline-owned time. Absent uses the live host or export clock.
+    pub sample_time: Option<f32>,
     pub sksl: String,
     pub uniforms: Vec<SceneShaderUniform>,
     pub opacity: f32,
