@@ -4,7 +4,7 @@
 //! through the same code.
 
 use crate::layout_scene::{LayoutScene, SceneNode};
-use crate::layout_scene_binding::apply_value;
+use crate::layout_scene_binding::{apply_value, uses_composite_opacity};
 use jian_core::action::services::AnimationProperty;
 use jian_core::motion::interpolate::color_hex;
 use jian_core::motion::{MotionOverrides, MotionSceneView};
@@ -33,6 +33,7 @@ pub fn sample_scene_property(
 ) -> Option<Value> {
     let node = scene.active_page()?.find(target)?;
     Some(match property {
+        AnimationProperty::Opacity if uses_composite_opacity(node) => json!(node.composite_opacity),
         AnimationProperty::Opacity => json!(node.opacity),
         AnimationProperty::X => json!(node.bounds.origin.x),
         AnimationProperty::Y => json!(node.bounds.origin.y),

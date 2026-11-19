@@ -8,6 +8,7 @@ use crate::layout_scene::{SceneFillLayer, SceneNode, SceneStroke, SceneStrokeAli
 use jian_core::binding::BindingTarget;
 use jian_core::value::RuntimeValue;
 use jian_widgets::Color;
+use jian_widgets::ImageBlendMode;
 
 /// Human-readable form of an expression result for scene text: strings
 /// verbatim, null as empty, everything else as JSON (integers print without
@@ -18,6 +19,10 @@ pub fn display_string(value: &RuntimeValue) -> String {
         serde_json::Value::Null => String::new(),
         other => other.to_string(),
     }
+}
+
+pub(crate) fn uses_composite_opacity(node: &SceneNode) -> bool {
+    !node.children.is_empty() || node.blend_mode != ImageBlendMode::Normal
 }
 
 pub fn apply_value(node: &mut SceneNode, target: BindingTarget, value: &RuntimeValue) {
@@ -44,7 +49,14 @@ pub fn apply_value(node: &mut SceneNode, target: BindingTarget, value: &RuntimeV
         }
         BindingTarget::Opacity => {
             if let Some(opacity) = number(value) {
-                node.opacity = opacity.clamp(0.0, 1.0);
+                // The loader leaves the paints of an isolated subtree at
+                // full alpha. Fade the assembled subtree, not its own fill.
+                let alpha = opacity.clamp(0.0, 1.0);
+                if uses_composite_opacity(node) {
+                    node.composite_opacity = alpha;
+                } else {
+                    node.opacity = alpha;
+                }
             }
         }
         BindingTarget::Fill | BindingTarget::TextColor => {
