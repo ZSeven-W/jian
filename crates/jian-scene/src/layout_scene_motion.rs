@@ -11,6 +11,7 @@ use jian_core::motion::{MotionOverrides, MotionSceneView};
 use jian_core::value::RuntimeValue;
 use jian_widgets::Color;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 /// `#rrggbb` (or `#rrggbbaa` when translucent) for a scene colour.
 pub fn scene_color(color: Color) -> String {
@@ -68,32 +69,40 @@ pub fn apply_motion_overrides(scene: &mut LayoutScene, overrides: &MotionOverrid
     let Some(page) = scene.pages.get_mut(scene.active_page_index) else {
         return;
     };
+    if overrides.is_empty() {
+        return;
+    }
+    // Index once so long clips do not scan every override for each scene node.
+    let mut by_node = OverridesByNode::new();
+    for ((id, property), value) in overrides {
+        by_node
+            .entry(id.as_str())
+            .or_default()
+            .push((property, value));
+    }
     for node in &mut page.children {
-        apply_node_overrides(node, overrides);
+        apply_node_overrides(node, &by_node);
     }
 }
 
-fn apply_node_overrides(node: &mut SceneNode, overrides: &MotionOverrides) {
-    for ((target, property), value) in overrides {
-        if target == &node.id && *property == AnimationProperty::ToggleProgress {
-            if let (Some(widget), Some(progress)) = (node.widget.as_mut(), value.as_f64()) {
-                widget.toggle_progress = Some(progress as f32);
+type OverridesByNode<'a> = HashMap<&'a str, Vec<(&'a AnimationProperty, &'a Value)>>;
+
+fn apply_node_overrides(node: &mut SceneNode, overrides: &OverridesByNode<'_>) {
+    if let Some(properties) = overrides.get(node.id.as_str()) {
+        let mut bound = Vec::with_capacity(properties.len());
+        for &(property, value) in properties {
+            if *property == AnimationProperty::ToggleProgress {
+                if let (Some(widget), Some(progress)) = (node.widget.as_mut(), value.as_f64()) {
+                    widget.toggle_progress = Some(progress as f32);
+                }
+            } else if let Some(target) = property.binding_target() {
+                bound.push((target, value));
             }
-            break;
         }
-    }
-    let mut node_overrides: Vec<_> = overrides
-        .iter()
-        .filter(|((target, _), _)| target == &node.id)
-        .filter_map(|((_, property), value)| {
-            property
-                .binding_target()
-                .map(|target| (target, RuntimeValue(value.clone())))
-        })
-        .collect();
-    node_overrides.sort_by_key(|(target, _)| target.application_order());
-    for (target, value) in node_overrides {
-        apply_value(node, target, &value);
+        bound.sort_by_key(|(target, _)| target.application_order());
+        for (target, value) in bound {
+            apply_value(node, target, &RuntimeValue(value.clone()));
+        }
     }
     for child in &mut node.children {
         apply_node_overrides(child, overrides);
