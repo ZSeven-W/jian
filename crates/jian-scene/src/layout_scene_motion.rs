@@ -233,7 +233,8 @@ mod tests {
             .active_page()
             .and_then(|page| page.find("card"))
             .unwrap();
-        assert_eq!(card.opacity, 0.25);
+        assert_eq!(card.composite_opacity, 0.25);
+        assert_eq!(card.opacity, 1.0);
         assert_eq!(card.bounds.origin.x, 15.0);
         let toggle = &card.children[0];
         assert_eq!(toggle.bounds.origin.x, 5.0);
