@@ -55,7 +55,16 @@ pub fn apply_value(node: &mut SceneNode, target: BindingTarget, value: &RuntimeV
                 if uses_composite_opacity(node) {
                     node.composite_opacity = alpha;
                 } else {
-                    node.opacity = alpha;
+                    // A leaf's own opacity is already baked into its fill,
+                    // stroke, text and shadow colours, so rewriting it here
+                    // would not repaint them. Fade through the paint-time
+                    // layer relative to that baked baseline instead.
+                    let base = node.opacity.clamp(0.0, 1.0);
+                    node.composite_opacity = if base > 0.0 {
+                        (alpha / base).min(1.0)
+                    } else {
+                        0.0
+                    };
                 }
             }
         }
@@ -248,6 +257,21 @@ mod tests {
 
     fn value(value: serde_json::Value) -> RuntimeValue {
         RuntimeValue(value)
+    }
+
+    #[test]
+    fn leaf_opacity_fades_its_baked_paint_through_the_composite_layer() {
+        // The loader bakes a leaf's opacity into its fill / stroke / text
+        // colours, so animating it must go through the paint-time layer.
+        let mut node = rect_node("leaf");
+        node.opacity = 0.5;
+        apply_value(&mut node, BindingTarget::Opacity, &value(json!(0.25)));
+        assert_eq!(node.composite_opacity, 0.5);
+        assert_eq!(node.opacity, 0.5, "baked opacity stays the baseline");
+        apply_value(&mut node, BindingTarget::Opacity, &value(json!(0.0)));
+        assert_eq!(node.composite_opacity, 0.0);
+        apply_value(&mut node, BindingTarget::Opacity, &value(json!(1.0)));
+        assert_eq!(node.composite_opacity, 1.0, "cannot exceed the baked paint");
     }
 
     #[test]

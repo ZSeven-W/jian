@@ -126,7 +126,9 @@ fn paint_targets_store_the_same_values() {
         apply_value(&mut node, target, &value(bound));
     }
     let number = |key: &str| object[key].as_f64().expect("number") as f32;
-    assert_eq!(node.opacity, number("opacity"));
+    // A leaf keeps its baked paint opacity and fades through the composite
+    // layer, so compare the effective alpha both tables produce.
+    assert!((node.opacity * node.composite_opacity - number("opacity")).abs() < 1e-6);
     assert_eq!(node.corner_radius, number("cornerRadius"));
     assert!((node.rotation.to_degrees() - number("rotation")).abs() < 1e-4);
     assert_eq!(
