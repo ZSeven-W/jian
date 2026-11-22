@@ -4,7 +4,9 @@
 //! table sits next to jian-core's schema-side twin
 //! (`jian_core::binding::application`).
 
-use crate::layout_scene::{SceneFillLayer, SceneNode, SceneStroke, SceneStrokeAlign};
+use crate::layout_scene::{
+    Effect, SceneFillLayer, SceneGradient, SceneNode, SceneStroke, SceneStrokeAlign,
+};
 use jian_core::binding::BindingTarget;
 use jian_core::value::RuntimeValue;
 use jian_widgets::Color;
@@ -55,16 +57,7 @@ pub fn apply_value(node: &mut SceneNode, target: BindingTarget, value: &RuntimeV
                 if uses_composite_opacity(node) {
                     node.composite_opacity = alpha;
                 } else {
-                    // A leaf's own opacity is already baked into its fill,
-                    // stroke, text and shadow colours, so rewriting it here
-                    // would not repaint them. Fade through the paint-time
-                    // layer relative to that baked baseline instead.
-                    let base = node.opacity.clamp(0.0, 1.0);
-                    node.composite_opacity = if base > 0.0 {
-                        (alpha / base).min(1.0)
-                    } else {
-                        0.0
-                    };
+                    set_leaf_opacity(node, alpha);
                 }
             }
         }
@@ -242,6 +235,71 @@ pub fn translate_subtree(node: &mut SceneNode, dx: f32, dy: f32) {
     }
 }
 
+/// A leaf's paint opacity is baked into its fill, gradient, shader, stroke,
+/// text-run and shadow colours at scene build, so writing `opacity` alone
+/// would not repaint it. Rescale the baked paint to the new alpha. Fading to
+/// zero goes through the composite layer instead, which keeps the paint
+/// recoverable for a later fade back in.
+fn set_leaf_opacity(node: &mut SceneNode, alpha: f32) {
+    if alpha <= 0.0 {
+        node.composite_opacity = 0.0;
+        return;
+    }
+    let base = node.opacity.clamp(0.0, 1.0);
+    if base <= 0.0 {
+        // Nothing baked to rescale; the loader isolates such leaves.
+        node.composite_opacity = alpha;
+        return;
+    }
+    let k = alpha / base;
+    if (k - 1.0).abs() > f32::EPSILON {
+        rescale_leaf_paint(node, k);
+    }
+    node.opacity = alpha;
+    node.composite_opacity = 1.0;
+}
+
+impl SceneNode {
+    /// Multiply this node's own painted alpha by `k`: the colours baked at
+    /// scene build (fill, gradient, shader, stroke, text runs, shadows) and
+    /// `opacity`, which painters apply to fill stacks and images. Exporters
+    /// that flatten a leaf's composite layer into its paint use this.
+    pub fn scale_paint_alpha(&mut self, k: f32) {
+        rescale_leaf_paint(self, k);
+        self.opacity = (self.opacity * k).clamp(0.0, 1.0);
+    }
+}
+
+fn rescale_leaf_paint(node: &mut SceneNode, k: f32) {
+    let scale = |alpha: f32| (alpha * k).clamp(0.0, 1.0);
+    if let Some(color) = node.fill.as_mut() {
+        color.a = scale(color.a);
+    }
+    if let Some(gradient) = node.gradient.as_mut() {
+        match gradient {
+            SceneGradient::Linear { opacity, .. }
+            | SceneGradient::Radial { opacity, .. }
+            | SceneGradient::Mesh { opacity, .. } => *opacity = scale(*opacity),
+        }
+    }
+    if let Some(shader) = node.shader.as_mut() {
+        shader.opacity = scale(shader.opacity);
+    }
+    if let Some(stroke) = node.stroke.as_mut() {
+        stroke.color.a = scale(stroke.color.a);
+    }
+    for run in &mut node.text_runs {
+        if let Some(color) = run.fill.as_mut() {
+            color.a = scale(color.a);
+        }
+    }
+    for effect in &mut node.effects {
+        if let Effect::DropShadow(shadow) = effect {
+            shadow.color.a = scale(shadow.color.a);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,18 +318,35 @@ mod tests {
     }
 
     #[test]
-    fn leaf_opacity_fades_its_baked_paint_through_the_composite_layer() {
+    fn leaf_opacity_rebakes_its_paint_and_fades_to_zero_through_the_layer() {
         // The loader bakes a leaf's opacity into its fill / stroke / text
         // colours, so animating it must go through the paint-time layer.
         let mut node = rect_node("leaf");
         node.opacity = 0.5;
+        node.fill = Some(Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.5,
+        });
         apply_value(&mut node, BindingTarget::Opacity, &value(json!(0.25)));
-        assert_eq!(node.composite_opacity, 0.5);
-        assert_eq!(node.opacity, 0.5, "baked opacity stays the baseline");
+        assert_eq!(node.opacity, 0.25);
+        assert!(
+            (node.fill.unwrap().a - 0.25).abs() < 1e-6,
+            "paint is rebaked"
+        );
         apply_value(&mut node, BindingTarget::Opacity, &value(json!(0.0)));
         assert_eq!(node.composite_opacity, 0.0);
+        assert!(
+            (node.fill.unwrap().a - 0.25).abs() < 1e-6,
+            "zero keeps paint"
+        );
         apply_value(&mut node, BindingTarget::Opacity, &value(json!(1.0)));
-        assert_eq!(node.composite_opacity, 1.0, "cannot exceed the baked paint");
+        assert_eq!(node.composite_opacity, 1.0);
+        assert!(
+            (node.fill.unwrap().a - 1.0).abs() < 1e-6,
+            "fades back above base"
+        );
     }
 
     #[test]

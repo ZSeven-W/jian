@@ -35,7 +35,8 @@ pub fn sample_scene_property(
     let node = scene.active_page()?.find(target)?;
     Some(match property {
         AnimationProperty::Opacity if uses_composite_opacity(node) => json!(node.composite_opacity),
-        AnimationProperty::Opacity => json!(node.opacity),
+        // A leaf fades through its composite layer over its baked paint.
+        AnimationProperty::Opacity => json!(node.effective_opacity()),
         AnimationProperty::X => json!(node.bounds.origin.x),
         AnimationProperty::Y => json!(node.bounds.origin.y),
         AnimationProperty::Rotation => json!(node.rotation.to_degrees()),

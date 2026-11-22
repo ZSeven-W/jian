@@ -5,6 +5,12 @@ use crate::scene_geometry::rect_has_extent;
 use jian_widgets::Rect;
 
 impl SceneNode {
+    /// Alpha this node actually paints with: its own (baked) paint opacity
+    /// times the composite layer that motion and bindings drive.
+    pub fn effective_opacity(&self) -> f32 {
+        self.opacity * self.composite_opacity
+    }
+
     /// Bounds of paint that can escape this node for viewport framing.
     ///
     /// Selection and layout intentionally keep using `aggregate_bounds`: a
