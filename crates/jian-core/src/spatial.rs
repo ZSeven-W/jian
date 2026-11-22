@@ -149,7 +149,7 @@ impl SpatialIndex {
     pub fn hit(&self, p: Point) -> Vec<NodeKey> {
         let env = AABB::from_point([p.x, p.y]);
         self.tree
-            .locate_in_envelope_intersecting(&env)
+            .locate_in_envelope_intersecting(env)
             .map(|b| b.key)
             .collect()
     }
@@ -158,7 +158,7 @@ impl SpatialIndex {
     pub fn query_rect(&self, r: Rect) -> Vec<NodeKey> {
         let envelope = AABB::from_corners([r.min_x(), r.min_y()], [r.max_x(), r.max_y()]);
         self.tree
-            .locate_in_envelope_intersecting(&envelope)
+            .locate_in_envelope_intersecting(envelope)
             .map(|b| b.key)
             .collect()
     }

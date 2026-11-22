@@ -26,7 +26,7 @@ smallvec        = "1.13"
 slotmap         = "1.0"
 euclid          = "0.22"
 taffy           = "0.5"
-rstar           = "0.12"
+rstar           = "0.14"
 bitflags        = { version = "2.6", features = ["serde"] }
 async-trait     = "0.1"
 futures         = "0.3"
