@@ -17,6 +17,7 @@ pub(crate) mod test_support;
 pub use geometry::{Color, Point2D, Rect};
 pub use painter::{
     ImageAdjustments, ImageBlendMode, ImageDrawMode, Painter, TextBaselineRequest, TextLayout,
+    TextMetrics,
 };
 pub use text_box::{HorizontalAlign, TextBox, VerticalAlign};
 pub use tokens::{Density, Tokens};

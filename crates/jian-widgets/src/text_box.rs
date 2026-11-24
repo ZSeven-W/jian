@@ -80,15 +80,15 @@ impl<'a> TextBox<'a> {
         let rect_width = finite_non_negative(rect.size.x);
         let rect_height = finite_non_negative(rect.size.y);
         let font_size = finite_non_negative(self.font_size);
-        let measured_width = painter.measure_text_family_styled(
+        let metrics = painter.measure_text_metrics_family_styled(
             self.content,
             font_size,
             self.font_family,
             self.font_weight,
             false,
         );
-        let measured_width = if measured_width.is_finite() {
-            measured_width.max(0.0)
+        let measured_width = if metrics.width.is_finite() {
+            metrics.width.max(0.0)
         } else {
             rect_width
         };
@@ -102,15 +102,19 @@ impl<'a> TextBox<'a> {
                     HorizontalAlign::End => 1.0,
                 },
             );
-        let y = rect_y
-            + alignment_offset(
-                rect_height - font_size,
-                match self.vertical_align {
-                    VerticalAlign::Top => 0.0,
-                    VerticalAlign::Center => 0.5,
-                    VerticalAlign::Bottom => 1.0,
-                },
-            );
+        let line_height = if metrics.line_height.is_finite() {
+            metrics.line_height.max(0.0)
+        } else {
+            font_size
+        };
+        let ink_center = metrics.ink_center().unwrap_or(font_size * 0.5);
+        let y = match self.vertical_align {
+            // Top alignment deliberately preserves the top-left TextRun
+            // contract used by headings and body text.
+            VerticalAlign::Top => rect_y,
+            VerticalAlign::Center => rect_y + rect_height * 0.5 - ink_center,
+            VerticalAlign::Bottom => rect_y + rect_height - line_height,
+        };
 
         Point2D::new(finite_or(x, rect_x), finite_or(y, rect_y))
     }
@@ -168,6 +172,7 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TextMetrics;
     #[derive(Debug, Clone, PartialEq)]
     struct StyleCall {
         content: String,
@@ -193,6 +198,7 @@ mod tests {
     #[derive(Default)]
     struct ProbePainter {
         measured_width: f32,
+        glyph_metrics: Option<TextMetrics>,
         measurement: Option<StyleCall>,
         draw: Option<DrawCall>,
         events: Vec<PaintEvent>,
@@ -202,6 +208,14 @@ mod tests {
         fn with_measured_width(measured_width: f32) -> Self {
             Self {
                 measured_width,
+                ..Self::default()
+            }
+        }
+
+        fn with_glyph_metrics(glyph_metrics: TextMetrics) -> Self {
+            Self {
+                measured_width: glyph_metrics.width,
+                glyph_metrics: Some(glyph_metrics),
                 ..Self::default()
             }
         }
@@ -283,6 +297,19 @@ mod tests {
             let _ = italic;
             self.measured_width
         }
+
+        fn measure_text_metrics_family_styled(
+            &mut self,
+            text: &str,
+            font_size: f32,
+            family: &str,
+            weight: u16,
+            italic: bool,
+        ) -> TextMetrics {
+            let _ = self.measure_text_family_styled(text, font_size, family, weight, italic);
+            self.glyph_metrics
+                .unwrap_or_else(|| TextMetrics::line_box(self.measured_width, font_size))
+        }
     }
 
     #[test]
@@ -295,6 +322,24 @@ mod tests {
             .origin(&mut painter, rect);
 
         assert_eq!(origin, Point2D::new(10.0, 40.0));
+    }
+
+    #[test]
+    fn center_vertical_alignment_uses_the_visible_ink_center() {
+        let mut painter = ProbePainter::with_glyph_metrics(TextMetrics {
+            width: 24.0,
+            line_height: 19.0,
+            baseline: 15.0,
+            ink_top: 3.0,
+            ink_bottom: 18.0,
+        });
+        let rect = Rect::xywh(10.0, 20.0, 100.0, 60.0);
+        let origin = TextBox::new("centered")
+            .with_font_size(13.0)
+            .with_vertical_align(VerticalAlign::Center)
+            .origin(&mut painter, rect);
+
+        assert_eq!(origin, Point2D::new(10.0, 39.5));
     }
 
     #[test]
