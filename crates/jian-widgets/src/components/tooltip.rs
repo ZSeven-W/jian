@@ -1,8 +1,8 @@
 //! Tooltip — a small anchored label bubble (shadcn `Tooltip`). Paint-only: no
 //! hit / state. The caller positions and sizes the bubble; this widget fills a
-//! rounded popover surface, strokes a hairline border, and left-pads the label.
+//! rounded popover surface, strokes a hairline border, and centers the label.
 
-use crate::{Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{HorizontalAlign, Painter, Rect, TextBox, Tokens, VerticalAlign};
 
 const FONT_FAMILY: &str = "Inter";
 const FONT_SIZE: f32 = 12.0;
@@ -21,18 +21,19 @@ impl Tooltip<'_> {
         p.stroke_round_rect(rect, RADIUS, t.border, 1.0);
 
         if !self.label.is_empty() {
-            let origin = Point2D::new(
+            let label_rect = Rect::xywh(
                 rect.origin.x + PAD_X,
-                crate::centered_text_baseline_y(rect, FONT_SIZE),
+                rect.origin.y,
+                (rect.size.x - PAD_X * 2.0).max(0.0),
+                rect.size.y,
             );
-            let layout = TextLayout::single_run(
-                self.label,
-                FONT_FAMILY,
-                FONT_SIZE,
-                t.popover_foreground.to_jian(),
-                Point2D::new(0.0, 0.0),
-            );
-            p.draw_text(&layout, origin);
+            TextBox::new(self.label)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(FONT_SIZE)
+                .with_color(t.popover_foreground)
+                .with_horizontal_align(HorizontalAlign::Center)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(p, label_rect);
         }
     }
 }

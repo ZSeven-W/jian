@@ -2,7 +2,7 @@
 //! `ToggleGroup`, single mode). Distinct from Tabs: a button-group look where
 //! the active cell is a solid `primary` fill rather than an underline.
 
-use crate::{Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{HorizontalAlign, Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 const FONT_FAMILY: &str = "Inter";
 const RADIUS: f32 = 6.0;
@@ -70,7 +70,7 @@ impl ToggleGroup<'_> {
             let label_w = if label.is_empty() {
                 0.0
             } else {
-                p.measure_text(label, font_size)
+                p.measure_text_family_styled(label, font_size, FONT_FAMILY, 400, false)
             };
             let icon_size = if icon_paths.is_some() {
                 font_size + 4.0
@@ -82,28 +82,54 @@ impl ToggleGroup<'_> {
             } else {
                 0.0
             };
-            let total = icon_size + inner_gap + label_w;
-            let mut content_x = cell.origin.x + (cell_w - total) / 2.0;
+            let available_width = cell_w.max(0.0);
+            let label_box_width = label_w.min((available_width - icon_size - inner_gap).max(0.0));
+            let visible_gap = if icon_paths.is_some() && label_box_width > 0.0 {
+                inner_gap
+            } else {
+                0.0
+            };
+            let visible_width = icon_size + visible_gap + label_box_width;
+            let mut content_x = cell.origin.x + (available_width - visible_width) / 2.0;
+
+            p.save();
+            p.clip_rect(cell);
+
             if let Some(paths) = icon_paths {
                 let top_left =
                     Point2D::new(content_x, cell.origin.y + (rect.size.y - icon_size) / 2.0);
                 for d in paths {
                     p.stroke_svg_path(d, top_left, icon_size, content_color, 1.5);
                 }
-                content_x += icon_size + inner_gap;
+                content_x += icon_size + visible_gap;
             }
-            if !label.is_empty() {
-                let origin =
-                    Point2D::new(content_x, crate::centered_text_baseline_y(cell, font_size));
-                let layout = TextLayout::single_run(
-                    label,
-                    FONT_FAMILY,
-                    font_size,
-                    content_color.to_jian(),
-                    Point2D::new(0.0, 0.0),
+            if label_box_width > 0.0 {
+                let label_center = content_x + label_box_width / 2.0;
+                let safe_left = if icon_paths.is_some() {
+                    content_x - visible_gap
+                } else {
+                    cell.origin.x
+                };
+                let safe_right = cell.origin.x + available_width;
+                let half_width = (label_center - safe_left)
+                    .min(safe_right - label_center)
+                    .max(0.0);
+                let label_rect = Rect::xywh(
+                    label_center - half_width,
+                    cell.origin.y,
+                    half_width * 2.0,
+                    cell.size.y,
                 );
-                p.draw_text(&layout, origin);
+                TextBox::new(label)
+                    .with_font_family(FONT_FAMILY)
+                    .with_font_size(font_size)
+                    .with_color(content_color)
+                    .with_horizontal_align(HorizontalAlign::Center)
+                    .with_vertical_align(VerticalAlign::Center)
+                    .paint(p, label_rect);
             }
+
+            p.restore();
         }
 
         // Outer border drawn last so it frames the segments cleanly.

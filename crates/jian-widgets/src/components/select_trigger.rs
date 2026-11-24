@@ -6,7 +6,7 @@
 //! all the component's concern; callers never assemble them from pieces.
 
 use crate::components::button::{Button, ButtonVariant};
-use crate::{Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{HorizontalAlign, Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 const FONT_FAMILY: &str = "Inter";
 const PAD_X: f32 = 8.0;
@@ -92,18 +92,13 @@ impl SelectTrigger<'_> {
                 (clip_right - text_x).max(0.0),
                 rect.size.y,
             );
-            p.save();
-            p.clip_rect(clip);
-            let origin = Point2D::new(text_x, crate::centered_text_baseline_y(rect, font_size));
-            let layout = TextLayout::single_run(
-                text,
-                FONT_FAMILY,
-                font_size,
-                color.to_jian(),
-                Point2D::new(0.0, 0.0),
-            );
-            p.draw_text(&layout, origin);
-            p.restore();
+            TextBox::new(text)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(font_size)
+                .with_color(color)
+                .with_horizontal_align(HorizontalAlign::Start)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(p, clip);
         }
 
         // Chevron on the right.

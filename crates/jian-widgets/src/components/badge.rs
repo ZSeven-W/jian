@@ -1,8 +1,8 @@
 //! Badge — a small rounded label pill (shadcn `Badge`). Paint-only: no hit /
-//! state. Content (icon + label) is left-packed within horizontal padding so a
-//! caller-sized rect reads like shadcn's content-hugging `inline-flex` badge.
+//! state. Content (icon + label) is centered as one group within horizontal
+//! padding so caller-sized pills retain balanced whitespace.
 
-use crate::{Color, Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{Color, HorizontalAlign, Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 const FONT_FAMILY: &str = "Inter";
 const PAD_X: f32 = 8.0;
@@ -57,24 +57,69 @@ impl Badge<'_> {
         }
 
         let cy = rect.origin.y + rect.size.y / 2.0;
-        let mut x = rect.origin.x + PAD_X;
         let icon_size = font_size + 1.0;
+        let label_width = if self.label.is_empty() {
+            0.0
+        } else {
+            p.measure_text_family_styled(self.label, font_size, FONT_FAMILY, 400, false)
+        };
+        let gap = if self.icon_d.is_some() && !self.label.is_empty() {
+            ICON_LABEL_GAP
+        } else {
+            0.0
+        };
+        let icon_width = if self.icon_d.is_some() {
+            icon_size
+        } else {
+            0.0
+        };
+        let control_width = rect.size.x.max(0.0);
+        let inset = PAD_X.min(control_width / 2.0);
+        let content_width = (control_width - inset * 2.0).max(0.0);
+        let label_box_width = label_width.min((content_width - icon_width - gap).max(0.0));
+        let visible_gap = if self.icon_d.is_some() && label_box_width > 0.0 {
+            gap
+        } else {
+            0.0
+        };
+        let visible_width = icon_width + visible_gap + label_box_width;
+        let mut x = rect.origin.x + inset + (content_width - visible_width) / 2.0;
+
+        p.save();
+        p.clip_rect(rect);
+
         if let Some(d) = self.icon_d {
             let top_left = Point2D::new(x, cy - icon_size / 2.0);
             p.stroke_svg_path(d, top_left, icon_size, text_color, 1.5);
-            x += icon_size + ICON_LABEL_GAP;
+            x += icon_size + visible_gap;
         }
-        if !self.label.is_empty() {
-            let origin = Point2D::new(x, crate::centered_text_baseline_y(rect, font_size));
-            let layout = TextLayout::single_run(
-                self.label,
-                FONT_FAMILY,
-                font_size,
-                text_color.to_jian(),
-                Point2D::new(0.0, 0.0),
+        if label_box_width > 0.0 {
+            let label_center = x + label_box_width / 2.0;
+            let safe_left = if self.icon_d.is_some() {
+                x - visible_gap
+            } else {
+                rect.origin.x + inset
+            };
+            let safe_right = rect.origin.x + control_width - inset;
+            let half_width = (label_center - safe_left)
+                .min(safe_right - label_center)
+                .max(0.0);
+            let label_rect = Rect::xywh(
+                label_center - half_width,
+                rect.origin.y,
+                half_width * 2.0,
+                rect.size.y,
             );
-            p.draw_text(&layout, origin);
+            TextBox::new(self.label)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(font_size)
+                .with_color(text_color)
+                .with_horizontal_align(HorizontalAlign::Center)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(p, label_rect);
         }
+
+        p.restore();
     }
 
     fn colors(&self, t: &Tokens) -> (Option<Color>, Option<Color>, Color) {

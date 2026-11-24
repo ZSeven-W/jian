@@ -1,4 +1,4 @@
-use crate::{Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{HorizontalAlign, Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 const MENU_WIDTH: f32 = 180.0;
 const FONT_FAMILY: &str = "Inter";
@@ -79,15 +79,19 @@ impl Menu<'_> {
                 );
                 text_x += 26.0;
             }
-            let origin = Point2D::new(text_x, crate::centered_text_baseline_y(row, font_size));
-            let layout = TextLayout::single_run(
-                item.label,
-                FONT_FAMILY,
-                font_size,
-                color.to_jian(),
-                Point2D::new(0.0, 0.0),
+            let label_rect = Rect::xywh(
+                text_x,
+                row.origin.y,
+                (row.origin.x + row.size.x - 10.0 - text_x).max(0.0),
+                row.size.y,
             );
-            p.draw_text(&layout, origin);
+            TextBox::new(item.label)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(font_size)
+                .with_color(color)
+                .with_horizontal_align(HorizontalAlign::Start)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(p, label_rect);
         }
 
         p.restore();
