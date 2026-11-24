@@ -8,6 +8,7 @@
 pub mod components;
 pub mod geometry;
 pub mod painter;
+pub mod text_box;
 pub mod tokens;
 
 #[cfg(test)]
@@ -17,6 +18,7 @@ pub use geometry::{Color, Point2D, Rect};
 pub use painter::{
     ImageAdjustments, ImageBlendMode, ImageDrawMode, Painter, TextBaselineRequest, TextLayout,
 };
+pub use text_box::{HorizontalAlign, TextBox, VerticalAlign};
 pub use tokens::{Density, Tokens};
 
 /// The baseline `y` that vertically centers `font_size` text in the box
