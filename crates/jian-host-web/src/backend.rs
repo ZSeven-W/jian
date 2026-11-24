@@ -210,19 +210,21 @@ impl CanvasKitBackend {
 
     fn image_for(&mut self, source: &ImageSource) -> Option<CkImage> {
         let key = source.cache_key();
-        if let Some(image) = self.images.get(&key) {
+        if let Some(image) = self.images.get(key.as_ref()) {
             return Some(clone_image(image));
         }
         let bytes = match source {
             ImageSource::DataUrl(data) => {
                 jian_core::render::image_store::decode_data_url(data).ok()?
             }
-            ImageSource::Bytes(bytes) => bytes.as_ref().clone(),
+            ImageSource::Bytes(bytes) | ImageSource::KeyedBytes { bytes, .. } => {
+                bytes.as_ref().clone()
+            }
             ImageSource::Url(_) => return None,
         };
         probe_image_bounds(&bytes).ok()?;
         let image = self.runtime.decode_image(&bytes).ok()?;
-        self.images.insert(key, clone_image(&image));
+        self.images.insert(key.into_owned(), clone_image(&image));
         Some(image)
     }
 

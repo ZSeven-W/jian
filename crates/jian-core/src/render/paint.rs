@@ -1,5 +1,7 @@
 //! Backend-agnostic paint + path primitives.
 
+use std::borrow::Cow;
+
 use crate::geometry::{Point, Rect};
 use crate::scene::Color;
 
@@ -97,38 +99,44 @@ pub struct TextRun {
 ///
 /// Backends decode + cache by source. `DataUrl` carries an inline
 /// `data:image/...;base64,...` URL — fast path that needs no host
-/// resolver. `Bytes` carries pre-resolved bytes (e.g. zip-extracted
-/// asset). `Url` is a host-resolved reference; backends that cannot
+/// resolver. `Bytes` carries content-addressed pre-resolved bytes;
+/// `KeyedBytes` carries pre-resolved bytes with a stable caller-provided
+/// cache key. `Url` is a host-resolved reference; backends that cannot
 /// fetch it draw a placeholder + warn.
 #[derive(Debug, Clone)]
 pub enum ImageSource {
     DataUrl(String),
     Bytes(std::sync::Arc<Vec<u8>>),
+    KeyedBytes {
+        key: std::sync::Arc<str>,
+        bytes: std::sync::Arc<Vec<u8>>,
+    },
     Url(String),
 }
 
 impl ImageSource {
     /// Stable, content-addressed cache key.
     ///
-    /// `DataUrl` / `Url` use the string verbatim — already stable
-    /// across allocations and across runs.
+    /// `DataUrl` / `Url` / `KeyedBytes` borrow their explicit key, avoiding
+    /// both allocation and content hashing on cache hits.
     ///
     /// `Bytes` keys by FNV-1a 64-bit content hash + length. Pointer
     /// addresses are *not* stable: an Arc that gets dropped after
     /// the cache key is computed can have its memory reused by a
     /// different `Bytes(...)` payload, returning the wrong cached
-    /// image. Hashing the bytes is O(N) but only happens on the
-    /// first insert per source.
-    pub fn cache_key(&self) -> String {
+    /// image. Hashing `Bytes` is O(N) on every lookup; repaint hot paths
+    /// should use `KeyedBytes` with a stable explicit key instead.
+    pub fn cache_key(&self) -> Cow<'_, str> {
         match self {
-            Self::DataUrl(s) | Self::Url(s) => s.clone(),
+            Self::DataUrl(s) | Self::Url(s) => Cow::Borrowed(s.as_str()),
+            Self::KeyedBytes { key, .. } => Cow::Borrowed(key.as_ref()),
             Self::Bytes(b) => {
                 let mut h: u64 = 0xcbf2_9ce4_8422_2325;
                 for byte in b.iter() {
                     h ^= *byte as u64;
                     h = h.wrapping_mul(0x100_0000_01b3);
                 }
-                format!("bytes:{:016x}:{}", h, b.len())
+                Cow::Owned(format!("bytes:{:016x}:{}", h, b.len()))
             }
         }
     }
@@ -286,6 +294,8 @@ pub enum DrawOp {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::geometry::point;
 
@@ -305,5 +315,47 @@ mod tests {
         let b = BorderRadii::uniform(4.0);
         assert_eq!(b.tl, 4.0);
         assert_eq!(b.br, 4.0);
+    }
+
+    #[test]
+    fn image_source_string_cache_key_borrows_the_source() {
+        let source = ImageSource::Url("stable-image-key".to_owned());
+        let source_pointer = match &source {
+            ImageSource::Url(value) => value.as_ptr(),
+            _ => unreachable!(),
+        };
+
+        let key = source.cache_key();
+
+        assert_eq!(key.as_ptr(), source_pointer);
+    }
+
+    #[test]
+    fn image_source_keyed_bytes_borrows_the_explicit_key() {
+        let explicit_key: Arc<str> = Arc::from("stable-keyed-image");
+        let source = ImageSource::KeyedBytes {
+            key: Arc::clone(&explicit_key),
+            bytes: Arc::new(vec![1, 2, 3]),
+        };
+
+        let key = source.cache_key();
+
+        assert!(matches!(key, Cow::Borrowed("stable-keyed-image")));
+        assert_eq!(key.as_ptr(), explicit_key.as_ptr());
+    }
+
+    #[test]
+    fn image_source_keyed_bytes_ignore_content_for_the_cache_key() {
+        let explicit_key: Arc<str> = Arc::from("shared-image-id");
+        let first = ImageSource::KeyedBytes {
+            key: Arc::clone(&explicit_key),
+            bytes: Arc::new(vec![1, 2, 3]),
+        };
+        let second = ImageSource::KeyedBytes {
+            key: Arc::clone(&explicit_key),
+            bytes: Arc::new(vec![9, 8, 7, 6]),
+        };
+
+        assert_eq!(first.cache_key(), second.cache_key());
     }
 }

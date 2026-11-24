@@ -76,11 +76,12 @@ impl ImageCache {
     /// the cache cannot resolve — callers fall back to a placeholder.
     pub fn get_or_decode(&mut self, source: &ImageSource) -> Option<&SkImage> {
         let key = source.cache_key();
-        if !self.decoded.contains_key(&key) {
+        if !self.decoded.contains_key(key.as_ref()) {
             let decoded = decode(source);
             let bytes = estimate_bytes(&decoded);
             self.byte_total = self.byte_total.saturating_add(bytes);
             let tick = self.next_tick();
+            let key = key.into_owned();
             self.decoded.insert(
                 key.clone(),
                 CacheEntry {
@@ -90,9 +91,13 @@ impl ImageCache {
                 },
             );
             self.evict_if_over_budget(&key);
+            let tick = self.next_tick();
+            let entry = self.decoded.get_mut(key.as_str())?;
+            entry.last_used = tick;
+            return entry.image.as_ref();
         }
         let tick = self.next_tick();
-        let entry = self.decoded.get_mut(&key)?;
+        let entry = self.decoded.get_mut(key.as_ref())?;
         entry.last_used = tick;
         entry.image.as_ref()
     }
@@ -166,7 +171,9 @@ fn decode(source: &ImageSource) -> Option<SkImage> {
             let bytes = decode_data_url(s)?;
             decode_bytes(&bytes)
         }
-        ImageSource::Bytes(b) => decode_bytes(b.as_slice()),
+        ImageSource::Bytes(bytes) | ImageSource::KeyedBytes { bytes, .. } => {
+            decode_bytes(bytes.as_slice())
+        }
         ImageSource::Url(_) => None,
     }
 }
@@ -247,6 +254,36 @@ mod tests {
         let mut cache = ImageCache::new();
         let img = cache.get_or_decode(&ImageSource::Bytes(Arc::new(bytes)));
         assert!(img.is_some());
+    }
+
+    #[test]
+    fn keyed_bytes_image_source_decodes() {
+        let bytes = STANDARD.decode(TINY_PNG_B64).unwrap();
+        let mut cache = ImageCache::new();
+        let img = cache.get_or_decode(&ImageSource::KeyedBytes {
+            key: Arc::from("tiny-transparent"),
+            bytes: Arc::new(bytes),
+        });
+
+        assert!(img.is_some());
+    }
+
+    #[test]
+    fn keyed_bytes_image_source_reuses_one_cache_entry() {
+        let key: Arc<str> = Arc::from("stable-image-id");
+        let first = ImageSource::KeyedBytes {
+            key: Arc::clone(&key),
+            bytes: Arc::new(STANDARD.decode(TINY_PNG_B64).unwrap()),
+        };
+        let second = ImageSource::KeyedBytes {
+            key,
+            bytes: Arc::new(STANDARD.decode(TINY_PNG_B64_RED).unwrap()),
+        };
+        let mut cache = ImageCache::new();
+
+        assert!(cache.get_or_decode(&first).is_some());
+        assert!(cache.get_or_decode(&second).is_some());
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
