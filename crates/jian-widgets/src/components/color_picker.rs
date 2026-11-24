@@ -9,7 +9,9 @@
 //! has no 2D gradient), then framed — cheap and faithful at this size.
 
 use crate::components::text_input::TextInputView;
-use crate::{Color, Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{
+    Color, HorizontalAlign, Painter, Point2D, Rect, TextBox, TextLayout, Tokens, VerticalAlign,
+};
 
 pub const PICKER_WIDTH: f32 = 240.0;
 pub const PICKER_HEIGHT: f32 = 336.0;
@@ -74,26 +76,26 @@ impl ColorPicker<'_> {
         p.stroke_round_rect(panel, 8.0, t.border, 1.0);
 
         // Header title.
-        let title = TextLayout::single_run(
-            self.title,
-            FONT_FAMILY,
-            13.0,
-            t.foreground.to_jian(),
-            Point2D::new(0.0, 0.0),
-        );
         let header = Rect::xywh(
             panel.origin.x,
             header_top(panel),
             PICKER_WIDTH,
             HEADER_HEIGHT,
         );
-        p.draw_text(
-            &title,
-            Point2D::new(
-                panel.origin.x + PAD,
-                crate::centered_text_baseline_y(header, 13.0),
-            ),
-        );
+        TextBox::new(self.title)
+            .with_font_family(FONT_FAMILY)
+            .with_font_size(13.0)
+            .with_color(t.foreground)
+            .with_vertical_align(VerticalAlign::Center)
+            .paint(
+                p,
+                Rect::xywh(
+                    panel.origin.x + PAD,
+                    header.origin.y,
+                    (header.size.x - PAD * 2.0).max(0.0),
+                    header.size.y,
+                ),
+            );
 
         paint_sv_box(p, sv_rect(panel), self.hue);
         paint_hue_strip(p, hue_rect(panel));
@@ -134,8 +136,14 @@ impl ColorPicker<'_> {
                 // frame as the digit count changes).
                 let tw = p.measure_text_family(state.text(), 14.0, FONT_FAMILY);
                 let pad = ((RGB_BOX_W - tw) / 2.0).max(4.0);
-                let baseline_delta = crate::centered_text_baseline_y(box_rect, 14.0)
-                    - (box_rect.origin.y + (box_rect.size.y - 14.0) / 2.0);
+                let centered_y = TextBox::new(state.text())
+                    .with_font_family(FONT_FAMILY)
+                    .with_font_size(14.0)
+                    .with_vertical_align(VerticalAlign::Center)
+                    .origin(p, box_rect)
+                    .y;
+                let baseline_delta =
+                    centered_y - (box_rect.origin.y + (box_rect.size.y - 14.0) / 2.0);
                 TextInputView {
                     state,
                     placeholder: "",
@@ -149,21 +157,13 @@ impl ColorPicker<'_> {
                 .paint(p, box_rect, t);
             } else {
                 let val_str = value.to_string();
-                let text_w = p.measure_text_family(&val_str, 14.0, FONT_FAMILY);
-                let text = TextLayout::single_run(
-                    &val_str,
-                    FONT_FAMILY,
-                    14.0,
-                    t.foreground.to_jian(),
-                    Point2D::new(0.0, 0.0),
-                );
-                p.draw_text(
-                    &text,
-                    Point2D::new(
-                        bx + (RGB_BOX_W - text_w) / 2.0,
-                        crate::centered_text_baseline_y(box_rect, 14.0),
-                    ),
-                );
+                TextBox::new(&val_str)
+                    .with_font_family(FONT_FAMILY)
+                    .with_font_size(14.0)
+                    .with_color(t.foreground)
+                    .with_horizontal_align(HorizontalAlign::Center)
+                    .with_vertical_align(VerticalAlign::Center)
+                    .paint(p, box_rect);
             }
             let lab_w = p.measure_text(label, 12.0);
             let lab = TextLayout::single_run(
@@ -207,8 +207,13 @@ impl ColorPicker<'_> {
             hex.size.y,
         );
         if let Some(state) = self.hex_input {
-            let baseline_delta = crate::centered_text_baseline_y(hex, 13.0)
-                - (hex.origin.y + (hex.size.y - 13.0) / 2.0);
+            let centered_y = TextBox::new(state.text())
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(13.0)
+                .with_vertical_align(VerticalAlign::Center)
+                .origin(p, hex)
+                .y;
+            let baseline_delta = centered_y - (hex.origin.y + (hex.size.y - 13.0) / 2.0);
             TextInputView {
                 state,
                 placeholder: "",
@@ -222,20 +227,20 @@ impl ColorPicker<'_> {
             .paint(p, text_rect, t);
         } else {
             let computed = format!("#{:02x}{:02x}{:02x}", r, g, b);
-            let hex_layout = TextLayout::single_run(
-                &computed,
-                FONT_FAMILY,
-                13.0,
-                t.foreground.to_jian(),
-                Point2D::new(0.0, 0.0),
-            );
-            p.draw_text(
-                &hex_layout,
-                Point2D::new(
-                    text_rect.origin.x + 8.0,
-                    crate::centered_text_baseline_y(hex, 13.0),
-                ),
-            );
+            TextBox::new(&computed)
+                .with_font_family(FONT_FAMILY)
+                .with_font_size(13.0)
+                .with_color(t.foreground)
+                .with_vertical_align(VerticalAlign::Center)
+                .paint(
+                    p,
+                    Rect::xywh(
+                        text_rect.origin.x + 8.0,
+                        hex.origin.y,
+                        (text_rect.size.x - 8.0).max(0.0),
+                        hex.size.y,
+                    ),
+                );
         }
 
         // Close (×) chip — a dim disc so it reads against the SV gradient.

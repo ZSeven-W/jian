@@ -3,7 +3,7 @@
 //! and a right-aligned chevron that points right when collapsed and down when
 //! expanded. The host owns the expand/collapse toggle dispatch.
 
-use crate::{Painter, Point2D, Rect, TextLayout, Tokens};
+use crate::{Painter, Point2D, Rect, TextBox, Tokens, VerticalAlign};
 
 /// lucide `chevron-right` d-string (collapsed state).
 const CHEVRON_RIGHT_D: &str = "m9 18 6-6-6-6";
@@ -29,15 +29,20 @@ impl AccordionHeader<'_> {
         }
 
         // Title text, vertically centred and left-padded.
-        let text_y = crate::centered_text_baseline_y(rect, FONT_SIZE);
-        let layout = TextLayout::single_run(
-            self.title,
-            "Inter",
-            FONT_SIZE,
-            t.foreground.to_jian(),
-            Point2D::new(0.0, 0.0),
-        );
-        p.draw_text(&layout, Point2D::new(rect.origin.x + PAD_X, text_y));
+        TextBox::new(self.title)
+            .with_font_family("Inter")
+            .with_font_size(FONT_SIZE)
+            .with_color(t.foreground)
+            .with_vertical_align(VerticalAlign::Center)
+            .paint(
+                p,
+                Rect::xywh(
+                    rect.origin.x + PAD_X,
+                    rect.origin.y,
+                    (rect.size.x - PAD_X * 2.0 - CHEVRON_SIZE).max(0.0),
+                    rect.size.y,
+                ),
+            );
 
         // Right-aligned chevron, swapped by expand state.
         let d = if self.expanded {
